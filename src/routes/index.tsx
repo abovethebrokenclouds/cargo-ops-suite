@@ -35,7 +35,7 @@ function Index() {
       <div className="mt-8 panel flex flex-wrap items-center justify-between gap-4 p-8">
         <div>
           <h2 className="text-2xl font-semibold">Next best job</h2>
-          <p className="text-muted-foreground">{jobs[0].cargo} · {jobs[0].from} → {jobs[0].to} · ${jobs[0].payout.toLocaleString()}</p>
+          <p className="text-muted-foreground">{jobs[0]?.cargo} · {jobs[0]?.from} → {jobs[0]?.to} · ${jobs[0]?.payout.toLocaleString()}</p>
         </div>
         <Link to="/jobs" className="rounded-xl bg-gradient-brand px-6 py-3 font-semibold text-primary-foreground shadow-glow transition-transform hover:scale-105">
           View job board
