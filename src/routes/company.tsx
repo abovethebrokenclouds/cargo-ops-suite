@@ -1,5 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { BarChart3, Landmark, ListOrdered, Medal, Trophy } from "lucide-react";
+import {
+  BarChart3,
+  Building2,
+  CheckCircle2,
+  Landmark,
+  ListOrdered,
+  Medal,
+  Trophy,
+} from "lucide-react";
 import { useState } from "react";
 
 import { formatGameTime, tierTable } from "@cargo-ops/economy";
@@ -35,20 +43,14 @@ export const Route = createFileRoute("/company")({
   component: Company,
 });
 
-const MILESTONES = [
-  "First delivery",
-  "100 flight hours",
-  "Debt-free",
-  "Perfect landing streak",
-  "First FBO",
-];
-
 function Company() {
   const { state } = useSimConnection();
   const command = useCommand();
   const lookup = useAirportLookup();
   const view = useCompanyView(state, lookup);
-  const { company, fleet, loans, ledger, source, connector, demo } = view;
+  const { company, fleet, loans, ledger, fbos, source, connector, demo } = view;
+  const milestones = company?.milestones ?? [];
+  const fboMonth = company?.clock ? company.clock.month - 1 : null;
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const run = async (name: string, args: unknown, success: string) => {
@@ -181,6 +183,66 @@ function Company() {
             )}
           </Panel>
           <Panel
+            eyebrow="FBOs"
+            title="Monthly P&L per FBO"
+            icon={Building2}
+            action={<SourceTag source={fbos ? source : null} />}
+            bodyClassName="p-2 md:p-3"
+          >
+            {fbos && fbos.fbos.length > 0 ? (
+              <table className="w-full text-sm" data-testid="fbo-pnl-lines">
+                <thead>
+                  <tr className="label-eyebrow text-left">
+                    <th className="px-3 py-2 font-normal">FBO</th>
+                    <th className="px-3 py-2 text-right font-normal">Income</th>
+                    <th className="px-3 py-2 text-right font-normal">Upkeep</th>
+                    <th className="px-3 py-2 text-right font-normal">Net</th>
+                    <th className="hidden px-3 py-2 text-right font-normal md:table-cell">
+                      Own-fleet savings
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="font-mono font-tabular">
+                  {fbos.fbos.map((f) => {
+                    const m = f.pnl.find((p) => p.month === fboMonth) ?? null;
+                    return (
+                      <tr key={f.id} className="border-t border-border">
+                        <td className="px-3 py-2 text-foreground">
+                          {f.icao}
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            M{(fboMonth ?? 0) + 1}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right text-success">
+                          {formatUsd(m?.income ?? 0)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-destructive">
+                          {formatUsd(m?.upkeep ?? 0)}
+                        </td>
+                        <td
+                          className={cn(
+                            "px-3 py-2 text-right",
+                            (m?.net ?? 0) >= 0 ? "text-foreground" : "text-destructive",
+                          )}
+                        >
+                          {formatUsd(m?.net ?? 0)}
+                        </td>
+                        <td className="hidden px-3 py-2 text-right text-muted-foreground md:table-cell">
+                          {formatUsd(m?.savings ?? 0)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <p className="p-3 text-sm text-muted-foreground">
+                No FBO yet: buy or build one on the FBOs page. Its income (fbo_income) and upkeep
+                (fbo_upkeep) lines land in the ledger below.
+              </p>
+            )}
+          </Panel>
+          <Panel
             eyebrow="Ledger"
             title="Recent entries"
             icon={ListOrdered}
@@ -282,16 +344,51 @@ function Company() {
               ))}
             </ul>
           </Panel>
-          <Panel eyebrow="Progress" title="Milestones" icon={Trophy}>
-            <ul className="flex flex-col gap-2 text-sm text-muted-foreground">
-              {MILESTONES.map((m) => (
-                <li key={m} className="flex items-center gap-2">
-                  <span className="status-dot text-muted-foreground/50" aria-hidden="true" />
-                  {m}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-3 text-xs text-muted-foreground">Milestone tracking arrives in P5.</p>
+          <Panel
+            eyebrow="Progress"
+            title={`Milestones · ${milestones.filter((m) => m.reached).length} / ${milestones.length || 8}`}
+            icon={Trophy}
+            action={<SourceTag source={company?.milestones ? source : null} />}
+          >
+            {milestones.length > 0 ? (
+              <ul className="flex flex-col gap-2.5" data-testid="milestones">
+                {milestones.map((m) => (
+                  <li
+                    key={m.id}
+                    className="flex items-start gap-3 text-sm"
+                    data-testid="milestone"
+                    data-reached={m.reached ? "true" : "false"}
+                  >
+                    {m.reached ? (
+                      <CheckCircle2
+                        className="mt-0.5 size-4 shrink-0 text-success"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <span
+                        className="status-dot mt-1.5 size-2 shrink-0 text-muted-foreground/50"
+                        aria-hidden="true"
+                      />
+                    )}
+                    <div className="min-w-0">
+                      <p className={m.reached ? "text-foreground" : "text-muted-foreground"}>
+                        {m.title}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {m.reached && m.gameMs !== undefined
+                          ? `${formatGameTime(m.gameMs)}${m.at ? ` · ${m.at.slice(0, 10)}` : ""}`
+                          : m.description}
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Milestones appear with the company (first delivery, 100 hours, first FBO, debt-free,
+                a perfect landing streak, …).
+              </p>
+            )}
           </Panel>
         </div>
       </div>

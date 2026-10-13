@@ -1,9 +1,11 @@
-import { Crosshair, MapPin, Plane, Route as RouteIcon, Waypoints } from "lucide-react";
+import { Crosshair, MapPin, Plane, Route as RouteIcon, Warehouse, Waypoints } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EmptyState } from "@/components/EmptyState";
 import { SourceTag, StaleTag } from "@/components/status/SourceTag";
 import { isSessionUp, isStale, routeView } from "@/lib/flight/flight-view";
+import { useAirportLookup } from "@/lib/economy/board";
+import { useCompanyView } from "@/lib/economy/company";
 import { EMPTY, formatDegrees, formatInt, formatMinutes } from "@/lib/format";
 import { loadAirports, nearbyAirports, type AirportIndex } from "@/lib/map/airports";
 import { greatCirclePoints, haversineNm } from "@/lib/map/geo";
@@ -16,7 +18,7 @@ import { useNow } from "@/lib/sim-state/hooks";
 import { useSimConnection } from "@/lib/transport/useSimConnection";
 import { cn } from "@/lib/utils";
 
-import { OpsMap } from "./OpsMap";
+import { OpsMap, type OpsMapPin } from "./OpsMap";
 
 const NEARBY_RADIUS_NM = 50;
 
@@ -112,6 +114,36 @@ export function MapView() {
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
   const padding = usePanelPadding(panel);
   const trail = useTrail(state);
+  // P5 part 2: owned FBOs and active demand events as pins.
+  const lookup = useAirportLookup();
+  const { fbos, demand } = useCompanyView(state, lookup);
+  const [showPins, setShowPins] = useState(true);
+  const pins = useMemo<OpsMapPin[]>(() => {
+    const out: OpsMapPin[] = [];
+    for (const f of fbos?.fbos ?? []) {
+      out.push({
+        id: `fbo-${f.id}`,
+        kind: "fbo",
+        lat: f.lat,
+        lon: f.lon,
+        label: `FBO ${f.icao}`,
+        title: `Your FBO at ${f.name} (${f.status === "active" ? "operating" : "building"})`,
+      });
+    }
+    for (const e of demand?.events ?? []) {
+      const a = lookup?.get(e.icao);
+      if (!a) continue;
+      out.push({
+        id: `event-${e.id}`,
+        kind: "event",
+        lat: a.lat,
+        lon: a.lon,
+        label: `${e.icao} ${e.label}`,
+        title: `${e.label} at ${a.name}: payouts +${e.payoutPct} %, fuel +${e.fuelPct} %`,
+      });
+    }
+    return out;
+  }, [fbos, demand, lookup]);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,6 +214,8 @@ export function MapView() {
         trail={trail}
         airports={airports}
         layers={layers}
+        pins={pins}
+        showPins={showPins}
         follow={follow}
         onFollowChange={setFollow}
         {...(padding ? { padding } : {})}
@@ -266,6 +300,15 @@ export function MapView() {
           </ControlButton>
           <ControlButton label="Route" pressed={layers.route} onClick={() => toggle("route")} plain>
             <RouteIcon className="size-4" aria-hidden="true" />
+          </ControlButton>
+          <ControlButton
+            label="FBOs and demand events"
+            pressed={showPins}
+            onClick={() => setShowPins((v) => !v)}
+            plain
+            testId="pins-toggle"
+          >
+            <Warehouse className="size-4" aria-hidden="true" />
           </ControlButton>
         </div>
       </div>

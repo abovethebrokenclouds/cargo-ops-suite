@@ -44,8 +44,13 @@ const LEGS: Leg[] = [
   { day: 55, aircraft: "starter", from: "KMEM", to: "KATL", kg: 860, peakG: 1.17 },
   { day: 58, aircraft: "lease", from: "KSDF", to: "KMEM", kg: 690, peakG: 1.33 },
   { day: 63, aircraft: "starter", from: "KATL", to: "KBNA", kg: 900, peakG: 1.2 },
+  { day: 64, aircraft: "lease", from: "KMEM", to: "KLIT", kg: 640, peakG: 1.14 },
   { day: 70, aircraft: "starter", from: "KBNA", to: "KMEM", kg: 780, peakG: 1.36 },
+  { day: 72, aircraft: "lease", from: "KLIT", to: "KMEM", kg: 610, peakG: 1.21 },
+  { day: 75, aircraft: "lease", from: "KMEM", to: "KLIT", kg: 660, peakG: 1.12 },
 ];
+/** P5 part 2: the demo FBO (bought on day 57 with its fuel farm, then a hangar and ramp 2). */
+export const DEMO_FBO_ICAO = "KLIT";
 /** In-game day the demo stops at. */
 export const DEMO_END_DAY = 77.6;
 
@@ -91,6 +96,22 @@ function buyUsed(book: CompanyBook, to: (day: number) => void): string | null {
   return bought.ok ? bought.data.aircraft.id : null;
 }
 
+/**
+ * Day 57: buy the FBO at KLIT (fuel farm and ramp included) when cash allows, day 57.5 a
+ * hangar, day 60 ramp & services level 2 and a pricing tweak.
+ */
+function demoFbo(book: CompanyBook, to: (day: number) => void): void {
+  to(57);
+  const bought = book.buyFbo({ icao: DEMO_FBO_ICAO });
+  if (!bought.ok) return;
+  const id = bought.data.fbo.id;
+  to(57.5);
+  book.buyModule(id, "hangar");
+  to(60);
+  book.upgradeModule(id, "ramp");
+  book.setFboPricing(id, { fuelPriceRatio: 1.04, handlingFeeUsd: 85 });
+}
+
 /** Build the seeded DEMO company. Deterministic for a given airport list. */
 export function buildDemoCompany(lookup: AirportLookup): DemoCompany {
   let wall = DEMO_EPOCH_MS;
@@ -112,12 +133,19 @@ export function buildDemoCompany(lookup: AirportLookup): DemoCompany {
       wall += target - book.company.gameMs;
       book.advance(target - book.company.gameMs);
     }
+    // Milestones carry the date they were reached.
+    book.checkMilestones();
   };
   let leased: string | null = null;
   let loanTaken = false;
   let used: string | null = null;
   let usedDone = false;
+  let fboDone = false;
   for (const leg of LEGS) {
+    if (!fboDone && leg.day > 57) {
+      fboDone = true;
+      demoFbo(book, to);
+    }
     if (!usedDone && leg.day > 52) {
       usedDone = true;
       used = buyUsed(book, to);
@@ -130,6 +158,9 @@ export function buildDemoCompany(lookup: AirportLookup): DemoCompany {
         termMonths: 36,
         collateral: { type: "aircraft", id: starter.id },
       });
+      // P5 part 2: the financed starter gets a hull policy.
+      to(20.6);
+      book.buyInsurance(starter.id);
       to(24);
       const lease = book.lease({ typeKey: "kodiak100", kind: "dry", airport: "KMEM" });
       if (lease.ok) leased = lease.data.id;
@@ -181,6 +212,7 @@ export function buildDemoCompany(lookup: AirportLookup): DemoCompany {
       memo: `Mission ${ref}`,
     });
     book.adjustReputation(deliveryReputationDelta(g, 0));
+    book.recordDelivery({ origin: leg.from, destination: leg.to, grade: g });
     to(leg.day + blockMin / 1440);
   }
   if (used) {

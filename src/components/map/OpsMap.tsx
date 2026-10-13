@@ -49,6 +49,24 @@ export interface OpsMapAircraft {
   hdgTrueDeg: number | null;
 }
 
+/** P5 part 2: an owned FBO or an active demand event, drawn as an HTML marker. */
+export interface OpsMapPin {
+  id: string;
+  kind: "fbo" | "event";
+  lat: number;
+  lon: number;
+  /** Short text on the pin (ICAO, or ICAO + event). */
+  label: string;
+  /** Hover text. */
+  title: string;
+}
+
+const PIN_CLASS: Record<OpsMapPin["kind"], string> = {
+  fbo: "panel flex items-center gap-1 whitespace-nowrap px-1.5 py-0.5 font-mono text-[0.6875rem] font-semibold tracking-[0.1em] text-success",
+  event:
+    "panel flex items-center gap-1 whitespace-nowrap px-1.5 py-0.5 font-mono text-[0.6875rem] font-semibold tracking-[0.1em] text-warning",
+};
+
 export interface OpsMapProps {
   /** Page is served by the local connector (null until known on the client). */
   servedByConnector: boolean | null;
@@ -62,6 +80,9 @@ export interface OpsMapProps {
   trail: LonLat[];
   airports: AirportIndex | null;
   layers: Record<OverlayGroup, boolean>;
+  /** P5 part 2: FBO and demand-event pins, and whether they are shown. */
+  pins?: readonly OpsMapPin[];
+  showPins?: boolean;
   follow: boolean;
   onFollowChange: (follow: boolean) => void;
   /** Screen area covered by overlay panels; the camera centres in the rest. */
@@ -122,6 +143,7 @@ export function OpsMap(props: OpsMapProps) {
   const libRef = useRef<MapLibre | null>(null);
   const markers = useRef<{ aircraft?: Marker; origin?: Marker; destination?: Marker }>({});
   const popupRef = useRef<Popup | null>(null);
+  const pinMarkers = useRef(new Map<string, Marker>());
   const followChange = useRef(props.onFollowChange);
   followChange.current = props.onFollowChange;
   const airportsRef = useRef(props.airports);
@@ -145,6 +167,7 @@ export function OpsMap(props: OpsMapProps) {
     let cancelled = false;
     let map: MapLibreMap | null = null;
     let protocolAdded = false;
+    const pinLayer = pinMarkers.current;
 
     (async () => {
       const [lib, worker, , floor] = await Promise.all([
@@ -284,6 +307,8 @@ export function OpsMap(props: OpsMapProps) {
       cancelled = true;
       for (const m of Object.values(markers.current)) m?.remove();
       markers.current = {};
+      for (const m of pinLayer.values()) m.remove();
+      pinLayer.clear();
       popupRef.current?.remove();
       popupRef.current = null;
       map?.remove();
@@ -388,6 +413,44 @@ export function OpsMap(props: OpsMapProps) {
     place("origin", o);
     place("destination", d);
   }, [ready, els, o, d, showRoute]);
+
+  // FBO and demand-event pins (HTML markers; token classes only).
+  const pins = props.pins;
+  const showPins = props.showPins ?? true;
+  useEffect(() => {
+    const map = mapRef.current;
+    const lib = libRef.current;
+    if (!ready || !map || !lib) return;
+    const wanted = new Map((showPins ? (pins ?? []) : []).map((p) => [p.id, p]));
+    for (const [id, marker] of pinMarkers.current) {
+      if (!wanted.has(id)) {
+        marker.remove();
+        pinMarkers.current.delete(id);
+      }
+    }
+    for (const pin of wanted.values()) {
+      const existing = pinMarkers.current.get(pin.id);
+      if (existing) {
+        existing.setLngLat([pin.lon, pin.lat]);
+        existing.getElement().title = pin.title;
+        continue;
+      }
+      const el = document.createElement("div");
+      el.className = PIN_CLASS[pin.kind];
+      el.title = pin.title;
+      el.dataset["testid"] = pin.kind === "fbo" ? "map-fbo-pin" : "map-event-pin";
+      const dot = document.createElement("span");
+      dot.className = "status-dot size-1.5";
+      dot.setAttribute("aria-hidden", "true");
+      el.append(dot, document.createTextNode(pin.label));
+      pinMarkers.current.set(
+        pin.id,
+        new lib.Marker({ element: el, anchor: "bottom", offset: [0, -6] })
+          .setLngLat([pin.lon, pin.lat])
+          .addTo(map),
+      );
+    }
+  }, [ready, pins, showPins]);
 
   // Keep the followed aircraft clear of the overlay panels.
   const pad = props.padding;

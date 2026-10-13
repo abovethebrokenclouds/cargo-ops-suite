@@ -9,6 +9,7 @@ import {
   Package,
   Plane,
   Settings,
+  Warehouse,
   type LucideIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -24,6 +25,7 @@ type NavItem = {
     | "/map"
     | "/jobs"
     | "/fleet"
+    | "/fbo"
     | "/company"
     | "/logbook"
     | "/settings"
@@ -38,6 +40,7 @@ const navItems: readonly NavItem[] = [
   { to: "/map", label: "Map", icon: MapIcon },
   { to: "/jobs", label: "Jobs", icon: Package },
   { to: "/fleet", label: "Fleet", icon: Plane },
+  { to: "/fbo", label: "FBOs", icon: Warehouse },
   { to: "/company", label: "Company", icon: Building2 },
   { to: "/logbook", label: "Logbook", icon: BookOpen },
   { to: "/settings", label: "Settings", icon: Settings },
@@ -78,7 +81,7 @@ function NavLinks({ className }: { className?: string }) {
               className="group relative flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground data-[status=active]:bg-secondary/80 data-[status=active]:text-foreground"
             >
               <Icon
-                className="size-4 opacity-70 transition-opacity group-hover:opacity-100 group-data-[status=active]:text-accent group-data-[status=active]:opacity-100"
+                className="size-4 opacity-70 transition-opacity group-hover:opacity-100 group-data-[status=active]:text-accent group-data-[status=active]:opacity-100 xl:hidden 2xl:block"
                 aria-hidden="true"
               />
               {label}

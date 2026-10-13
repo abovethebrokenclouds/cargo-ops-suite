@@ -6,6 +6,8 @@
 import { useMemo } from "react";
 import type {
   CompanyState,
+  DemandState,
+  FbosState,
   FleetState,
   LedgerState,
   LoansState,
@@ -24,6 +26,9 @@ export interface CompanyView {
   ledger: LedgerState | null;
   /** P5 used aircraft market. */
   market: MarketState | null;
+  /** P5 part 2: owned FBOs and local demand. */
+  fbos: FbosState | null;
+  demand: DemandState | null;
   /** True when commands go to a real connector. */
   connector: boolean;
   demo: boolean;
@@ -35,6 +40,8 @@ export interface DemoDomains {
   loans: LoansState;
   ledger: LedgerState;
   market: MarketState;
+  fbos: FbosState;
+  demand: DemandState;
 }
 
 /** The seeded DEMO company's domains (deterministic for the bundled airport list). */
@@ -54,6 +61,8 @@ export function demoDomains(lookup: AirportLookup): DemoDomains {
     loans: book.loansDomain(),
     ledger: book.ledgerDomain(),
     market: book.marketDomain(),
+    fbos: book.fbosDomain(),
+    demand: book.demandDomain(),
   };
 }
 
@@ -69,6 +78,8 @@ export function useCompanyView(state: ClientSimState, lookup: AirportLookup | nu
       loans: demoData?.loans ?? null,
       ledger: demoData?.ledger ?? null,
       market: demoData?.market ?? null,
+      fbos: demoData?.fbos ?? null,
+      demand: demoData?.demand ?? null,
       connector: false,
       demo: true,
     };
@@ -81,6 +92,8 @@ export function useCompanyView(state: ClientSimState, lookup: AirportLookup | nu
     loans: state.sim.loans ?? null,
     ledger: state.sim.ledger ?? null,
     market: state.sim.market ?? null,
+    fbos: state.sim.fbos ?? null,
+    demand: state.sim.demand ?? null,
     connector: connected,
     demo: false,
   };
@@ -103,6 +116,11 @@ export const LEDGER_LABELS: Record<string, string> = {
   adjustment: "Adjustment",
   inspection: "Inspection",
   permit: "Ferry permit",
+  fbo_income: "FBO income",
+  fbo_upkeep: "FBO upkeep",
+  fbo_purchase: "FBO purchase",
+  fbo_construction: "FBO construction",
+  insurance_claim: "Insurance claim",
 };
 
 export const OWNERSHIP_LABELS = {
