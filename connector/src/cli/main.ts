@@ -65,6 +65,7 @@ async function main(): Promise<number> {
       ...(options.fixture ? { fixture: resolve(options.fixture) } : {}),
       ...(options.record ? { record: options.record } : {}),
       ...(web ? { web } : {}),
+      ...(options.basemapDir ? { basemapDir: resolve(options.basemapDir) } : {}),
     });
   } catch (err) {
     const error = err as NodeJS.ErrnoException;

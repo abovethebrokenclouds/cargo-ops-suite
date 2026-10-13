@@ -55,6 +55,8 @@ export interface ConnectorOptions {
   loop?: boolean;
   record?: string;
   web?: string;
+  /** Local basemap folder (default <dataDir>/basemap). */
+  basemapDir?: string;
   devOrigins?: string[];
   resetToken?: boolean;
   verbose?: boolean;
@@ -122,6 +124,7 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
       version,
       port: options.port,
       ...(options.web ? { webDir: resolve(options.web) } : {}),
+      basemapDir: resolve(options.basemapDir ?? join(options.dataDir, "basemap")),
       devOrigins,
       ...(options.pingIntervalMs ? { pingIntervalMs: options.pingIntervalMs } : {}),
       log,
