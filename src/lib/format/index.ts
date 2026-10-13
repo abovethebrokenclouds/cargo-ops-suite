@@ -55,6 +55,19 @@ export function formatUsd(n: number | null | undefined): string {
   return usdFormat.format(r === 0 ? 0 : r);
 }
 
+const usdCentsFormat = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/** Dollars and cents: 541.236 → "$541.24", -300 → "-$300.00". */
+export function formatUsdCents(n: number | null | undefined): string {
+  if (!finite(n)) return EMPTY;
+  return usdCentsFormat.format(Math.abs(n) < 0.005 ? 0 : n);
+}
+
 /** Duration from minutes: 83 → "1h 23m", 45 → "45m", 120 → "2h 00m". */
 export function formatMinutes(n: number | null | undefined): string {
   if (!finite(n)) return EMPTY;

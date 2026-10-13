@@ -11,7 +11,9 @@ import { ConnectedStatusChip } from "@/components/status/ConnectedStatusChip";
 import { SourceTag } from "@/components/status/SourceTag";
 import { routeView } from "@/lib/flight/flight-view";
 import { EMPTY, formatMinutes, formatUsd } from "@/lib/format";
-import { company, fleet, jobs } from "@/lib/mock-data";
+import { jobs } from "@/lib/mock-data";
+import { useAirportLookup } from "@/lib/economy/board";
+import { useCompanyView } from "@/lib/economy/company";
 import { fuelEnduranceMin, type ClientSimState } from "@/lib/sim-state";
 import { useSimConnection } from "@/lib/transport/useSimConnection";
 
@@ -33,11 +35,21 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const fleetTone = {
-  Ready: "text-success",
-  "En route": "text-accent",
-  Maintenance: "text-warning",
+const fleetStatus = {
+  available: "Ready",
+  in_flight: "Flying",
+  maintenance: "Maintenance",
+  sold: "Sold",
+  returned: "Returned",
+  repossessed: "Repossessed",
 } as const;
+
+const fleetTone: Record<string, string> = {
+  Ready: "text-success",
+  Flying: "text-accent",
+  Maintenance: "text-warning",
+  Grounded: "text-destructive",
+};
 
 function linkCopy(state: ClientSimState): string {
   switch (state.connection) {
@@ -59,8 +71,11 @@ function linkCopy(state: ClientSimState): string {
 
 function Index() {
   const { state } = useSimConnection();
+  const lookup = useAirportLookup();
+  const view = useCompanyView(state, lookup);
   const liveJobs = state.connection === "demo" ? null : (state.sim.jobs ?? null);
-  const liveCompany = state.connection === "demo" ? null : (state.sim.company ?? null);
+  const liveCompany = view.company;
+  const fleetList = view.fleet?.aircraft ?? [];
   const liveNext =
     liveJobs?.available.reduce<(typeof liveJobs.available)[number] | null>(
       (best, j) => (!best || j.payoutEstimate > best.payoutEstimate ? j : best),
@@ -86,7 +101,7 @@ function Index() {
   return (
     <>
       <PageHero
-        eyebrow={`Ops centre · Hub ${liveCompany?.base ?? company.hub}`}
+        eyebrow={`Ops centre · Hub ${liveCompany?.base ?? "KMEM"}`}
         title="Move the world."
         sub="Your cargo operation for Microsoft Flight Simulator 2020 and 2024. Dispatch, fly, get paid."
       >
@@ -107,14 +122,24 @@ function Index() {
         <MetricTile
           className="col-span-12 md:col-span-6 xl:col-span-4"
           label="Company cash"
-          value={liveCompany ? liveCompany.cash : company.cash}
+          value={liveCompany ? liveCompany.cash : null}
           format={formatUsd}
           size="xl"
-          source={liveCompany ? state.source : "demo"}
+          source={liveCompany ? view.source : null}
           hint={
-            liveCompany
-              ? `Reputation ${liveCompany.reputation} / 100 (tier ${liveCompany.reputationTier}). Full ledger in P4.`
-              : "Demo seed balance. The ledger arrives in P4."
+            liveCompany ? (
+              <span data-testid="dashboard-reputation">
+                Reputation {liveCompany.reputation} / 100 · tier {liveCompany.reputationTier}
+                {liveCompany.tierName ? ` ${liveCompany.tierName}` : ""}
+                {liveCompany.creditScore !== undefined
+                  ? ` · credit ${liveCompany.creditScore}`
+                  : ""}
+              </span>
+            ) : view.demo ? (
+              "Building the demo company…"
+            ) : (
+              "Start the local connector to run your company."
+            )
           }
         />
         <MetricTile
@@ -209,25 +234,47 @@ function Index() {
           eyebrow="Hangar"
           title="Fleet summary"
           icon={Plane}
-          action={<DemoTag />}
+          action={<SourceTag source={view.fleet ? view.source : null} />}
         >
-          <ul className="flex flex-col gap-2">
-            {fleet.map((a) => (
-              <li
-                key={a.reg}
-                className="panel-inset flex items-center justify-between gap-3 px-4 py-3"
-              >
-                <div className="min-w-0">
-                  <p className="font-mono text-sm font-semibold text-foreground">{a.reg}</p>
-                  <p className="truncate text-xs text-muted-foreground">{a.type}</p>
-                </div>
-                <span className={`flex items-center gap-2 text-xs ${fleetTone[a.status]}`}>
-                  <span className="status-dot" aria-hidden="true" />
-                  {a.status}
-                </span>
-              </li>
-            ))}
-          </ul>
+          {fleetList.length === 0 ? (
+            <EmptyState
+              icon={Plane}
+              title={view.demo ? "Building the demo fleet…" : "No fleet data"}
+              description={
+                view.demo ? undefined : "Start the local connector to manage your fleet."
+              }
+            />
+          ) : (
+            <ul className="flex flex-col gap-2" data-testid="dashboard-fleet">
+              {fleetList.map((a) => {
+                const status = !a.airworthy ? "Grounded" : fleetStatus[a.status];
+                return (
+                  <li
+                    key={a.id}
+                    className="panel-inset flex items-center justify-between gap-3 px-4 py-3"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-mono text-sm font-semibold text-foreground">
+                        {a.registration}
+                        {view.fleet?.selectedId === a.id ? (
+                          <span className="ml-2 text-[0.625rem] uppercase tracking-[0.16em] text-accent">
+                            active
+                          </span>
+                        ) : null}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {a.typeName} · {a.location} · {a.condition.toFixed(1)} %
+                      </p>
+                    </div>
+                    <span className={`flex items-center gap-2 text-xs ${fleetTone[status]}`}>
+                      <span className="status-dot" aria-hidden="true" />
+                      {status}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </Panel>
 
         <Panel
