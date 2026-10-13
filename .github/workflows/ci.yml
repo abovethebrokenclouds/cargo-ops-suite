@@ -55,3 +55,31 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - name: Build connector
+        working-directory: connector
+        run: npm ci && npm run build
+      - run: bun run build:local
+      - run: npx playwright install --with-deps chromium
+      - run: bun run e2e
+        env:
+          CI: "1"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results

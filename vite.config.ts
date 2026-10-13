@@ -9,6 +9,9 @@ import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 // CARGO_OPS_LOCAL=1 builds a static SPA that the local connector serves on the
 // Windows PC. Without it, the default Lovable SSR/Cloudflare build is unchanged.
 const local = process.env["CARGO_OPS_LOCAL"] === "1";
+// The local build is only ever served by the connector, so it always uses the live
+// transport (whatever --port the connector runs on) and never falls back to demo data.
+if (local) process.env["VITE_CARGO_OPS_CONNECTOR"] = "1";
 
 export default defineConfig({
   tanstackStart: {
