@@ -1,0 +1,28 @@
+{
+  "name": "cargo-ops-connector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Cargo Ops connector: SimConnect bridge, WebSocket/HTTP server and SQLite storage on 127.0.0.1.",
+  "type": "commonjs",
+  "main": "dist/connector/src/cli/main.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "node scripts/clean.mjs dist && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "test": "node scripts/clean.mjs dist-test && tsc -p tsconfig.test.json && node --disable-warning=ExperimentalWarning --test --test-reporter=spec --test-concurrency=1 \"dist-test/connector/test/*.test.js\"",
+    "start": "node --disable-warning=ExperimentalWarning dist/connector/src/cli/main.js",
+    "fixtures:sync": "node scripts/sync-fixtures.mjs"
+  },
+  "dependencies": {
+    "node-simconnect": "4.2.1",
+    "ws": "8.22.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/ws": "8.18.2",
+    "typescript": "5.9.3"
+  }
+}

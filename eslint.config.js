@@ -15,6 +15,7 @@ export default tseslint.config(
       ".nitro",
       ".tanstack",
       "connector/dist",
+      "connector/dist-test",
       "playwright-report",
       "test-results",
     ],
