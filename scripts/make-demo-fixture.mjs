@@ -2,7 +2,13 @@
 // Generates SYNTHETIC demo telemetry for the in-browser DemoTransport: a KMEM → KATL
 // flight in a Cessna 208B-style single turboprop. It is computed from a simple
 // kinematic profile, not recorded from a simulator. Deterministic: same output on
-// every run. Usage: node scripts/make-demo-fixture.mjs
+// every run. Usage: node scripts/make-demo-fixture.mjs (then `npm run fixtures:sync`
+// in connector/).
+//
+// The phase/flight domains and the phase.changed/touchdown/flight.* events written
+// here are AUTHORED for the browser-only demo. The connector's FakeSource strips
+// them and recomputes everything from the raw telemetry (position, motion, sim
+// clock), so the connector's flight core is the only source of truth in replays.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,6 +70,8 @@ function interpolate(a, b, f) {
 
 const ROUTE_NM = distanceNm(ORIGIN, DEST);
 const CRUISE_FT = 9500;
+/** Sink rate of the last airborne frame; the authored touchdown event repeats it. */
+const TOUCHDOWN_RATE_FPM = -142;
 const TOD_FT = DEST.elevFt + 3000;
 
 // ---- profile ----
@@ -233,7 +241,11 @@ for (const seg of segments) {
     const ias = lerp(seg.ias[0], seg.ias[1], f) + wobble;
     const tas = tasFor(ias, seg.ground ? 0 : altFt);
     const gs = Math.max(0, tas);
-    const vsFpm = seg.ground ? 0 : ((seg.alt[1] - seg.alt[0]) / seg.simSec) * 60 + wobble * 40;
+    let vsFpm = seg.ground ? 0 : ((seg.alt[1] - seg.alt[0]) / seg.simSec) * 60 + wobble * 40;
+    // Flare: the last two approach frames sink slower, ending at the touchdown rate.
+    if (seg.phase === "Approach" && i >= seg.frames - 2) {
+      vsFpm = i === seg.frames - 1 ? TOUCHDOWN_RATE_FPM : -225;
+    }
 
     // Engine start late in boarding; shutdown two frames after arrival.
     if (seg.phase === "Boarding" && i === seg.frames - 5) engineOn = true;
@@ -285,7 +297,7 @@ for (const seg of segments) {
       push({
         type: "snapshot",
         state: {
-          sim: { connected: false, paused: false, simRate: 1 },
+          sim: { connected: false, paused: false, simRate: 1, simTimeSec: 0 },
           aircraft: { title: "Cessna 208B Grand Caravan EX", atcId: "N401CO" },
           position,
           motion,
@@ -318,7 +330,10 @@ for (const seg of segments) {
       });
       prevPhase = seg.phase;
     } else {
-      const patch = { position, motion, fuel, weights, plan, flight };
+      // simTimeSec: the fixture compresses ~2 h of flight into ~6 min of frames, so it
+      // states its simulated clock explicitly (protocol sim.simTimeSec).
+      const sim = { simTimeSec: round(elapsedSec, 1) };
+      const patch = { sim, position, motion, fuel, weights, plan, flight };
       if (engineOn !== lastEngine) patch.engines = { running: [engineOn] };
       if (brake !== lastBrake) patch.controls = { parkingBrake: brake };
       if (frameNo === 1) patch.flight = { ...flight, active: true };
@@ -341,7 +356,7 @@ for (const seg of segments) {
       }
       if (isTouchdown) {
         touchdown = {
-          rateFpm: -142,
+          rateFpm: TOUCHDOWN_RATE_FPM,
           gForce: 1.18,
           gsKt: round(gs, 1),
           bankDeg: 0.8,

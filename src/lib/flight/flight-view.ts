@@ -1,12 +1,15 @@
 // Pure view-model selectors for the Live Flight page. Every function returns null
 // (or a null field) when the underlying data is missing — never a default number.
 
-import type {
-  EnginesState,
-  FuelState,
-  PositionState,
-  Source,
-  WeightsState,
+import {
+  touchdownSchema,
+  type EnginesState,
+  type FlightState,
+  type FuelState,
+  type PositionState,
+  type RateSource,
+  type Source,
+  type WeightsState,
 } from "@cargo-ops/protocol";
 import { eteMin, type ClientSimState, type ReceivedEvent } from "@/lib/sim-state";
 
@@ -174,6 +177,13 @@ export interface TouchdownView {
   lat: number | null;
   lon: number | null;
   grade: LandingGrade | null;
+  /**
+   * True when the event carries the connector analyser's own result (touchdownSchema
+   * with rateSource); false for older/authored payloads graded in the browser.
+   */
+  analysed: boolean;
+  rateSource: RateSource | null;
+  bounces: number | null;
 }
 
 function field(data: unknown, key: string): number | null {
@@ -184,7 +194,9 @@ function field(data: unknown, key: string): number | null {
 
 /**
  * The most recent `touchdown` event of the current flight: a later `flight.started`
- * hides it so the card resets for the next leg.
+ * hides it so the card resets for the next leg. Connector events are parsed with the
+ * protocol's touchdownSchema and keep the connector's grade; anything else (older
+ * connectors, the authored demo fixture) is read defensively and graded here.
  */
 export function latestTouchdown(events: readonly ReceivedEvent[]): TouchdownView | null {
   for (let i = events.length - 1; i >= 0; i--) {
@@ -193,12 +205,29 @@ export function latestTouchdown(events: readonly ReceivedEvent[]): TouchdownView
     if (ev.msg.name === "flight.started") return null;
     if (ev.msg.name !== "touchdown") continue;
     const data = ev.msg.data;
+    const base = { seq: ev.msg.seq, at: ev.at, source: ev.msg.source };
+    const parsed = touchdownSchema.safeParse(data);
+    if (parsed.success) {
+      const td = parsed.data;
+      return {
+        ...base,
+        rateFpm: td.rateFpm,
+        gForce: td.peakG,
+        gsKt: td.gsKt,
+        bankDeg: td.bankDeg,
+        pitchDeg: td.pitchDeg,
+        lat: td.lat,
+        lon: td.lon,
+        grade: td.grade,
+        analysed: true,
+        rateSource: td.rateSource,
+        bounces: td.bounces,
+      };
+    }
     const rateFpm = field(data, "rateFpm");
-    const gForce = field(data, "gForce");
+    const gForce = field(data, "peakG") ?? field(data, "gForce");
     return {
-      seq: ev.msg.seq,
-      at: ev.at,
-      source: ev.msg.source,
+      ...base,
       rateFpm,
       gForce,
       gsKt: field(data, "gsKt"),
@@ -207,7 +236,46 @@ export function latestTouchdown(events: readonly ReceivedEvent[]): TouchdownView
       lat: field(data, "lat"),
       lon: field(data, "lon"),
       grade: landingGrade(rateFpm, gForce),
+      analysed: false,
+      rateSource: null,
+      bounces: field(data, "bounces"),
     };
   }
   return null;
+}
+
+export interface FlightSummaryView {
+  status: FlightState["status"] | null;
+  active: boolean;
+  distanceNm: number | null;
+  blockMin: number | null;
+  airborneMin: number | null;
+  fuelUsedLb: number | null;
+  maxAltFt: number | null;
+  flags: FlightState["flags"] | null;
+}
+
+/** Tracked-flight summary from the `flight` domain; null fields when not reported. */
+export function flightSummary(flight: FlightState | null | undefined): FlightSummaryView | null {
+  if (!flight) return null;
+  const distance = finite(flight.distanceNm)
+    ? flight.distanceNm
+    : finite(flight.flownDistanceNm)
+      ? flight.flownDistanceNm
+      : null;
+  const block = finite(flight.blockMin)
+    ? flight.blockMin
+    : finite(flight.elapsedSec)
+      ? flight.elapsedSec / 60
+      : null;
+  return {
+    status: flight.status ?? null,
+    active: flight.active,
+    distanceNm: distance,
+    blockMin: block,
+    airborneMin: finite(flight.airborneMin) ? flight.airborneMin : null,
+    fuelUsedLb: finite(flight.fuelUsedLb) ? flight.fuelUsedLb : null,
+    maxAltFt: finite(flight.maxAltFt) ? flight.maxAltFt : null,
+    flags: flight.flags ?? null,
+  };
 }

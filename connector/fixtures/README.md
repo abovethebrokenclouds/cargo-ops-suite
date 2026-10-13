@@ -7,6 +7,11 @@ A copy of `src/lib/transport/fixtures/demo-kmem-katl.jsonl`, made by
 kinematic profile and is **not** a recording from Microsoft Flight Simulator. Do not
 edit this copy; regenerate the web fixture and run `npm run fixtures:sync` again.
 
+It states its compressed simulated clock in `sim.simTimeSec` (about 2 h of flight in
+about 6 min of frames). Its `phase`/`flight` domains and `phase.changed`, `touchdown`,
+`flight.*` events are authored for the browser demo; FakeSource strips them and the
+connector recomputes them from the raw telemetry.
+
 `--sim fake` replays it by default. Whatever `source` the file contains, the connector
 labels every frame `source: "replay"` and announces `mode: "replay"` with
 `sim.connected: false`.

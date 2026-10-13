@@ -31,6 +31,14 @@ export const simDomainSchema = z.object({
   simRate: finite().positive(),
   /** e.g. "MSFS 2024". */
   name: z.string().optional(),
+  /**
+   * Simulation clock, seconds since the start of the session or recording: it
+   * advances with the sim rate and stops while paused. Optional. Replays that
+   * compress time (the synthetic demo fixture) carry it so the connector can time
+   * phases and verify speeds honestly; without it the connector uses its receive
+   * clock × simRate, stopped while paused.
+   */
+  simTimeSec: finite().nonnegative().optional(),
 });
 
 export const aircraftDomainSchema = z.object({
@@ -60,6 +68,15 @@ export const motionDomainSchema = z.object({
   vsFpm: finite(),
   gForce: finite(),
   onGround: z.boolean(),
+  /**
+   * Latched values of the last touchdown as the simulator reports them
+   * (PLANE TOUCHDOWN NORMAL VELOCITY ×60, PLANE TOUCHDOWN BANK/PITCH DEGREES).
+   * Optional: absent when the simulator does not provide them (and in replays
+   * recorded without them). Sign conventions unverified on a real sim.
+   */
+  touchdownVelocityFpm: finite().optional(),
+  touchdownBankDeg: finite().optional(),
+  touchdownPitchDeg: finite().optional(),
 });
 
 export const fuelDomainSchema = z.object({
@@ -107,6 +124,25 @@ export const planDomainSchema = z.object({
   eteSec: finite().nonnegative().optional(),
 });
 
+export const FLIGHT_STATUSES = ["active", "completed", "aborted", "failed"] as const;
+export const flightStatusSchema = z.enum(FLIGHT_STATUSES);
+export type FlightStatus = z.infer<typeof flightStatusSchema>;
+
+/** Verification flags of a tracked flight (plan §6.4). */
+export const flightFlagsSchema = z.object({
+  /** Position jumped further than ground speed allows (slew, teleport, map move). */
+  teleport: z.boolean(),
+  /** Sim rate went above 1× at some point: no bonuses. */
+  noBonus: z.boolean(),
+  /** Sim rate went above 8× at some point: the flight does not count. */
+  invalidated: z.boolean(),
+  /** The simulator reported a crash. */
+  crashed: z.boolean(),
+  /** The simulator is paused right now (the mission clock is stopped). */
+  paused: z.boolean(),
+});
+export type FlightFlags = z.infer<typeof flightFlagsSchema>;
+
 /** Tracked flight (connector-side), not the sim's own flight plan. */
 export const flightDomainSchema = z.object({
   active: z.boolean(),
@@ -116,10 +152,32 @@ export const flightDomainSchema = z.object({
   flownDistanceNm: finite().nonnegative().optional(),
   /** Flight clock, seconds (pauses with the sim). */
   elapsedSec: finite().nonnegative().optional(),
+  /** Connector-assigned flight id (also the logbook/database id). */
+  id: z.string().min(1).optional(),
+  status: flightStatusSchema.optional(),
+  /** Wall clock at block-out (or at the explicit start), ISO 8601. */
+  startedAt: z.string().optional(),
+  /** Wall clock when the flight ended, ISO 8601. */
+  endedAt: z.string().optional(),
+  /** Great-circle distance flown since block-out, integrated at ≤ 1 Hz, nautical miles. */
+  distanceNm: finite().nonnegative().optional(),
+  /** Sim-time minutes between liftoff and touchdown (pauses excluded). */
+  airborneMin: finite().nonnegative().optional(),
+  /** Sim-time minutes since block-out (pauses excluded). */
+  blockMin: finite().nonnegative().optional(),
+  maxAltFt: finite().optional(),
+  fuelUsedLb: finite().nonnegative().optional(),
+  flags: flightFlagsSchema.optional(),
 });
 
 export const phaseDomainSchema = z.object({
   current: flightPhaseSchema,
+});
+
+/** Payload of the `phase.changed` event. */
+export const phaseChangedSchema = z.object({
+  from: flightPhaseSchema,
+  to: flightPhaseSchema,
 });
 
 /** Placeholder until the economy/weather lanes define these. */

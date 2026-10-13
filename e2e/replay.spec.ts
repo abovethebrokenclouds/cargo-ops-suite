@@ -21,6 +21,26 @@ test.describe("replay mode against the local connector (--sim fake)", () => {
     expect(external).toEqual([]);
   });
 
+  test("/flight shows connector-computed phases and a graded landing", async ({ page }) => {
+    // The connector recomputes phases and the touchdown from raw telemetry (FakeSource
+    // strips the fixture's authored ones). At 20× a pass lasts ~19 s.
+    test.setTimeout(75_000);
+    await page.goto("/flight");
+    const phase = page.getByTestId("phase-label");
+    await expect(phase).toHaveText(
+      /Taxi Out|Takeoff|Climb|Cruise|Descent|Approach|Landing|Taxi In|Arrived/,
+      {
+        timeout: 30_000,
+      },
+    );
+    const grade = page.getByTestId("landing-grade");
+    await expect(grade).toHaveText(/^(A\+|A|B|C|D|E|F)$/, { timeout: 60_000 });
+    const card = page.getByTestId("landing-card");
+    await expect(card.getByTestId("landing-source")).toContainText("Graded by the connector");
+    await expect(card.getByText(/Provisional/)).toHaveCount(0);
+    await expect(page.getByTestId("flight-summary")).toBeVisible();
+  });
+
   test("/diagnostics reports the replay welcome", async ({ page }) => {
     await page.goto("/diagnostics");
     await expect(page.getByTestId("diagnostics")).toContainText(/replay/i);

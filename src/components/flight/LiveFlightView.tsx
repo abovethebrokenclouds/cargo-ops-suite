@@ -1,4 +1,12 @@
-import { Gauge, Package, Plane, PlaneLanding, Route as RouteIcon } from "lucide-react";
+import {
+  Activity,
+  ClipboardList,
+  Gauge,
+  Package,
+  Plane,
+  PlaneLanding,
+  Route as RouteIcon,
+} from "lucide-react";
 
 import { MetricTile } from "@/components/dashboard/MetricTile";
 import { Panel } from "@/components/dashboard/Panel";
@@ -7,6 +15,7 @@ import {
   displayAglFt,
   enduranceStatus,
   enginesRunning,
+  flightSummary,
   latestTouchdown,
   routeView,
   simRateBadge,
@@ -25,16 +34,19 @@ import {
   formatMinutes,
 } from "@/lib/format";
 import { currentPhase, fuelEnduranceMin, type ClientSimState } from "@/lib/sim-state";
+import { useTelemetryHistory } from "@/lib/sim-state/history";
 import { useNow } from "@/lib/sim-state/hooks";
 import { useSimConnection } from "@/lib/transport/useSimConnection";
 import { cn } from "@/lib/utils";
 
 import { Annunciator, SubReadout, type AnnunciatorProps } from "./Annunciator";
 import { FlightProgressBar } from "./FlightProgressBar";
+import { FlightSummary } from "./FlightSummary";
 import { LandingCard } from "./LandingCard";
 import { PayloadBar } from "./PayloadBar";
 import { PhaseTimeline } from "./PhaseTimeline";
 import { PHASE_LABELS } from "./phases";
+import { TelemetryStrip } from "./TelemetryStrip";
 
 const VS_TREND_FPM = 100;
 
@@ -122,6 +134,8 @@ export function LiveFlightView() {
   const weights = weightsView(sim.weights);
   const phase = currentPhase(state);
   const touchdown = latestTouchdown(state.events);
+  const summary = flightSummary(sim.flight);
+  const history = useTelemetryHistory(state);
   const vs = motion?.vsFpm ?? null;
   const vsTrend =
     vs === null ? undefined : vs > VS_TREND_FPM ? "up" : vs < -VS_TREND_FPM ? "down" : "flat";
@@ -345,6 +359,26 @@ export function LiveFlightView() {
           {position ? formatLon(position.lon) : EMPTY}
         </p>
       </MetricTile>
+
+      {/* Telemetry history and tracked-flight summary */}
+      <Panel
+        className="col-span-12 lg:col-span-7"
+        eyebrow="Last 10 minutes"
+        title="Telemetry"
+        icon={Activity}
+        action={<SourceTag source={history.length >= 2 ? source : null} />}
+      >
+        <TelemetryStrip points={history} />
+      </Panel>
+      <Panel
+        className="col-span-12 lg:col-span-5"
+        eyebrow="Tracked flight"
+        title="Flight summary"
+        icon={ClipboardList}
+        action={<SourceTag source={summary ? source : null} />}
+      >
+        <FlightSummary summary={summary} />
+      </Panel>
 
       {/* Phase */}
       <Panel

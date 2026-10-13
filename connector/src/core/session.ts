@@ -3,8 +3,15 @@
 // state, which SimConnectSource sets after node-simconnect's open() resolved.
 
 import { randomUUID } from "node:crypto";
-import { PROTOCOL_VERSION, type SimStatePatch, type Welcome } from "../protocol";
+import {
+  PROTOCOL_VERSION,
+  type Command,
+  type Result,
+  type SimStatePatch,
+  type Welcome,
+} from "../protocol";
 import type { LogFn, SimSource } from "../sim/source";
+import { FlightCore, type FlightCoreOptions } from "./flight-core";
 import { StateStore } from "./store";
 
 /** Domains that describe the simulator; cleared when the link drops so stale values never look live. */
@@ -23,19 +30,31 @@ const SIM_DERIVED_DOMAINS = [
 
 export type LinkListener = () => void;
 
+/** Flight-core options the session passes through (storage, clocks, thresholds). */
+export type SessionOptions = Omit<FlightCoreOptions, "store" | "log"> & {
+  /** Receive clock for updates without their own timestamp. Default Date.now. */
+  receiveClock?: () => number;
+};
+
 export class ConnectorSession {
   readonly id = randomUUID();
   readonly store: StateStore;
+  readonly flight: FlightCore;
+  private readonly receiveClock: () => number;
   private readonly linkListeners = new Set<LinkListener>();
   private unsubscribe: (() => void) | null = null;
 
   constructor(
     readonly source: SimSource,
     private readonly log: LogFn,
+    options: SessionOptions = {},
   ) {
     this.store = new StateStore(source.frameSource, (domain, reason) =>
       log("debug", `Ignored ${domain} update: ${reason}`),
     );
+    const { receiveClock, ...core } = options;
+    this.receiveClock = receiveClock ?? Date.now;
+    this.flight = new FlightCore({ ...core, store: this.store, log });
   }
 
   start(): void {
@@ -54,12 +73,15 @@ export class ConnectorSession {
         }
         case "reset":
           this.store.reset(update.state);
+          this.flight.onReset(update.at ?? this.receiveClock());
           break;
         case "data":
           this.store.apply(update.patch);
+          this.flight.onData(update.patch, update.at ?? this.receiveClock());
           break;
         case "event":
           this.store.event(update.name, update.data);
+          this.flight.onEvent(update.name);
           break;
       }
     });
@@ -78,6 +100,11 @@ export class ConnectorSession {
     return () => {
       this.linkListeners.delete(listener);
     };
+  }
+
+  /** Answer a client command (flight.start / flight.end; others not implemented). */
+  command(cmd: Command): Result {
+    return this.flight.command(cmd);
   }
 
   welcome(): Welcome {

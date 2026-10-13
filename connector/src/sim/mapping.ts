@@ -63,7 +63,15 @@ export function mapMotion(raw: RawValues): MotionState | undefined {
     onGround,
   };
   if (Object.values(fields).some((v) => v === undefined)) return undefined;
-  return valid<MotionState>("motion", fields);
+  // Latched touchdown values: optional, each only when the sim reports it.
+  const tdFps = num(raw, "touchdownNormalFps");
+  const tdBank = num(raw, "touchdownBankDeg");
+  const tdPitch = num(raw, "touchdownPitchDeg");
+  const motion: Record<string, unknown> = { ...fields };
+  if (tdFps !== undefined) motion["touchdownVelocityFpm"] = tdFps * 60;
+  if (tdBank !== undefined) motion["touchdownBankDeg"] = tdBank;
+  if (tdPitch !== undefined) motion["touchdownPitchDeg"] = tdPitch;
+  return valid<MotionState>("motion", motion);
 }
 
 export interface FastMapping {
