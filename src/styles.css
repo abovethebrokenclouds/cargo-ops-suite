@@ -448,3 +448,73 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* ---- Ops map (MapLibre) ---- */
+/* The canvas sits on the page backdrop; controls and popups use the glass tokens. */
+.ops-map .maplibregl-canvas {
+  outline: none;
+}
+.ops-map .maplibregl-ctrl-attrib {
+  background: color-mix(in oklab, var(--background) 72%, transparent);
+  backdrop-filter: blur(8px);
+  border-top-left-radius: var(--radius-md);
+  color: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  & a {
+    color: color-mix(in oklab, var(--foreground) 80%, transparent);
+  }
+}
+.ops-map .maplibregl-ctrl-group {
+  background: color-mix(in oklab, var(--card) 85%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(12px);
+  & button + button {
+    border-top-color: var(--border);
+  }
+  & button .maplibregl-ctrl-icon {
+    filter: invert(1) brightness(0.85);
+  }
+}
+.ops-map .ops-popup .maplibregl-popup-content {
+  background: var(--gradient-panel), color-mix(in oklab, var(--card) 94%, transparent);
+  border: 1px solid color-mix(in oklab, var(--primary) 22%, var(--border));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  color: var(--foreground);
+  padding: 0.75rem 0.9rem;
+}
+.ops-map .ops-popup .maplibregl-popup-close-button {
+  color: var(--muted-foreground);
+  padding: 0 0.35rem;
+}
+.ops-map .ops-popup.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+.ops-map .ops-popup.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.ops-map .ops-popup.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
+  border-top-color: color-mix(in oklab, var(--card) 94%, transparent);
+}
+.ops-map .ops-popup.maplibregl-popup-anchor-top .maplibregl-popup-tip,
+.ops-map .ops-popup.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.ops-map .ops-popup.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
+  border-bottom-color: color-mix(in oklab, var(--card) 94%, transparent);
+}
+
+/* Illuminated aircraft marker: accent glyph with a bloom and a soft halo. */
+.aircraft-marker-halo {
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--accent) 34%, transparent) 0%,
+    color-mix(in oklab, var(--primary) 14%, transparent) 45%,
+    transparent 70%
+  );
+}
+.aircraft-marker-glyph {
+  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--accent) 85%, transparent))
+    drop-shadow(0 0 16px color-mix(in oklab, var(--primary) 60%, transparent));
+}
+.aircraft-marker[data-stale] {
+  opacity: 0.5;
+  filter: saturate(0.3);
+}

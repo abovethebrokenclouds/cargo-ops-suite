@@ -14,6 +14,7 @@ import { unverifiedSimVars } from "../sim/simvars";
 import { normalizeOrigin } from "../server/security";
 import { startServer, type RunningServer } from "../server/server";
 import { openStorage, type Storage } from "../storage/db";
+import { FlightRepo, flightsApi } from "../storage/flights";
 
 /** connector/ (the folder holding package.json), found from the compiled file location. */
 export function connectorRoot(start: string = __dirname): string {
@@ -55,6 +56,8 @@ export interface ConnectorOptions {
   loop?: boolean;
   record?: string;
   web?: string;
+  /** Local basemap folder (default <dataDir>/basemap). */
+  basemapDir?: string;
   devOrigins?: string[];
   resetToken?: boolean;
   verbose?: boolean;
@@ -68,6 +71,7 @@ export interface RunningConnector {
   server: RunningServer;
   session: ConnectorSession;
   storage: Storage;
+  flights: FlightRepo;
   token: string;
   logFile: string | null;
   log: LogFn;
@@ -110,7 +114,9 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
   const storage = openStorage(options.dataDir, source.mode === "live" ? "live" : "demo");
   log("info", `Database: ${storage.path} (schema v${storage.schemaVersion()})`);
 
-  const session = new ConnectorSession(source, log);
+  // Flights and telemetry go to the database of this mode (demo.db for replays).
+  const flights = new FlightRepo(storage, source.frameSource);
+  const session = new ConnectorSession(source, log, { repo: flights });
   const recorder = options.record ? new Recorder(resolve(options.record), session.store) : null;
   if (recorder) log("info", `Recording frames to ${recorder.path}`);
 
@@ -122,9 +128,11 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
       version,
       port: options.port,
       ...(options.web ? { webDir: resolve(options.web) } : {}),
+      basemapDir: resolve(options.basemapDir ?? join(options.dataDir, "basemap")),
       devOrigins,
       ...(options.pingIntervalMs ? { pingIntervalMs: options.pingIntervalMs } : {}),
       log,
+      routes: flightsApi(flights),
       status: () => ({
         dataDir: options.dataDir,
         database: storage.path,
@@ -145,6 +153,7 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
     server,
     session,
     storage,
+    flights,
     token: config.token,
     logFile: logger.file,
     log,

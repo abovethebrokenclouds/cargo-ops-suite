@@ -76,7 +76,9 @@ describe("FakeSource", () => {
     await new Promise((r) => setTimeout(r, 100));
     await source.stop();
     assert.equal(types[0], "reset");
-    assert.equal(types.length, 5);
+    // The fixture's authored flight.started event (frame 3) is stripped: derived data
+    // comes from the connector's flight core only.
+    assert.deepEqual(types, ["reset", "data", "data", "data"]);
     assert.equal(source.loops, 1);
   });
 
@@ -99,8 +101,8 @@ describe("FakeSource", () => {
           v: 1 as const,
           seq: 1,
           source: "demo" as const,
-          name: "flight.started" as const,
-          data: null,
+          name: "sim.paused" as const,
+          data: { paused: true },
         },
       },
     ];

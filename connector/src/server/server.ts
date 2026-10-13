@@ -1,9 +1,10 @@
 // HTTP + WebSocket server on 127.0.0.1 (plan §3, §3.2).
 //
-//   GET  /api/health   no token: { ok, version, mode, sim }
+//   GET  /api/health   no token: { ok, version, mode, sim, basemap: { local } }
 //   GET  /api/session  same-origin only: { token, wsUrl } for the web app
 //   *    /api/*        Authorization: Bearer <token>
 //   GET  /ws           WebSocket; allowed Origin AND token (query `token` or first `hello`)
+//   GET  /tiles/<name>.pmtiles  local basemap with byte ranges (see tiles.ts)
 //   GET  /*            static SPA build with fallback to the shell
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -29,6 +30,7 @@ import {
   type OriginPolicy,
 } from "./security";
 import { sendText, serveStatic, webRootUsable } from "./static";
+import { TILES_PREFIX, hasLocalBasemap, serveTiles } from "./tiles";
 
 export const DEFAULT_PORT = 4311;
 export const HOST = "127.0.0.1";
@@ -50,11 +52,15 @@ export interface ServerOptions {
   version: string;
   port?: number;
   webDir?: string;
+  /** Folder holding basemap.pmtiles (and other archives) served under /tiles/. */
+  basemapDir?: string;
   devOrigins?: string[];
   pingIntervalMs?: number;
   log: LogFn;
   /** Extra fields for the authenticated /api/status response. */
   status?: () => Record<string, unknown>;
+  /** Extra authenticated /api routes (e.g. flights); null = not handled here. */
+  routes?: (method: string, pathname: string) => { status: number; body: unknown } | null;
 }
 
 interface Client {
@@ -101,6 +107,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     version: options.version,
     mode: session.source.mode,
     sim: session.welcome().sim,
+    basemap: { local: hasLocalBasemap(options.basemapDir) },
   });
 
   const server: Server = createServer((req, res) => {
@@ -118,6 +125,10 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     }
     if (pathname === "/api" || pathname.startsWith("/api/")) {
       handleApi(req, res, pathname);
+      return;
+    }
+    if (pathname.startsWith(TILES_PREFIX)) {
+      serveTiles(options.basemapDir, req, res, pathname);
       return;
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
@@ -169,6 +180,11 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
         clients: clients.size,
         ...(options.status?.() ?? {}),
       });
+      return;
+    }
+    const routed = options.routes?.(req.method ?? "GET", pathname) ?? null;
+    if (routed) {
+      json(res, routed.status, routed.body);
       return;
     }
     json(res, 404, { error: "not_found" });
@@ -269,7 +285,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
           client.rttMs = Math.max(0, Date.now() - msg.t);
           return;
         case "command":
-          send(client, commandResult(msg));
+          send(client, session.command(msg));
           return;
       }
     });
@@ -343,7 +359,7 @@ function rawToString(data: RawData): string {
   return data.toString("utf8");
 }
 
-/** Commands are not implemented in P1; every command gets an honest refusal. */
+/** Honest refusal for a command this connector does not implement. */
 export function commandResult(cmd: Command): ServerMessage {
   return {
     type: "result",

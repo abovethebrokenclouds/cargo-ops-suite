@@ -4,6 +4,8 @@ import type { LucideIcon } from "lucide-react";
 
 import { PageHero } from "@/components/AppNav";
 import { Panel } from "@/components/dashboard/Panel";
+import { Switch } from "@/components/ui/switch";
+import { useOnlineMapsSetting } from "@/lib/settings/map-settings";
 
 export const Route = createFileRoute("/settings")({
   head: () => ({
@@ -20,7 +22,7 @@ export const Route = createFileRoute("/settings")({
   component: SettingsPage,
 });
 
-type Row = { label: string; value: string; note?: string };
+type Row = { label: string; value: string; note?: string; control?: "online-maps" };
 type Group = { title: string; eyebrow: string; icon: LucideIcon; rows: Row[] };
 
 const groups: Group[] = [
@@ -50,8 +52,10 @@ const groups: Group[] = [
     eyebrow: "Map",
     icon: MapIcon,
     rows: [
-      { label: "Source", value: "Local PMTiles", note: "P2" },
-      { label: "Fallback", value: "OpenFreeMap", note: "P2" },
+      { label: "Order", value: "Local → Online → Outline" },
+      { label: "Local", value: "PMTiles via connector" },
+      { label: "Online maps (OpenFreeMap)", value: "", control: "online-maps" },
+      { label: "Offline floor", value: "Natural Earth outline" },
     ],
   },
   {
@@ -71,7 +75,7 @@ function SettingsPage() {
       <PageHero
         eyebrow="Settings"
         title="Configure."
-        sub="Read-only for now. Each setting becomes editable in the phase noted beside it."
+        sub="Mostly read-only for now. Each setting becomes editable in the phase noted beside it."
       />
       <div className="grid-ops">
         {groups.map((g) => (
@@ -87,7 +91,7 @@ function SettingsPage() {
                 <div key={r.label} className="flex items-center justify-between gap-4 py-3">
                   <dt className="text-sm text-muted-foreground">{r.label}</dt>
                   <dd className="flex items-center gap-2 font-mono text-sm text-foreground">
-                    {r.value}
+                    {r.control === "online-maps" ? <OnlineMapsSwitch /> : r.value}
                     {r.note ? (
                       <span className="rounded-sm bg-secondary px-1.5 py-0.5 text-[0.625rem] tracking-[0.12em] text-muted-foreground">
                         {r.note}
@@ -101,5 +105,24 @@ function SettingsPage() {
         ))}
       </div>
     </>
+  );
+}
+
+/** Per-browser toggle; off keeps the map fully offline (local PMTiles or the outline). */
+function OnlineMapsSwitch() {
+  const [enabled, setEnabled] = useOnlineMapsSetting();
+  return (
+    <span className="flex items-center gap-2">
+      <span className="text-xs text-muted-foreground">
+        {enabled === null ? "…" : enabled ? "On" : "Off"}
+      </span>
+      <Switch
+        checked={enabled ?? false}
+        disabled={enabled === null}
+        onCheckedChange={setEnabled}
+        aria-label="Allow online maps (OpenFreeMap)"
+        data-testid="online-maps-switch"
+      />
+    </span>
   );
 }

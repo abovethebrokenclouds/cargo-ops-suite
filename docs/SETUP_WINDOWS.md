@@ -153,3 +153,50 @@ remove it if you are not deliberately connecting to another PC.
 | PowerShell refuses to run the script       | Use the `.cmd` file; it starts PowerShell with `-ExecutionPolicy Bypass` for this script only.                                                         |
 
 When reporting a problem, include `logs\connector.log` (it never contains the token).
+
+## 10. Map basemap and airport data (optional)
+
+The `/map` page always works offline: it draws a Natural Earth world outline with the
+bundled OurAirports airport list. Two better basemaps are picked automatically, in this
+order, and a badge in the map corner says which one is active:
+
+1. **Local** — a Protomaps vector extract on your disk, served by the connector at
+   `/tiles/basemap.pmtiles` (HTTP range requests, never leaves the PC).
+2. **Online** — the free OpenFreeMap `dark` style (`tiles.openfreemap.org`; no key, no
+   account, no SLA). Turn it off in **Settings → Basemap → Online maps** to keep the app
+   fully offline.
+3. **Offline outline** — the bundled Natural Earth countries.
+
+### Download a local basemap
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\fetch-basemap.ps1
+# optional: a sharper regional extract (served at /tiles/region.pmtiles; the map uses
+# basemap.pmtiles today, so name the regional file basemap.pmtiles if you prefer it)
+powershell -ExecutionPolicy Bypass -File scripts\fetch-basemap.ps1 -Bbox "-125,24,-66,50" -RegionMaxZoom 11
+```
+
+The script downloads the `pmtiles` command-line tool (go-pmtiles, BSD-3-Clause) into
+`%LOCALAPPDATA%\CargoOps\basemap\.bin`, then extracts a world z0–7 basemap (expect
+roughly 100–200 MB) from a dated Protomaps daily build
+(`https://build.protomaps.com/YYYYMMDD.pmtiles`, default: yesterday; pass `-Date
+20261012` if that build is gone — daily builds are only kept for a short while) into
+`%LOCALAPPDATA%\CargoOps\basemap\basemap.pmtiles`. It prints the file sizes at the end.
+Restart the connector (or just reload `/map`): `/api/health` then reports
+`basemap.local: true` and the badge reads **Local**. Use `--basemap-dir <folder>` if you
+keep the file elsewhere. `scripts/fetch-basemap.sh` does the same on Linux/macOS.
+
+**Licence:** the extract is OpenStreetMap data under the ODbL. The map shows
+"© OpenStreetMap contributors (ODbL) · Protomaps" whenever the local basemap is active;
+keep that attribution, and never commit `.pmtiles` files (they are git-ignored).
+
+### Refresh the airport list
+
+```powershell
+node scripts\refresh-airports.mjs
+```
+
+Downloads `airports.csv` and `runways.csv` from OurAirports (public domain) into
+`data\ourairports\` (git-ignored) and regenerates `src\assets\data\airports-major.json`
+(large and medium airports with the longest runway). `data\ourairports\SOURCE.md` records
+the date. Rebuild the web app afterwards (`scripts\start-cargo-ops.cmd -Rebuild`).

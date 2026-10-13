@@ -12,7 +12,21 @@ const ROUTES = [
   "/diagnostics",
 ];
 
+// Online maps (OpenFreeMap) are turned off so the map uses only bundled data and the
+// "no external requests" rule holds for every route, /map included.
+const ONLINE_MAPS_KEY = "cargo-ops.map.online";
+
 test.describe("demo mode (no connector)", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript((key) => {
+      try {
+        window.localStorage.setItem(key, "off");
+      } catch {
+        // storage blocked: the map then tries online and the external-request check fails loudly
+      }
+    }, ONLINE_MAPS_KEY);
+  });
+
   for (const route of ROUTES) {
     test(`${route} renders with the DEMO DATA chip and no external requests`, async ({ page }) => {
       const external: string[] = [];
@@ -36,5 +50,44 @@ test.describe("demo mode (no connector)", () => {
     await expect(page.getByTestId("aircraft-title")).not.toHaveText("No aircraft loaded");
     await expect(page.getByTestId("live-flight").getByText("DEMO").first()).toBeVisible();
     await expect(page.getByText(/^LIVE/)).toHaveCount(0);
+  });
+
+  test("/map draws the offline outline, the demo aircraft and attribution", async ({ page }) => {
+    const external: string[] = [];
+    const errors: string[] = [];
+    page.on("request", (req) => {
+      const host = new URL(req.url()).hostname;
+      if (host !== "127.0.0.1" && host !== "localhost") external.push(req.url());
+    });
+    page.on("pageerror", (err) => errors.push(String(err)));
+    await page.goto("/map");
+    const map = page.getByTestId("ops-map");
+    await expect(map).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
+    await expect(map.locator("canvas.maplibregl-canvas")).toBeVisible();
+    await expect(page.getByTestId("basemap-badge")).toHaveText("Offline outline");
+    await expect(page.getByTestId("aircraft-marker")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("map-destination")).toContainText("KATL");
+    await expect(page.getByTestId("map-flight-panel").getByText("DEMO")).toBeVisible();
+    const attribution = page.locator(".maplibregl-ctrl-attrib");
+    await expect(attribution).toContainText("Natural Earth");
+    await expect(attribution).toContainText("OurAirports");
+    await expect(page.getByText("Waiting for position")).toHaveCount(0);
+    // A real WebGL context, not a blank canvas.
+    const webgl = await map
+      .locator("canvas.maplibregl-canvas")
+      .evaluate((c: HTMLCanvasElement) => !!(c.getContext("webgl2") ?? c.getContext("webgl")));
+    expect(webgl).toBe(true);
+    expect(external).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test("/settings toggles online maps in this browser", async ({ page }) => {
+    await page.goto("/settings");
+    const toggle = page.getByTestId("online-maps-switch");
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    const stored = await page.evaluate((key) => window.localStorage.getItem(key), ONLINE_MAPS_KEY);
+    expect(stored).toBe("on");
   });
 });
