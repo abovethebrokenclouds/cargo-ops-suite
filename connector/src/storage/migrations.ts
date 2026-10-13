@@ -67,4 +67,12 @@ export const MIGRATIONS: readonly Migration[] = [
       );
     `,
   },
+  {
+    // P2 flight tracking: block/air time, max altitude, fuel in lb, verification
+    // flags and every touchdown of the flight (plan §6.4) as one JSON summary.
+    version: 2,
+    sql: `
+      ALTER TABLE flights ADD COLUMN summary_json TEXT;
+    `,
+  },
 ];

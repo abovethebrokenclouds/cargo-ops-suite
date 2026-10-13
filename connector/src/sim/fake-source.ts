@@ -2,9 +2,22 @@
 // timing. It is the cloud/test mode (`--sim fake`). The welcome announces
 // `mode: "replay"` with `sim.connected: false`, and the core stamps
 // `source: "replay"` on every frame, whatever the fixture recorded.
+//
+// Derived data is stripped: the `phase` and `flight` domains and the
+// phase.changed / touchdown / flight.started / flight.ended events in a fixture
+// (authored by the demo generator, or recorded from an earlier connector run)
+// never reach the store. The connector's flight core recomputes them from the raw
+// telemetry, so it is the only source of truth. Each update carries the frame's
+// recorded `t` as its receive clock, so results do not depend on --speed.
 
 import { readFileSync } from "node:fs";
-import { parseFixture, type FixtureFrame } from "../protocol";
+import {
+  parseFixture,
+  type EventName,
+  type FixtureFrame,
+  type SimState,
+  type SimStatePatch,
+} from "../protocol";
 import {
   SimEmitter,
   type LogFn,
@@ -23,7 +36,25 @@ export interface FakeSourceOptions {
   loop?: boolean;
   /** Pause before restarting a loop, ms of fixture time. Default 2000. */
   loopGapMs?: number;
+  /** Do not schedule playback on start(); tests drive it with playAll(). */
+  manual?: boolean;
   log?: LogFn;
+}
+
+/** Events the connector derives itself; dropped from fixtures. */
+export const DERIVED_EVENTS: ReadonlySet<EventName> = new Set<EventName>([
+  "phase.changed",
+  "touchdown",
+  "flight.started",
+  "flight.ended",
+]);
+/** Domains the connector derives itself; dropped from fixtures. */
+export const DERIVED_DOMAINS = ["phase", "flight"] as const;
+
+function stripDerived<T extends SimState | SimStatePatch>(value: T): T {
+  const out = { ...value };
+  for (const domain of DERIVED_DOMAINS) delete out[domain];
+  return out;
 }
 
 export function loadFixture(path: string): FixtureFrame[] {
@@ -43,6 +74,7 @@ export class FakeSource implements SimSource {
   private readonly loop: boolean;
   private readonly loopGapMs: number;
   private readonly log: LogFn;
+  private readonly manual: boolean;
   private timer: NodeJS.Timeout | null = null;
   private index = 0;
   private startedAt = 0;
@@ -61,6 +93,7 @@ export class FakeSource implements SimSource {
     this.loop = options.loop ?? false;
     this.loopGapMs = options.loopGapMs ?? 2000;
     this.log = options.log ?? (() => {});
+    this.manual = options.manual ?? false;
   }
 
   link(): SimLinkInfo {
@@ -75,7 +108,13 @@ export class FakeSource implements SimSource {
   start(): void {
     if (this.running) return;
     this.running = true;
-    this.beginPass();
+    if (!this.manual) this.beginPass();
+  }
+
+  /** Emit every frame synchronously, in order (tests; deterministic). */
+  playAll(): void {
+    for (const frame of this.frames) this.play(frame);
+    this.loops++;
   }
 
   async stop(): Promise<void> {
@@ -120,12 +159,17 @@ export class FakeSource implements SimSource {
     const msg = frame.msg;
     switch (msg.type) {
       case "snapshot":
-        this.emitter.emit({ type: "reset", state: msg.state });
+        this.emitter.emit({ type: "reset", state: stripDerived(msg.state), at: frame.t });
         break;
-      case "delta":
-        this.emitter.emit({ type: "data", patch: msg.patch });
+      case "delta": {
+        const patch = stripDerived(msg.patch);
+        if (Object.keys(patch).length > 0) {
+          this.emitter.emit({ type: "data", patch, at: frame.t });
+        }
         break;
+      }
       case "event":
+        if (DERIVED_EVENTS.has(msg.name)) break;
         this.emitter.emit({ type: "event", name: msg.name, data: msg.data });
         break;
       default:
