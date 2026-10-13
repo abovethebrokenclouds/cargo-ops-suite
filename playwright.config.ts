@@ -2,10 +2,11 @@ import { defineConfig, devices } from "@playwright/test";
 
 // Two targets:
 //  - demo: the Vite dev server (no connector) → DemoTransport, chip must read DEMO DATA.
-//  - replay: the real connector with `--sim fake` serving the CARGO_OPS_LOCAL SPA build.
+//  - replay: the real connector with `--sim fake` serving the CARGO_OPS_LOCAL SPA build. Every
+//    replay spec file starts its OWN connector on a free port with a fresh data dir
+//    (e2e/replay-fixtures.ts), so the specs are independent of each other and of their order.
 // PW_CHROMIUM_PATH lets cloud containers use a preinstalled Chromium.
 const DEMO_PORT = 5180;
-const CONNECTOR_PORT = 4399;
 const executablePath = process.env["PW_CHROMIUM_PATH"];
 // MapLibre needs WebGL; headless Chromium gets it from SwiftShader (software GL).
 const webglArgs = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
@@ -36,9 +37,9 @@ export default defineConfig({
       use: { baseURL: `http://127.0.0.1:${DEMO_PORT}` },
     },
     {
+      // baseURL comes from the per-file connector fixture (e2e/replay-fixtures.ts).
       name: "replay",
       testMatch: /replay\.spec\.ts/,
-      use: { baseURL: `http://127.0.0.1:${CONNECTOR_PORT}` },
     },
   ],
   webServer: [
@@ -47,13 +48,6 @@ export default defineConfig({
       url: `http://127.0.0.1:${DEMO_PORT}`,
       reuseExistingServer: !process.env["CI"],
       timeout: 120_000,
-    },
-    {
-      // Expects `bun run build:local` and `npm run build` in connector/ to have run (see e2e/README.md).
-      command: `node scripts/e2e-connector.mjs ${CONNECTOR_PORT}`,
-      url: `http://127.0.0.1:${CONNECTOR_PORT}/api/health`,
-      reuseExistingServer: false,
-      timeout: 60_000,
     },
   ],
 });

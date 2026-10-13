@@ -1,4 +1,6 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
+
+import { expect, test } from "./replay-fixtures";
 
 // P5 part 2 acceptance against the real connector ("FBO income accrues from a replayed
 // arrival"): buy the FBO at KATL through the API, fly the replayed KMEM→KATL mission, and
@@ -6,8 +8,8 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 // and the waived landing fee on the mission. The 20× replay loops and clears the flight
 // about a second after arrival, so everything is asserted through the API.
 //
-// The replay specs share one connector company; the "x-" prefix makes this one run after
-// the others (an FBO purchase would change the cash they assert).
+// Like every replay spec it runs against its own connector with a fresh company
+// (e2e/replay-fixtures.ts), so it no longer has to run last.
 
 interface Res {
   ok: boolean;
@@ -80,7 +82,7 @@ test("buy an FBO at KATL, fly the replayed mission there: own-arrival FBO transa
   const quote = await get<{ buyPrice: number }>("/api/fbos/quote?icao=KATL");
   expect(quote.buyPrice).toBe(774_000);
 
-  // A C208B parked at KMEM for the replay (earlier specs moved the starter to KATL).
+  // A C208B parked at KMEM for the replay (independent of where the starter aircraft is).
   const lease = await command(page, tok, "fleet.lease", {
     typeKey: "c208b",
     kind: "dry",

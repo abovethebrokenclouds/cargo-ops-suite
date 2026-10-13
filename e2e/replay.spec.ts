@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./replay-fixtures";
 
 test.describe("replay mode against the local connector (--sim fake)", () => {
   test("chip reads REPLAY after the connector welcome", async ({ page }) => {

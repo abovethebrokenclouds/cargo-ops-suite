@@ -1,4 +1,6 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
+
+import { expect, test } from "./replay-fixtures";
 
 import { readFileSync } from "node:fs";
 
@@ -166,7 +168,8 @@ test("used aircraft with a hidden grounding defect: first dispatch refused with 
   await page.reload();
   await expect(page.getByTestId("maintenance-order").first()).toBeVisible();
 
-  // Leave the shared replay company as the other specs expect it.
+  // Release the job and deselect (each spec has its own connector, so this only exercises
+  // the commands; no other spec depends on it).
   expect((await command(page, tok, "job.release", { jobId: job.id })).ok).toBe(true);
   expect((await command(page, tok, "fleet.select", { aircraftId: null })).ok).toBe(true);
 });
