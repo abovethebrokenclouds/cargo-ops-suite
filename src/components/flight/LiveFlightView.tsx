@@ -37,6 +37,7 @@ import { currentPhase, fuelEnduranceMin, type ClientSimState } from "@/lib/sim-s
 import { useTelemetryHistory } from "@/lib/sim-state/history";
 import { useNow } from "@/lib/sim-state/hooks";
 import { useSimConnection } from "@/lib/transport/useSimConnection";
+import { altitudeFromFt, useUnits, weightFromLb } from "@/lib/settings/units";
 import { cn } from "@/lib/utils";
 
 import { Annunciator, SubReadout, type AnnunciatorProps } from "./Annunciator";
@@ -140,6 +141,9 @@ export function LiveFlightView() {
   const vsTrend =
     vs === null ? undefined : vs > VS_TREND_FPM ? "up" : vs < -VS_TREND_FPM ? "down" : "flat";
   const common = { source, stale } as const;
+  const [units] = useUnits();
+  const alt = (ft: number | null | undefined) =>
+    ft === null || ft === undefined ? null : altitudeFromFt(ft, units.altitude);
 
   return (
     <div className="grid-ops" data-testid="live-flight">
@@ -201,16 +205,16 @@ export function LiveFlightView() {
         {...common}
         className="col-span-12 md:col-span-6 xl:col-span-4"
         label="Altitude"
-        value={position?.altFt ?? null}
-        unit="ft"
+        value={alt(position?.altFt)}
+        unit={units.altitude}
         size="xl"
         digits={6}
         hint={agl === null ? "Indicated · AGL shown below 2,500 ft" : undefined}
       >
         {agl !== null ? (
           <div className="grid grid-cols-2 gap-3 border-t border-border pt-3">
-            <SubReadout label="AGL" value={num(agl)} unit="ft" />
-            <SubReadout label="Indicated" value={num(position?.altFt)} unit="ft" />
+            <SubReadout label="AGL" value={num(alt(agl))} unit={units.altitude} />
+            <SubReadout label="Indicated" value={num(alt(position?.altFt))} unit={units.altitude} />
           </div>
         ) : null}
       </MetricTile>
@@ -242,8 +246,8 @@ export function LiveFlightView() {
         {...common}
         className="col-span-12 xl:col-span-4"
         label="Fuel on board"
-        value={fuel?.totalLb ?? null}
-        unit="lb"
+        value={fuel ? weightFromLb(fuel.totalLb, units.weight) : null}
+        unit={units.weight}
         size="xl"
         digits={5}
         tone={reserve === "low" ? "warning" : "default"}
@@ -399,7 +403,11 @@ export function LiveFlightView() {
         icon={Package}
         action={<SourceTag source={weights ? source : null} />}
       >
-        <PayloadBar weights={weights} stations={sim.payload?.stations ?? null} />
+        <PayloadBar
+          weights={weights}
+          stations={sim.payload?.stations ?? null}
+          unit={units.weight}
+        />
       </Panel>
       <Panel
         className="col-span-12 lg:col-span-5"

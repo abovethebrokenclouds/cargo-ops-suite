@@ -18,6 +18,9 @@ import { FlightRepo, flightsApi } from "../storage/flights";
 import { EconomyRepo } from "../storage/economy";
 import { economyApi } from "../server/economy-api";
 import { loadAirportsData } from "../core/economy/airports-data";
+import { SimbriefService } from "../core/simbrief";
+import { dataApi } from "../server/data-api";
+import { BACKUP_CHECK_INTERVAL_MS, BackupManager, DEFAULT_BACKUP_KEEP } from "../storage/backups";
 import type { EconomyAirport } from "../economy";
 
 /** connector/ (the folder holding package.json), found from the compiled file location. */
@@ -75,6 +78,14 @@ export interface ConnectorOptions {
   airports?: EconomyAirport[];
   /** Company clock tick interval, ms (default 1000; 0 = no timer, tests tick by hand). */
   clockIntervalMs?: number;
+  /** Backups kept per database (default 14); 0 turns the daily backup off and keeps all. */
+  backupKeep?: number;
+  /** Daily backups (default: on for the live database, off for replays). */
+  dailyBackups?: boolean;
+  /** fetch used for SimBrief (tests). */
+  fetch?: typeof fetch;
+  /** Clock for backups and SimBrief (tests). */
+  now?: () => number;
 }
 
 export interface RunningConnector {
@@ -87,6 +98,8 @@ export interface RunningConnector {
   logFile: string | null;
   log: LogFn;
   recorder: Recorder | null;
+  backups: BackupManager;
+  simbrief: SimbriefService;
   stop(): Promise<void>;
 }
 
@@ -154,6 +167,22 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
     flights,
     database: storage.kind,
   });
+  const keep = options.backupKeep ?? DEFAULT_BACKUP_KEEP;
+  const backups = new BackupManager({
+    db: storage.db,
+    kind: storage.kind,
+    dir: join(options.dataDir, "backups"),
+    keep,
+    ...(options.now ? { now: options.now } : {}),
+  });
+  const simbrief = new SimbriefService({
+    storage,
+    version,
+    log,
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+    ...(options.now ? { now: options.now } : {}),
+  });
+  const dataRoutes = dataApi({ backups, simbrief, databasePath: storage.path });
   const recorder = options.record ? new Recorder(resolve(options.record), session.store) : null;
   if (recorder) log("info", `Recording frames to ${recorder.path}`);
 
@@ -169,7 +198,7 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
       devOrigins,
       ...(options.pingIntervalMs ? { pingIntervalMs: options.pingIntervalMs } : {}),
       log,
-      routes: (req) => flightRoutes(req) ?? economyRoutes(req),
+      routes: (req) => flightRoutes(req) ?? economyRoutes(req) ?? dataRoutes(req),
       status: () => ({
         dataDir: options.dataDir,
         database: storage.path,
@@ -198,6 +227,20 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
         }, clockMs)
       : null;
   clock?.unref();
+  // Daily backup of the career database (plan §3.3): at start and then hourly, a
+  // `VACUUM INTO backups/cargo-ops-YYYYMMDD.db` when today's file is missing.
+  const daily = (options.dailyBackups ?? source.mode === "live") && keep > 0;
+  const runDaily = () => {
+    const r = backups.daily();
+    if (!r) return;
+    if (r.ok) {
+      const removed = r.removed.length ? ` (rotated out ${r.removed.join(", ")})` : "";
+      log("info", `Backup written: ${r.backup.name}${removed}`);
+    } else log("warn", `Daily backup failed: ${r.message}`);
+  };
+  if (daily) runDaily();
+  const backupTimer = daily ? setInterval(runDaily, BACKUP_CHECK_INTERVAL_MS) : null;
+  backupTimer?.unref();
 
   return {
     server,
@@ -209,8 +252,11 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
     logFile: logger.file,
     log,
     recorder,
+    backups,
+    simbrief,
     stop: async () => {
       if (clock) clearInterval(clock);
+      if (backupTimer) clearInterval(backupTimer);
       await server.close();
       await session.stop();
       recorder?.close();

@@ -61,6 +61,7 @@ async function main(): Promise<number> {
       loop: options.loop,
       devOrigins: options.devOrigins,
       resetToken: options.resetToken,
+      backupKeep: options.backupKeep,
       verbose: options.verbose,
       ...(options.fixture ? { fixture: resolve(options.fixture) } : {}),
       ...(options.record ? { record: options.record } : {}),

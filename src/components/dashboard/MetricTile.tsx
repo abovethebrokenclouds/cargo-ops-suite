@@ -2,6 +2,7 @@ import { ArrowDownRight, ArrowRight, ArrowUpRight } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { SourceTag, StaleTag } from "@/components/status/SourceTag";
+import { useAnimatedNumber } from "@/hooks/use-animated-number";
 import { EMPTY, formatInt } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,11 @@ export type MetricTileProps = {
   stale?: boolean;
   /** Reserve this many character widths and right-align, so changing digits never shift layout. */
   digits?: number;
+  /**
+   * Ease between values (giant economy figures such as cash). Off by default: live telemetry
+   * is never interpolated. Respects prefers-reduced-motion.
+   */
+  animate?: boolean;
   /** Warning/critical colouring of the value (e.g. low endurance). */
   tone?: "default" | "warning" | "critical";
   className?: string;
@@ -47,17 +53,23 @@ export function MetricTile({
   stale = false,
   digits,
   tone = "default",
+  animate = false,
   className,
   children,
 }: MetricTileProps) {
   const usesText = text !== undefined;
   const empty = usesText ? text === null : value === null || !Number.isFinite(value);
-  const display = empty ? EMPTY : usesText ? (text ?? EMPTY) : format(value as number);
+  const shown = useAnimatedNumber(empty || usesText ? null : value, animate);
+  const display = empty ? EMPTY : usesText ? (text ?? EMPTY) : format((shown ?? value) as number);
   const TrendIcon = trend ? trendIcon[trend] : null;
 
   return (
     <div
-      className={cn("@container panel-elevated relative flex flex-col gap-3 p-5 md:p-6", className)}
+      className={cn(
+        "@container panel-elevated relative flex flex-col gap-3 p-5 md:p-6",
+        "animate-in fade-in slide-in-from-bottom-1 duration-300 motion-reduce:animate-none",
+        className,
+      )}
       data-metric={label}
       data-source={source ?? "none"}
       data-stale={stale ? "" : undefined}
@@ -81,6 +93,7 @@ export function MetricTile({
           style={digits !== undefined ? { minWidth: `${digits}ch` } : undefined}
           data-empty={empty ? "" : undefined}
           data-tone={tone === "default" ? undefined : tone}
+          data-value={empty || usesText ? undefined : String(value)}
           data-testid="metric-value"
         >
           {display}

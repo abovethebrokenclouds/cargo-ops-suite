@@ -14,6 +14,7 @@ export interface CliOptions {
   open: boolean;
   lan: boolean;
   resetToken: boolean;
+  backupKeep: number;
   verbose: boolean;
   help: boolean;
   version: boolean;
@@ -45,6 +46,9 @@ Data
   --basemap-dir <dir>     Local basemap folder served under /tiles/ (default: <data-dir>/basemap;
                           fill it with scripts/fetch-basemap.ps1 or .sh)
   --reset-token           Generate a new access token (open browser tabs must reload)
+  --backup-keep <n>       Database backups kept in <data-dir>/backups (default: 14). A daily
+                          backup of the career database runs while the connector is up;
+                          0 turns the daily backup off (on-demand backups are then all kept)
 
 Other
   --open                  Open the browser when the server is ready
@@ -65,6 +69,7 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
     open: false,
     lan: false,
     resetToken: false,
+    backupKeep: 14,
     verbose: false,
     help: false,
     version: false,
@@ -120,7 +125,8 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
       case "--port":
       case "--web":
       case "--data-dir":
-      case "--basemap-dir": {
+      case "--basemap-dir":
+      case "--backup-keep": {
         const value = takeValue(flag, inline);
         if (typeof value !== "string") return { ok: false, error: value.error };
         if (flag === "--sim") {
@@ -140,6 +146,12 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
             return { ok: false, error: "--port must be an integer between 0 and 65535" };
           }
           options.port = port;
+        } else if (flag === "--backup-keep") {
+          const keep = Number(value);
+          if (!Number.isInteger(keep) || keep < 0 || keep > 3650) {
+            return { ok: false, error: "--backup-keep must be an integer between 0 and 3650" };
+          }
+          options.backupKeep = keep;
         } else if (flag === "--fixture") options.fixture = value;
         else if (flag === "--record") options.record = value;
         else if (flag === "--web") options.web = value;

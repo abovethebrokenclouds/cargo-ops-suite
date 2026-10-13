@@ -4,6 +4,7 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
   HeadContent,
   Scripts,
   type ErrorComponentProps,
@@ -11,6 +12,8 @@ import {
 import { useEffect, type ReactNode } from "react";
 
 import { AppNav } from "../components/AppNav";
+import { KeyboardShortcuts } from "../components/KeyboardShortcuts";
+import { useHydrated } from "../hooks/use-hydrated";
 import { ConnectedStatusChip } from "../components/status/ConnectedStatusChip";
 import { SimConnectionProvider } from "../lib/transport/useSimConnection";
 import appCss from "../styles.css?url";
@@ -82,6 +85,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "Cargo Ops" },
+      // --background token (oklch 0.13 0.03 262) as hex; see public/manifest.webmanifest.
+      { name: "theme-color", content: "#030713" },
+      { name: "color-scheme", content: "dark" },
       {
         name: "description",
         content:
@@ -95,7 +101,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: appCss,
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "icon", href: "/favicon.ico", sizes: "48x48" },
+      { rel: "icon", href: "/icons/icon.svg", type: "image/svg+xml" },
+      { rel: "apple-touch-icon", href: "/icons/apple-touch-icon.png" },
+      { rel: "manifest", href: "/manifest.webmanifest" },
     ],
   }),
   shellComponent: RootShell,
@@ -120,15 +129,33 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // Page enter transition: the wrapper is keyed by the path once hydrated, so each page
+  // fades in (opacity only, which keeps the fixed map layout intact). Before hydration the
+  // key matches the server/shell markup. Reduced motion: no animation.
+  const hydrated = useHydrated();
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+      <a
+        href="#main-content"
+        className="sr-only z-50 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+      >
+        Skip to content
+      </a>
       <SimConnectionProvider>
         <AppNav statusSlot={<ConnectedStatusChip />} />
-        <main className="mx-auto max-w-7xl px-4 pb-24 md:px-6">
-          <Outlet />
+        <main id="main-content" tabIndex={-1} className="mx-auto max-w-7xl px-4 pb-24 md:px-6">
+          <div
+            key={hydrated ? pathname : "shell"}
+            className="animate-in fade-in duration-300 motion-reduce:animate-none"
+            data-testid="page"
+          >
+            {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+            <Outlet />
+          </div>
         </main>
+        <KeyboardShortcuts />
       </SimConnectionProvider>
     </QueryClientProvider>
   );

@@ -12,6 +12,7 @@ import { useState } from "react";
 
 import { formatGameTime, tierTable } from "@cargo-ops/economy";
 import { PageHero } from "@/components/AppNav";
+import { ConnectionNotice } from "@/components/status/ConnectionNotice";
 import { EmptyState } from "@/components/EmptyState";
 import { LedgerTable } from "@/components/company/LedgerTable";
 import { DtiGauge, LoansPanel } from "@/components/company/LoansPanel";
@@ -84,6 +85,7 @@ function Company() {
         sub="Reputation opens bigger contracts and better aircraft. Every dollar is on the ledger."
       />
       <div className="grid-ops">
+        <ConnectionNotice state={state} />
         {demo ? (
           <div
             className="panel-inset col-span-12 flex flex-wrap items-center gap-3 px-5 py-4 text-sm text-muted-foreground"
@@ -98,6 +100,7 @@ function Company() {
         <MetricTile
           className="col-span-12 lg:col-span-6"
           label="Cash"
+          animate
           value={company?.cash ?? null}
           format={formatUsd}
           size="xl"
@@ -131,6 +134,7 @@ function Company() {
         <MetricTile
           className="col-span-6 md:col-span-4"
           label="Net worth"
+          animate
           value={company?.netWorth ?? null}
           format={formatUsd}
           size="md"
@@ -139,6 +143,7 @@ function Company() {
         <MetricTile
           className="col-span-6 md:col-span-4"
           label="Debt"
+          animate
           value={company?.debt ?? null}
           format={formatUsd}
           size="md"
@@ -147,6 +152,7 @@ function Company() {
         <MetricTile
           className="col-span-12 md:col-span-4"
           label="Fleet value"
+          animate
           value={fleet?.value ?? null}
           format={formatUsd}
           size="md"

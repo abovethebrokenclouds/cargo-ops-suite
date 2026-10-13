@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import type { FleetAircraft } from "@cargo-ops/protocol";
 import { PageHero } from "@/components/AppNav";
+import { ConnectionNotice } from "@/components/status/ConnectionNotice";
 import { EmptyState } from "@/components/EmptyState";
 import { ghostButton } from "@/components/company/styles";
 import { MetricTile } from "@/components/dashboard/MetricTile";
@@ -170,6 +171,7 @@ function Fleet() {
       />
 
       <div className="grid-ops">
+        <ConnectionNotice state={state} />
         {demo ? (
           <div
             className="panel-inset col-span-12 flex flex-wrap items-center gap-3 px-5 py-4 text-sm text-muted-foreground"
@@ -183,6 +185,7 @@ function Fleet() {
         <MetricTile
           className="col-span-12 md:col-span-4"
           label="Fleet value"
+          animate
           value={fleet?.value ?? null}
           format={formatUsd}
           size="lg"

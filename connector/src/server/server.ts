@@ -76,7 +76,7 @@ export interface ServerOptions {
   /** Extra fields for the authenticated /api/status response. */
   status?: () => Record<string, unknown>;
   /** Extra authenticated /api routes (flights, jobs, exports …); null = not handled here. */
-  routes?: (req: ApiRequest) => ApiResult | null;
+  routes?: (req: ApiRequest) => ApiResult | null | Promise<ApiResult | null>;
 }
 
 interface Client {
@@ -227,7 +227,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       }
     }
     const query = new URL(req.url ?? "/", "http://connector.invalid").searchParams;
-    const routed = options.routes({ method, pathname, query, body });
+    const routed = await options.routes({ method, pathname, query, body });
     if (!routed) {
       json(res, 404, { error: "not_found" });
       return;

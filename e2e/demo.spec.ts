@@ -89,6 +89,10 @@ test.describe("demo mode (no connector)", () => {
 
   test("/settings toggles online maps in this browser", async ({ page }) => {
     await page.goto("/settings");
+    await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
+      "data-status",
+      "demo",
+    );
     const toggle = page.getByTestId("online-maps-switch");
     await expect(toggle).toHaveAttribute("aria-checked", "false");
     await toggle.click();
@@ -206,5 +210,80 @@ test.describe("demo mode (no connector)", () => {
     await expect(page.getByTestId("export-csv")).toBeDisabled();
     await expect(page.getByTestId("export-json")).toBeDisabled();
     await expect(page.getByTestId("logbook-row")).toHaveCount(0);
+  });
+
+  test("keyboard shortcuts: g + letter navigates, ? opens the list, typing is ignored", async ({
+    page,
+  }) => {
+    // Eleven page loads on the dev server: allow for a slow CI runner.
+    test.setTimeout(120_000);
+    await page.goto("/");
+    await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
+      "data-status",
+      "demo",
+    );
+    const chords: Array<[string, string, RegExp]> = [
+      ["j", "/jobs", /Cargo Jobs/],
+      ["e", "/fleet", /Fleet/],
+      ["b", "/fbo", /FBOs/],
+      ["c", "/company", /Company/],
+      ["l", "/logbook", /Every leg/],
+      ["m", "/map", /Ops map/],
+      ["f", "/flight", /./],
+      ["d", "/diagnostics", /Under the hood/],
+      ["s", "/settings", /Configure/],
+      ["o", "/", /Move the world/],
+    ];
+    for (const [key, path, heading] of chords) {
+      await page.keyboard.press("g");
+      await page.keyboard.press(key);
+      await expect(page).toHaveURL(new RegExp(`${path === "/" ? "/$" : path}$`));
+      await expect(page.getByRole("heading", { level: 1 }).first()).toHaveText(heading);
+      if (path === "/map") {
+        // Let the map finish initialising first: on a software-WebGL CI runner its start-up
+        // blocks the page for over 1.5 s, which genuinely expires a `g` chord in progress.
+        await expect(page.getByTestId("basemap-badge")).toHaveText("Offline outline");
+      }
+    }
+    await page.keyboard.press("?");
+    const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Diagnostics");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    // Typing in a field never navigates. Type only after hydration, or React resets the field.
+    await page.goto("/jobs");
+    await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
+      "data-status",
+      "demo",
+    );
+    const field = page.getByLabel("Board airport");
+    await field.click();
+    await page.keyboard.type("gm");
+    await expect(field).toHaveValue("gm");
+    await expect(page).toHaveURL(/\/jobs$/);
+  });
+
+  test("/settings in demo mode: units stored per browser, data actions need the connector", async ({
+    page,
+  }) => {
+    await page.goto("/settings");
+    // Interact only after hydration (the chip turns DEMO from an effect), or clicks are lost.
+    await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
+      "data-status",
+      "demo",
+    );
+    await expect(page.getByTestId("demo-mode")).toHaveText(/On/);
+    await expect(page.getByTestId("token-masked")).toHaveText("none in demo mode");
+    await expect(page.getByTestId("backup-now")).toBeDisabled();
+    await expect(page.getByTestId("career-export")).toBeDisabled();
+    await expect(page.getByTestId("simbrief-import")).toBeDisabled();
+    await page.getByTestId("units-panel").getByText("kg", { exact: true }).click();
+    await page.getByTestId("units-panel").getByText("m", { exact: true }).click();
+    const stored = await page.evaluate(() => window.localStorage.getItem("cargo-ops.units"));
+    expect(JSON.parse(stored ?? "{}")).toEqual({ weight: "kg", altitude: "m", speed: "kt" });
+    await page.goto("/flight");
+    await expect(page.locator('[data-metric="Altitude"]')).toContainText("m");
+    await expect(page.locator('[data-metric="Fuel on board"]')).toContainText("kg");
   });
 });

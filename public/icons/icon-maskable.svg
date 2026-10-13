@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Cargo Ops">
+  <!-- In-house maskable variant (project license): full-bleed brand gradient, glyph kept inside
+       the central 80 % safe zone so any platform mask (circle, squircle) keeps it whole. -->
+  <defs>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#44a5ff"/>
+      <stop offset="0.45" stop-color="#00ddef"/>
+      <stop offset="1" stop-color="#9264ef"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.3" cy="0.2" r="0.8">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#brand)"/>
+  <rect width="512" height="512" fill="url(#sheen)"/>
+  <g transform="translate(256 256) scale(0.66) translate(-256 -256) rotate(45 256 256)">
+    <path fill="#030713" d="M256 92c15 0 24 17 24 38v86l132 54v34l-132-26v84l44 30v26l-68-15-68 15v-26l44-30v-84l-132 26v-34l132-54v-86c0-21 9-38 24-38z"/>
+  </g>
+</svg>

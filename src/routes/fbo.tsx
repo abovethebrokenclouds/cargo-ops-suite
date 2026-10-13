@@ -14,6 +14,7 @@ import { useMemo, useState } from "react";
 import type { FboState, Source } from "@cargo-ops/protocol";
 import { formatGameTime } from "@cargo-ops/economy";
 import { PageHero } from "@/components/AppNav";
+import { ConnectionNotice } from "@/components/status/ConnectionNotice";
 import { EmptyState } from "@/components/EmptyState";
 import { ghostButton } from "@/components/company/styles";
 import { MetricTile } from "@/components/dashboard/MetricTile";
@@ -87,6 +88,7 @@ function Fbo() {
         sub="Fuel, hangars, maintenance, cargo and ramp services at your airports. They earn from your own arrivals, the modelled traffic and, live, the sim's AI traffic."
       />
       <div className="grid-ops" data-testid="fbo-page">
+        <ConnectionNotice state={state} />
         {demo ? (
           <div
             className="panel-inset col-span-12 flex flex-wrap items-center gap-3 px-5 py-4 text-sm text-muted-foreground"
@@ -113,6 +115,7 @@ function Fbo() {
         <MetricTile
           className="col-span-6 lg:col-span-3"
           label="Income this month"
+          animate
           value={fbos?.monthIncome ?? null}
           format={formatUsd}
           size="lg"
@@ -122,6 +125,7 @@ function Fbo() {
         <MetricTile
           className="col-span-6 lg:col-span-3"
           label="Upkeep this month"
+          animate
           value={fbos?.monthUpkeep ?? null}
           format={formatUsd}
           size="lg"
@@ -131,6 +135,7 @@ function Fbo() {
         <MetricTile
           className="col-span-6 lg:col-span-3"
           label="Book value"
+          animate
           value={fbos?.value ?? null}
           format={formatUsd}
           size="lg"

@@ -13,6 +13,8 @@ import { routeEnds, type RouteEnd } from "@/lib/map/route";
 import type { OverlayGroup } from "@/lib/map/style";
 import { useTrail } from "@/lib/map/useTrail";
 import { useOnlineMapsSetting } from "@/lib/settings/map-settings";
+import { altitudeFromFt, useUnits } from "@/lib/settings/units";
+import { TOGGLE_FOLLOW_EVENT } from "@/lib/shortcuts";
 import type { ClientSimState } from "@/lib/sim-state";
 import { useNow } from "@/lib/sim-state/hooks";
 import { useSimConnection } from "@/lib/transport/useSimConnection";
@@ -103,8 +105,15 @@ export function MapView() {
   const { state, transportKind } = useSimConnection();
   const now = useNow(1000);
   const [onlineAllowed] = useOnlineMapsSetting();
+  const [units] = useUnits();
   const [airports, setAirports] = useState<AirportIndex | null>(null);
   const [follow, setFollow] = useState(true);
+  // `f` (components/KeyboardShortcuts.tsx) toggles follow mode.
+  useEffect(() => {
+    const toggleFollow = () => setFollow((f) => !f);
+    window.addEventListener(TOGGLE_FOLLOW_EVENT, toggleFollow);
+    return () => window.removeEventListener(TOGGLE_FOLLOW_EVENT, toggleFollow);
+  }, []);
   const [layers, setLayers] = useState<Record<OverlayGroup, boolean>>({
     airports: true,
     trail: true,
@@ -257,7 +266,11 @@ export function MapView() {
           </div>
           <dl className="grid grid-cols-3 gap-2 border-t border-border pt-3">
             <Readout label="GS" value={motion ? formatInt(motion.gsKt) : null} unit="kt" />
-            <Readout label="ALT" value={position ? formatInt(position.altFt) : null} unit="ft" />
+            <Readout
+              label="ALT"
+              value={position ? formatInt(altitudeFromFt(position.altFt, units.altitude)) : null}
+              unit={units.altitude}
+            />
             <Readout
               label="HDG"
               value={motion ? formatDegrees(motion.hdgTrueDeg) : null}
