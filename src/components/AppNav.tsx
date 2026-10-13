@@ -10,7 +10,9 @@ export function AppNav() {
   return (
     <header className="sticky top-0 z-20 border-b border-border/60 backdrop-blur-xl">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-        <Link to="/" className="font-display text-xl font-bold text-gradient">Cargo Ops</Link>
+        <Link to="/" className="font-display text-xl font-bold text-gradient">
+          Cargo Ops
+        </Link>
         <nav className="flex gap-1">
           {links.map((l) => (
             <Link

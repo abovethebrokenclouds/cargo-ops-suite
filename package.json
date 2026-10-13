@@ -11,7 +11,11 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:local": "CARGO_OPS_LOCAL=1 vite build",
+    "typecheck": "tsc --noEmit",
+    "check:inventory": "node scripts/check-inventory.mjs",
+    "check": "bun run lint && bun run typecheck && bun run check:inventory && bun run test && bun run build && bun run build:local"
   },
   "overrides": {
     "rolldown": "1.2.1"

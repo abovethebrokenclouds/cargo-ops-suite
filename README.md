@@ -1,6 +1,6 @@
 # Cargo Ops Suite
 
-Create a personal app called Cargo Ops. This is a flight sim 2024 addon app that will connect with MS2024 and create a cargo company, prepare cargo operations etc.  I need the basic build for Claude to work on. It will be beautiful UX/UI with gradient large text
+Create a personal app called Cargo Ops. This is a flight sim 2024 addon app that will connect with MS2024 and create a cargo company, prepare cargo operations etc. I need the basic build for Claude to work on. It will be beautiful UX/UI with gradient large text
 
 This project was built with [Lovable](https://lovable.dev).
 

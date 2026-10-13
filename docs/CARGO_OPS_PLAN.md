@@ -15,18 +15,18 @@ inline; anything not verified from a primary source is flagged in §14.
 
 ## 1. Decisions at a glance
 
-| Area | Decision | Why |
-|---|---|---|
-| Product shape | Browser UI (existing TanStack Start app) + a local Node connector on the Windows PC. No Electron, no cloud, no accounts. | Smallest footprint, pure-JS SimConnect client, identical code path to the Lovable preview. |
-| Simulator link | `node-simconnect` 4.2.1 (LGPL-3.0-or-later, pure TypeScript, speaks the SimConnect wire protocol over named pipe/TCP). `Protocol.SunRise` for MSFS 2024, `KittyHawk` fallback for 2020. | Only actively maintained open client with MSFS 2024 support; ships **no** Microsoft SDK binaries, so the unresolved SimConnect.dll redistribution question never arises. |
-| Transport | WebSocket + small HTTP API on `127.0.0.1:4311`, origin check + random local token. Snapshot/delta JSON protocol with an explicit `source: "sim" | "replay" | "demo"` on every frame. | Real vs demo data is a protocol fact, never a UI guess. |
-| Web build | Keep SSR/Cloudflare build for Lovable (default). `CARGO_OPS_LOCAL=1` enables TanStack Start SPA mode + `nitro: false`; the connector serves the static build. | Verified: the Lovable wrapper passes `tanstackStart.spa` through and only warns. |
-| Persistence | Connector owns one SQLite file (`%LOCALAPPDATA%\CargoOps\cargo-ops.db`, WAL) via Node 24 built-in `node:sqlite`. UI never touches storage directly. IndexedDB only for per-browser UI prefs. | One file to back up; zero native addons; post-flight processing on the server side. |
-| Map | MapLibre GL JS (BSD-3) + `pmtiles` (BSD-3) + `@protomaps/basemaps` dark flavor (BSD-3 code, CC0 design). Local Protomaps PMTiles extract as primary; OpenFreeMap `dark` style as online fallback (no key, no limits, no SLA); `world-atlas` (ISC/Natural Earth PD) as always-offline floor. | No keys, no payment, OSM attribution shown in the map corner. |
-| Aviation data | OurAirports CSVs (public domain) bundled; MSFS facilities via SimConnect as the live authority; aviationweather.gov METAR/TAF (US Gov, no key, 100 req/min, custom User-Agent, cached 10 min). | Free, documented limits, no accounts. |
-| Design system | Midnight navy/charcoal, electric blue primary, cyan accent, restrained violet tertiary, gradient text blue→cyan→violet. Space Grotesk (display), Inter (body, tabular numerals), JetBrains Mono (data). All self-hosted via Fontsource (OFL 1.1). Lucide icons (ISC), Maki map icons (CC0), in-house SVG aircraft silhouettes. | Matches the brief; current amber/orange tokens are replaced. No Google Fonts CDN at runtime. |
-| Charts | uPlot (MIT) for telemetry strips; Recharts (MIT, already present) for styled dashboard charts. | Throughput where needed, theming where it matters. |
-| Tests | Vitest + Testing Library (UI, protocol, reducers, phase FSM), FakeSimConnect JSONL replay, Playwright E2E vs fake connector, GitHub Actions on ubuntu + windows. Real SimConnect handshake is a manual checklist on the user's PC. | Everything that can be verified without MSFS is automated; the rest is recorded honestly. |
+| Area           | Decision                                                                                                                                                                                                                                                                                                                       | Why                                                                                                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Product shape  | Browser UI (existing TanStack Start app) + a local Node connector on the Windows PC. No Electron, no cloud, no accounts.                                                                                                                                                                                                       | Smallest footprint, pure-JS SimConnect client, identical code path to the Lovable preview.                                                                               |
+| Simulator link | `node-simconnect` 4.2.1 (LGPL-3.0-or-later, pure TypeScript, speaks the SimConnect wire protocol over named pipe/TCP). `Protocol.SunRise` for MSFS 2024, `KittyHawk` fallback for 2020.                                                                                                                                        | Only actively maintained open client with MSFS 2024 support; ships **no** Microsoft SDK binaries, so the unresolved SimConnect.dll redistribution question never arises. |
+| Transport      | WebSocket + small HTTP API on `127.0.0.1:4311`, origin check + random local token. Snapshot/delta JSON protocol with an explicit `source: "sim"                                                                                                                                                                                | "replay"                                                                                                                                                                 | "demo"` on every frame. | Real vs demo data is a protocol fact, never a UI guess. |
+| Web build      | Keep SSR/Cloudflare build for Lovable (default). `CARGO_OPS_LOCAL=1` enables TanStack Start SPA mode + `nitro: false`; the connector serves the static build.                                                                                                                                                                  | Verified: the Lovable wrapper passes `tanstackStart.spa` through and only warns.                                                                                         |
+| Persistence    | Connector owns one SQLite file (`%LOCALAPPDATA%\CargoOps\cargo-ops.db`, WAL) via Node 24 built-in `node:sqlite`. UI never touches storage directly. IndexedDB only for per-browser UI prefs.                                                                                                                                   | One file to back up; zero native addons; post-flight processing on the server side.                                                                                      |
+| Map            | MapLibre GL JS (BSD-3) + `pmtiles` (BSD-3) + `@protomaps/basemaps` dark flavor (BSD-3 code, CC0 design). Local Protomaps PMTiles extract as primary; OpenFreeMap `dark` style as online fallback (no key, no limits, no SLA); `world-atlas` (ISC/Natural Earth PD) as always-offline floor.                                    | No keys, no payment, OSM attribution shown in the map corner.                                                                                                            |
+| Aviation data  | OurAirports CSVs (public domain) bundled; MSFS facilities via SimConnect as the live authority; aviationweather.gov METAR/TAF (US Gov, no key, 100 req/min, custom User-Agent, cached 10 min).                                                                                                                                 | Free, documented limits, no accounts.                                                                                                                                    |
+| Design system  | Midnight navy/charcoal, electric blue primary, cyan accent, restrained violet tertiary, gradient text blue→cyan→violet. Space Grotesk (display), Inter (body, tabular numerals), JetBrains Mono (data). All self-hosted via Fontsource (OFL 1.1). Lucide icons (ISC), Maki map icons (CC0), in-house SVG aircraft silhouettes. | Matches the brief; current amber/orange tokens are replaced. No Google Fonts CDN at runtime.                                                                             |
+| Charts         | uPlot (MIT) for telemetry strips; Recharts (MIT, already present) for styled dashboard charts.                                                                                                                                                                                                                                 | Throughput where needed, theming where it matters.                                                                                                                       |
+| Tests          | Vitest + Testing Library (UI, protocol, reducers, phase FSM), FakeSimConnect JSONL replay, Playwright E2E vs fake connector, GitHub Actions on ubuntu + windows. Real SimConnect handshake is a manual checklist on the user's PC.                                                                                             | Everything that can be verified without MSFS is automated; the rest is recorded honestly.                                                                                |
 
 ---
 
@@ -39,24 +39,24 @@ Start 1.168.60 / Router 1.170.41, Vite 8.1.5, Tailwind 4.2.1, shadcn/ui
 
 App code is ~860 lines outside `components/ui`:
 
-| File | Role |
-|---|---|
-| `src/routes/__root.tsx` | Shell, head meta, error/not-found pages, loads fonts from `fonts.googleapis.com` |
-| `src/routes/index.tsx`, `jobs.tsx`, `fleet.tsx` | Three pages on mock data |
-| `src/components/AppNav.tsx` | Nav + `PageHero`; hard-coded "MSFS 2024 offline" dot |
-| `src/lib/mock-data.ts` | Company, 3 aircraft, 3 jobs |
-| `src/styles.css` | Tailwind 4 tokens (oklch), `text-gradient`, `panel`, `bg-gradient-brand`, `shadow-glow` |
-| `src/test/app-routing.test.tsx` | One test: `/` matches a route |
+| File                                            | Role                                                                                    |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `src/routes/__root.tsx`                         | Shell, head meta, error/not-found pages, loads fonts from `fonts.googleapis.com`        |
+| `src/routes/index.tsx`, `jobs.tsx`, `fleet.tsx` | Three pages on mock data                                                                |
+| `src/components/AppNav.tsx`                     | Nav + `PageHero`; hard-coded "MSFS 2024 offline" dot                                    |
+| `src/lib/mock-data.ts`                          | Company, 3 aircraft, 3 jobs                                                             |
+| `src/styles.css`                                | Tailwind 4 tokens (oklch), `text-gradient`, `panel`, `bg-gradient-brand`, `shadow-glow` |
+| `src/test/app-routing.test.tsx`                 | One test: `/` matches a route                                                           |
 
 Baseline run (cloud container, no MSFS):
 
-| Check | Result |
-|---|---|
-| `bun install --frozen-lockfile` | OK |
-| `npx tsc --noEmit` | OK |
-| `bun run test` | 1/1 passed |
-| `bun run build` | OK, 1.5 MB output, cloudflare-module preset |
-| `bun run lint` | **FAIL**: 22 Prettier errors (auto-fixable), 6 react-refresh warnings in `components/ui` |
+| Check                           | Result                                                                                   |
+| ------------------------------- | ---------------------------------------------------------------------------------------- |
+| `bun install --frozen-lockfile` | OK                                                                                       |
+| `npx tsc --noEmit`              | OK                                                                                       |
+| `bun run test`                  | 1/1 passed                                                                               |
+| `bun run build`                 | OK, 1.5 MB output, cloudflare-module preset                                              |
+| `bun run lint`                  | **FAIL**: 22 Prettier errors (auto-fixable), 6 react-refresh warnings in `components/ui` |
 
 Gaps against the brief: no simulator link, no map, no persistence, no flight
 tracking, no career model, wrong colour direction (amber/orange primary), fonts
@@ -168,18 +168,18 @@ Direction: a premium aviation operations centre crossed with a high-end gaming c
 
 ### 4.1 Tokens (replace current amber set in `src/styles.css`)
 
-| Token | Value (oklch) | Use |
-|---|---|---|
-| `--background` | 0.13 0.03 262 (midnight navy) | page |
-| `--card` | 0.18 0.03 262 | panels |
-| `--secondary`/`--muted` | 0.23 0.03 262 | chips, inputs |
-| `--primary` | 0.72 0.19 255 (electric blue) | CTAs, active |
-| `--accent` | 0.82 0.14 205 (cyan) | highlights, live indicators |
-| `--tertiary` (new) | 0.62 0.20 295 (violet) | gradients, secondary glow |
-| `--success` / `--warning` / `--destructive` | green 155 / amber 75 / red 25 | status lights |
-| `--gradient-text` | 100° blue → cyan 45% → violet | headings, key metrics |
-| `--gradient-glow` | radial blue + violet at low alpha | body backdrop |
-| `--shadow-glow` | blue glow | primary CTA |
+| Token                                       | Value (oklch)                     | Use                         |
+| ------------------------------------------- | --------------------------------- | --------------------------- |
+| `--background`                              | 0.13 0.03 262 (midnight navy)     | page                        |
+| `--card`                                    | 0.18 0.03 262                     | panels                      |
+| `--secondary`/`--muted`                     | 0.23 0.03 262                     | chips, inputs               |
+| `--primary`                                 | 0.72 0.19 255 (electric blue)     | CTAs, active                |
+| `--accent`                                  | 0.82 0.14 205 (cyan)              | highlights, live indicators |
+| `--tertiary` (new)                          | 0.62 0.20 295 (violet)            | gradients, secondary glow   |
+| `--success` / `--warning` / `--destructive` | green 155 / amber 75 / red 25     | status lights               |
+| `--gradient-text`                           | 100° blue → cyan 45% → violet     | headings, key metrics       |
+| `--gradient-glow`                           | radial blue + violet at low alpha | body backdrop               |
+| `--shadow-glow`                             | blue glow                         | primary CTA                 |
 
 Fonts: `--font-display: "Space Grotesk Variable"`, `--font-sans: "Inter Variable"`, `--font-mono: "JetBrains Mono Variable"`; `font-variant-numeric: tabular-nums` on all metric classes. Fonts imported from `@fontsource-variable/*` in `styles.css`; the two Google Fonts `<link>`s in `__root.tsx` are removed.
 
@@ -191,17 +191,17 @@ Utilities to add: `metric-xl` (display, 72–120 px, gradient), `metric-lg`, `me
 
 ### 4.3 Pages
 
-| Route | Purpose | Hero numbers |
-|---|---|---|
-| `/` Ops Dashboard | Connection state, active mission, next-best job, company KPIs, fleet summary, recent flights | cash, active mission ETE, fuel endurance |
-| `/flight` Live Flight | The in-flight screen: aircraft, mission, destination, altitude, IAS, GS, heading, VS, fuel, progress, ETA, phase, weather at destination, landing card after touchdown | altitude, airspeed, fuel, progress |
-| `/map` Ops Map | Full-height map: aircraft, route, trail, origin/destination, nearby airports, METAR badges; follow/free modes | distance remaining |
-| `/jobs` Job Board | Generated contracts filtered by base/aircraft/range/payload, route finder, accept/load | payout |
-| `/fleet` Fleet | Aircraft owned/leased, condition, location, maintenance; buy/sell/lease | fleet value |
-| `/company` Company | Cash, reputation, revenue/expenses chart, loans, milestones | reputation |
-| `/logbook` Logbook | Flights with landing grade, distance, payload, exports (CSV/GPX/JSON) | total hours |
-| `/settings` | Units, connector port/token, basemap source, backups, demo toggle | — |
-| `/diagnostics` | Raw telemetry, event log, protocol version, fixture recorder | RTT, Hz |
+| Route                 | Purpose                                                                                                                                                                | Hero numbers                             |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| `/` Ops Dashboard     | Connection state, active mission, next-best job, company KPIs, fleet summary, recent flights                                                                           | cash, active mission ETE, fuel endurance |
+| `/flight` Live Flight | The in-flight screen: aircraft, mission, destination, altitude, IAS, GS, heading, VS, fuel, progress, ETA, phase, weather at destination, landing card after touchdown | altitude, airspeed, fuel, progress       |
+| `/map` Ops Map        | Full-height map: aircraft, route, trail, origin/destination, nearby airports, METAR badges; follow/free modes                                                          | distance remaining                       |
+| `/jobs` Job Board     | Generated contracts filtered by base/aircraft/range/payload, route finder, accept/load                                                                                 | payout                                   |
+| `/fleet` Fleet        | Aircraft owned/leased, condition, location, maintenance; buy/sell/lease                                                                                                | fleet value                              |
+| `/company` Company    | Cash, reputation, revenue/expenses chart, loans, milestones                                                                                                            | reputation                               |
+| `/logbook` Logbook    | Flights with landing grade, distance, payload, exports (CSV/GPX/JSON)                                                                                                  | total hours                              |
+| `/settings`           | Units, connector port/token, basemap source, backups, demo toggle                                                                                                      | —                                        |
+| `/diagnostics`        | Raw telemetry, event log, protocol version, fixture recorder                                                                                                           | RTT, Hz                                  |
 
 Motion: `tw-animate-css` for enter/exit, `motion` for number counters, page transitions and the live status pulse; MapLibre `easeTo` for camera follow. Respect `prefers-reduced-motion`.
 
@@ -210,6 +210,7 @@ Motion: `tw-animate-css` for enter/exit, `motion` for number counters, page tran
 ## 5. Feature roadmap (phased, each phase ships green)
 
 ### P0 — Foundation (web + repo)
+
 - Fix lint (`prettier --write`), add `.github/workflows/ci.yml` (lint, tsc, vitest, build default + `CARGO_OPS_LOCAL=1`).
 - Design tokens, fonts via Fontsource, new utilities, `SimStatusChip`, `MetricTile`, page skeletons for all routes.
 - `packages/protocol` with zod schemas + tests; `src/lib/transport` with `DemoTransport` (JSONL replay) and reconnect FSM; `sim-state` reducer + tests.
@@ -217,6 +218,7 @@ Motion: `tw-animate-css` for enter/exit, `motion` for number counters, page tran
 - Acceptance: all routes render in demo mode with a visible "DEMO DATA" chip; CI green; no CDN requests.
 
 ### P1 — Connector MVP + Live Flight dashboard
+
 - `connector/` package: node-simconnect source (SunRise→KittyHawk fallback), data definitions below, system events, state store, WS/HTTP server, static serving, token/origin checks, `--sim fake --fixture` and `--record` CLI flags, `node:sqlite` storage with migrations.
 - `/flight` page live: aircraft title/tail, lat/lon, altitude, AGL, IAS/TAS/GS, heading, VS, fuel qty/flow/endurance, weights/payload, on-ground, engines, parking brake, pause/sim-rate badges.
 - `/diagnostics` with connection log and event stream.
@@ -224,29 +226,34 @@ Motion: `tw-animate-css` for enter/exit, `motion` for number counters, page tran
 - Acceptance (cloud): fake connector E2E passes; (user PC): manual checklist §11.3 recorded in `VERIFICATION.md`, first real JSONL fixture committed.
 
 ### P2 — Map + flight tracking
+
 - `OpsMap` with MapLibre + local PMTiles + OpenFreeMap fallback + world-atlas floor; aircraft marker rotated by heading, great-circle route, breadcrumb trail, follow mode, OSM attribution.
 - Flight-phase FSM (vmsACARS rules + climb/cruise/descent split, forward-only with hysteresis), takeoff/landing detection, landing analyser (touchdown normal velocity, peak G within 800 ms, bounce detection), distance integration, ETE/ETA, endurance warning, pause/sim-rate handling, crash handling.
 - Telemetry recording to SQLite; `LandingCard`; `TelemetryStrip`.
 - Acceptance: replaying `kmem-katl.jsonl` yields deterministic phases, landing grade and distance within tolerance (unit tests on the FSM).
 
 ### P3 — Cargo operations
+
 - Job generator from OurAirports + current base + aircraft range/payload + runway suitability; cargo kinds with multipliers and deadlines; stackable cargo across legs; route finder (multi-hop); dispatch pre-checks (payload, MTOW, fuel + 45 min reserve, runway length/surface).
 - Mission lifecycle: accept → load → start (on ground, brake set, at origin) → verify leg (≥90 % of distance, arrival within 3 nm, no teleport) → deliver (parked, engines off, brake set) → payout with transparent breakdown.
 - Logbook with exports (CSV, GPX, JSON career export/import).
 - Acceptance: a full replayed mission completes end-to-end in E2E with the expected payout.
 
 ### P4 — Company, fleet, economy core
+
 - Cash, reputation 0–100 with gates, revenue/expense ledger, fuel billed at landing airport price, dry/wet lease, wear/condition and repair, fleet buy/sell with reputation gates, aircraft type catalogue (payload/range/speed) with auto-match from `TITLE`.
 - **Bank loans** (§7.2): lenders, credit score, offers, auto-debit, collateral, early payoff, default handling.
 - Acceptance: economy formulas unit-tested against documented examples; ledger balances; a loan amortises correctly over a simulated month.
 
 ### P5 — Economy depth: used aircraft, airworthiness, FBOs
+
 - **Used aircraft market** with per-system defects of variable severity, pre-purchase inspection, repair queue with downtime, airworthiness gate, ferry permits (§7.1).
 - **FBO ownership**: buy or build at an airport, upgrade modules, earn from the player's own arrivals and from a modelled traffic stream, plus real AI traffic detected through SimConnect when the sim is running (§7.3).
 - Dynamic per-airport demand and fuel pricing, insurance, milestones (§7.4).
 - Acceptance: a used aircraft with a grounding defect cannot be dispatched until repaired; FBO income accrues from a replayed arrival; all new tables migrate from an existing database.
 
 ### P6 — Polish and packaging
+
 - Animations, empty states, keyboard shortcuts, PWA manifest for an installable window, backups/export UI, optional `@yao-pkg/pkg` connector exe (node-simconnect kept unbundled for LGPL), auto-start instructions, SimBrief OFP import (free fetch API, optional), in-sim toolbar panel (optional).
 - Acceptance: final `VERIFICATION.md` with cloud-verified vs PC-verified matrix; inventory complete.
 
@@ -258,26 +265,26 @@ Explicitly out of scope: multi-user, auth, billing, leaderboards, cloud sync, pa
 
 ### 6.1 Data definition (request units chosen to avoid client conversions)
 
-| Field | SimVar | Requested unit |
-|---|---|---|
-| title, tail | `TITLE`, `ATC ID` | string |
-| lat, lon | `PLANE LATITUDE`, `PLANE LONGITUDE` | degrees |
-| alt, agl | `INDICATED ALTITUDE`, `PLANE ALT ABOVE GROUND` | feet |
-| ias, tas, gs | `AIRSPEED INDICATED`, `AIRSPEED TRUE`, `GROUND VELOCITY` | knots |
-| hdgMag, hdgTrue | `PLANE HEADING DEGREES MAGNETIC/TRUE` | degrees |
-| vs | `VERTICAL SPEED` | feet per minute |
-| fuelGal, fuelLb | `FUEL TOTAL QUANTITY`, `FUEL TOTAL QUANTITY WEIGHT` | gallons, pounds |
-| fuelFlow[n] | `ENG FUEL FLOW PPH:n` (legacy; see risk) | pounds per hour |
-| weights | `TOTAL WEIGHT`, `EMPTY WEIGHT`, `MAX GROSS WEIGHT` | pounds |
-| payload | `PAYLOAD STATION COUNT`, `PAYLOAD STATION WEIGHT:i`, `PAYLOAD STATION NAME:i` | pounds (community-verified unit) |
-| onGround | `IS ON GROUND` (not `SIM ON GROUND`, per 2024 docs) | bool |
-| engines | `GENERAL ENG COMBUSTION:n` | bool |
-| brake | `BRAKE PARKING POSITION` | bool |
-| simRate | `SIMULATION RATE` (unverified name) | number |
-| zulu | `ZULU TIME`, `ZULU DAY OF MONTH`, `ZULU MONTH OF YEAR`, `ZULU YEAR` | seconds, number |
-| touchdown | `PLANE TOUCHDOWN NORMAL VELOCITY` (ft/s ×60), `PLANE TOUCHDOWN BANK/PITCH/HEADING/LATITUDE/LONGITUDE` | — |
-| gForce | `G FORCE` | number |
-| plan | `GPS IS ACTIVE FLIGHT PLAN`, `GPS FLIGHT PLAN WP COUNT/INDEX`, `GPS WP NEXT ID/LAT/LON`, `GPS WP DISTANCE`, `GPS ETE` | deprecated in 2024, best-effort |
+| Field           | SimVar                                                                                                                | Requested unit                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| title, tail     | `TITLE`, `ATC ID`                                                                                                     | string                           |
+| lat, lon        | `PLANE LATITUDE`, `PLANE LONGITUDE`                                                                                   | degrees                          |
+| alt, agl        | `INDICATED ALTITUDE`, `PLANE ALT ABOVE GROUND`                                                                        | feet                             |
+| ias, tas, gs    | `AIRSPEED INDICATED`, `AIRSPEED TRUE`, `GROUND VELOCITY`                                                              | knots                            |
+| hdgMag, hdgTrue | `PLANE HEADING DEGREES MAGNETIC/TRUE`                                                                                 | degrees                          |
+| vs              | `VERTICAL SPEED`                                                                                                      | feet per minute                  |
+| fuelGal, fuelLb | `FUEL TOTAL QUANTITY`, `FUEL TOTAL QUANTITY WEIGHT`                                                                   | gallons, pounds                  |
+| fuelFlow[n]     | `ENG FUEL FLOW PPH:n` (legacy; see risk)                                                                              | pounds per hour                  |
+| weights         | `TOTAL WEIGHT`, `EMPTY WEIGHT`, `MAX GROSS WEIGHT`                                                                    | pounds                           |
+| payload         | `PAYLOAD STATION COUNT`, `PAYLOAD STATION WEIGHT:i`, `PAYLOAD STATION NAME:i`                                         | pounds (community-verified unit) |
+| onGround        | `IS ON GROUND` (not `SIM ON GROUND`, per 2024 docs)                                                                   | bool                             |
+| engines         | `GENERAL ENG COMBUSTION:n`                                                                                            | bool                             |
+| brake           | `BRAKE PARKING POSITION`                                                                                              | bool                             |
+| simRate         | `SIMULATION RATE` (unverified name)                                                                                   | number                           |
+| zulu            | `ZULU TIME`, `ZULU DAY OF MONTH`, `ZULU MONTH OF YEAR`, `ZULU YEAR`                                                   | seconds, number                  |
+| touchdown       | `PLANE TOUCHDOWN NORMAL VELOCITY` (ft/s ×60), `PLANE TOUCHDOWN BANK/PITCH/HEADING/LATITUDE/LONGITUDE`                 | —                                |
+| gForce          | `G FORCE`                                                                                                             | number                           |
+| plan            | `GPS IS ACTIVE FLIGHT PLAN`, `GPS FLIGHT PLAN WP COUNT/INDEX`, `GPS WP NEXT ID/LAT/LON`, `GPS WP DISTANCE`, `GPS ETE` | deprecated in 2024, best-effort  |
 
 System events: `Pause`, `Pause_EX1`, `SimStart`, `SimStop`, `FlightLoaded`, `AircraftLoaded`, `Crashed`, `CrashReset`, `1sec`. Also `RequestSystemState("Sim")` on connect.
 
@@ -288,9 +295,11 @@ Facilities: `requestFacilitiesListEx1` for nearby airports; `addToFacilityDefini
 Boarding (ground + brake) → Pushback/TaxiOut (GS > 5 kt) → Takeoff (`IS ON GROUND` false, GS > 30 kt) → Climb (VS > +300 fpm for 30 s) → Cruise (|VS| < 300 fpm) → Descent (VS < −300 fpm) → Approach (< 3,000 ft AGL or TOD) → Landing (touchdown latched) → TaxiIn (GS < 30 kt off runway) → Arrived (parked, engines off, brake set). Forward-only with hysteresis; re-takeoff after touch-and-go re-enters Climb.
 
 ### 6.3 Landing analysis
+
 Rate from `PLANE TOUCHDOWN NORMAL VELOCITY`; peak `G FORCE` within 800 ms; bounce if AGL rises above 35 ft then re-descends through 5 ft; grade = min(rate grade, G grade, speed grade) using bands 60/120/200/300/400/600 fpm and 1.1/1.4/1.7 G; store touchdown lat/lon for the map card.
 
 ### 6.4 Verification rules
+
 Start requires on-ground + brake + within 3 nm of origin. Distance integrated by great circle at 1 Hz; teleport flag if Δpos > GS × Δt × 3. Pause stops the mission clock. Sim rate ≤ 4× allowed, no bonuses while > 1×, invalidated > 8×. Crash → mission failed, repair bill, reputation loss, flight preserved in logbook as failed.
 
 ---
@@ -329,11 +338,11 @@ Start requires on-ground + brake + within 3 nm of origin. Distance integrated by
 
 - **Acquire**: buy an existing FBO at an airport (price ∝ airport size from OurAirports `type` and `scheduled_service`) or **build** one (land lease + construction cost and a build time of 3–14 in-game days). One FBO per airport; any number of airports.
 - **Modules** (each with purchase cost, upgrade levels 1–3, monthly upkeep):
-  - *Fuel farm*: sells fuel to arriving traffic at a price the player sets around the regional base price; higher levels raise capacity and margin. Also fuels the player's own aircraft at cost.
-  - *Hangar*: parking for owned aircraft (no ramp fees, slower wear from weather), rents spare bays to traffic.
-  - *Maintenance shop*: repairs own aircraft cheaper and faster (§7.1); services traffic for revenue; level gates which defect classes it can fix.
-  - *Cargo terminal*: more and better-paying jobs generated at that airport; handling fees from traffic.
-  - *Ramp and services*: landing/parking fees, ground handling, crew lounge (small reputation bonus for the player's own flights through the airport).
+  - _Fuel farm_: sells fuel to arriving traffic at a price the player sets around the regional base price; higher levels raise capacity and margin. Also fuels the player's own aircraft at cost.
+  - _Hangar_: parking for owned aircraft (no ramp fees, slower wear from weather), rents spare bays to traffic.
+  - _Maintenance shop_: repairs own aircraft cheaper and faster (§7.1); services traffic for revenue; level gates which defect classes it can fix.
+  - _Cargo terminal_: more and better-paying jobs generated at that airport; handling fees from traffic.
+  - _Ramp and services_: landing/parking fees, ground handling, crew lounge (small reputation bonus for the player's own flights through the airport).
 - **Income sources**:
   1. **The player's own arrivals**: on every verified arrival at an FBO airport the modules trigger (fuel at cost, free parking, cheaper repairs, faster job turnaround).
   2. **Modelled traffic**: a deterministic daily traffic stream per airport derived from OurAirports attributes (type, scheduled service, runway count/length) and time of day; each modelled movement buys fuel, parking, handling with probabilities set by module levels and player pricing (too-high prices lose customers). Accrues while the connector runs, in in-game time.
@@ -371,14 +380,14 @@ The living inventory is `docs/ASSET_INVENTORY.md` (skeleton created with this pl
 
 ## 10. Testing and verification record
 
-| Layer | Tool | What it proves |
-|---|---|---|
-| Unit | Vitest | protocol codecs, reducers, phase FSM, landing analyser, economy formulas, job generator determinism (seeded) |
-| Component | Testing Library | status chip states, metric formatting, mission card, landing card |
-| Integration | Vitest + fake connector (`--sim fake --fixture`) | flights persisted, payout computed, exports valid |
-| E2E | Playwright (Chromium, preinstalled here) | demo mode pages; live mode against fake connector; full replayed mission |
-| Build | CI | default (Lovable SSR) and local SPA builds both pass; connector builds on Windows runner with Node 24 |
-| Manual (user PC) | checklist | real SimConnect handshake 2020 and 2024, registry discovery, first fixture recording, pause/sim-rate events, facilities calls, firewall behaviour, PWA install |
+| Layer            | Tool                                             | What it proves                                                                                                                                                 |
+| ---------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit             | Vitest                                           | protocol codecs, reducers, phase FSM, landing analyser, economy formulas, job generator determinism (seeded)                                                   |
+| Component        | Testing Library                                  | status chip states, metric formatting, mission card, landing card                                                                                              |
+| Integration      | Vitest + fake connector (`--sim fake --fixture`) | flights persisted, payout computed, exports valid                                                                                                              |
+| E2E              | Playwright (Chromium, preinstalled here)         | demo mode pages; live mode against fake connector; full replayed mission                                                                                       |
+| Build            | CI                                               | default (Lovable SSR) and local SPA builds both pass; connector builds on Windows runner with Node 24                                                          |
+| Manual (user PC) | checklist                                        | real SimConnect handshake 2020 and 2024, registry discovery, first fixture recording, pause/sim-rate events, facilities calls, firewall behaviour, PWA install |
 
 `docs/VERIFICATION.md` keeps two tables: "verified in cloud CI" and "requires Windows PC with MSFS", each row dated with the commit. No feature is described as complete until its row is green.
 
@@ -396,35 +405,49 @@ Troubleshooting lives in `docs/SETUP_WINDOWS.md` (ports, token reset, logs in `%
 
 The implementing session acts as orchestrator and uses the Workflow tool (or parallel subagents) with these lanes. Lanes marked ∥ can run concurrently in isolated worktrees; each lane ends with lint + tsc + tests + both builds before it is merged.
 
-| Lane | Scope | Depends on |
-|---|---|---|
-| L0 Repo hygiene | Prettier fix, CI workflow, docs scaffolding, inventory check script | — |
-| L1 Design system ∥ | tokens, fonts, utilities, `SimStatusChip`, `MetricTile`, page skeletons | L0 |
-| L2 Protocol + state ∥ | `packages/protocol`, reducer, `DemoTransport`, reconnect FSM, fixtures format | L0 |
-| L3 Connector ∥ | node-simconnect source, fake source, store, WS/HTTP server, sqlite, CLI, scripts | L2 |
-| L4 Live Flight page | binds L1 components to L2 state; diagnostics page | L1, L2 |
-| L5 Map + data ∥ | MapLibre, PMTiles pipeline, OurAirports loader, METAR fetcher | L1, L3 |
-| L6 Flight tracking | phase FSM, landing analyser, verifier, recorder | L3 |
-| L7 Cargo ops | job generator, missions, dispatch checks, route finder, logbook, exports | L5, L6 |
-| L8 Economy + fleet | ledger, reputation, wear, fleet management, bank loans | L7 |
-| L8b Economy depth ∥ | used aircraft market, defects and airworthiness, repair queue, FBOs, dynamic demand, insurance | L8 |
-| L9 Polish + packaging | motion, PWA, backups UI, optional exe, docs | L8b |
-| LQ QA (continuous) | E2E specs, verification record, inventory audits, adversarial review of each PR | all |
+| Lane                  | Scope                                                                                          | Depends on |
+| --------------------- | ---------------------------------------------------------------------------------------------- | ---------- |
+| L0 Repo hygiene       | Prettier fix, CI workflow, docs scaffolding, inventory check script                            | —          |
+| L1 Design system ∥    | tokens, fonts, utilities, `SimStatusChip`, `MetricTile`, page skeletons                        | L0         |
+| L2 Protocol + state ∥ | `packages/protocol`, reducer, `DemoTransport`, reconnect FSM, fixtures format                  | L0         |
+| L3 Connector ∥        | node-simconnect source, fake source, store, WS/HTTP server, sqlite, CLI, scripts               | L2         |
+| L4 Live Flight page   | binds L1 components to L2 state; diagnostics page                                              | L1, L2     |
+| L5 Map + data ∥       | MapLibre, PMTiles pipeline, OurAirports loader, METAR fetcher                                  | L1, L3     |
+| L6 Flight tracking    | phase FSM, landing analyser, verifier, recorder                                                | L3         |
+| L7 Cargo ops          | job generator, missions, dispatch checks, route finder, logbook, exports                       | L5, L6     |
+| L8 Economy + fleet    | ledger, reputation, wear, fleet management, bank loans                                         | L7         |
+| L8b Economy depth ∥   | used aircraft market, defects and airworthiness, repair queue, FBOs, dynamic demand, insurance | L8         |
+| L9 Polish + packaging | motion, PWA, backups UI, optional exe, docs                                                    | L8b        |
+| LQ QA (continuous)    | E2E specs, verification record, inventory audits, adversarial review of each PR                | all        |
 
 Workflow sketch (pipeline per phase, review+verify fan-out per lane):
 
 ```js
-export const meta = { name: 'cargo-ops-phase', description: 'Build one Cargo Ops phase lane-by-lane with review and verification', phases: [{ title: 'Implement' }, { title: 'Review' }, { title: 'Verify' }] }
-const LANES = args.lanes  // e.g. [{ key:'L1', prompt:'...' }, { key:'L2', prompt:'...' }]
+export const meta = {
+  name: "cargo-ops-phase",
+  description: "Build one Cargo Ops phase lane-by-lane with review and verification",
+  phases: [{ title: "Implement" }, { title: "Review" }, { title: "Verify" }],
+};
+const LANES = args.lanes; // e.g. [{ key:'L1', prompt:'...' }, { key:'L2', prompt:'...' }]
 const results = await pipeline(
   LANES,
-  lane => agent(lane.prompt, { label: `impl:${lane.key}`, phase: 'Implement', isolation: 'worktree' }),
-  impl => parallel([
-    () => agent(`Adversarially review the diff for ${impl.key}: correctness, policy (§9), tokens-only styling, SSR safety`, { label: `review:${impl.key}`, phase: 'Review' }),
-    () => agent(`Run lint, tsc, vitest, both builds and e2e for ${impl.key}; report exact output`, { label: `verify:${impl.key}`, phase: 'Verify' }),
-  ])
-)
-return { results }
+  (lane) =>
+    agent(lane.prompt, { label: `impl:${lane.key}`, phase: "Implement", isolation: "worktree" }),
+  (impl) =>
+    parallel([
+      () =>
+        agent(
+          `Adversarially review the diff for ${impl.key}: correctness, policy (§9), tokens-only styling, SSR safety`,
+          { label: `review:${impl.key}`, phase: "Review" },
+        ),
+      () =>
+        agent(`Run lint, tsc, vitest, both builds and e2e for ${impl.key}; report exact output`, {
+          label: `verify:${impl.key}`,
+          phase: "Verify",
+        }),
+    ]),
+);
+return { results };
 ```
 
 Guardrails for every lane: token-only styling (no hard-coded colours), no new dependency without an inventory row and verified license, no network calls except the documented ones, no fabricated telemetry, no "connected" state without a real `welcome`, keep Lovable's default build green, small PRs to the working branch, never rewrite pushed history.
@@ -435,17 +458,17 @@ Suggested PR sequence: P0 (one PR), P1 (connector PR + flight page PR), P2 (map 
 
 ## 13. Reference projects and what to borrow
 
-| Project | License | Borrow |
-|---|---|---|
-| EvenAR/node-simconnect | LGPL-3.0 | the SimConnect client itself |
-| immrk/next-efb | MIT | main/renderer split, LAN token auth pattern |
-| mracko/MSFS-Landing-Inspector | MIT | landing rate bands, 20-sample on-ground debounce, G cross-check |
-| piero-la-lune/FSE-Planner | MIT | job-map filters and multi-hop route finder UX |
-| till213/SkyDolly | MIT | SQLite logbook schema, sample-rate strategy, GPX/KML/IGC export design |
-| Pomax/msfs-simconnect-api-wrapper | CC0 | SimVar/unit tables |
-| phpVMS vmsACARS docs | docs | phase-detection rules |
-| OnAir, Volanta, NeoFly, MSFS 2024 Career, TouchdownFX | closed | landing card, grade = min of sub-grades, stackable cargo, rank gates, composite landing score (ideas only) |
-| Little Navmap, Flight Events, Mobile Companion, Python-SimConnect | GPL/AGPL | ideas only; never copy code |
+| Project                                                           | License  | Borrow                                                                                                     |
+| ----------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| EvenAR/node-simconnect                                            | LGPL-3.0 | the SimConnect client itself                                                                               |
+| immrk/next-efb                                                    | MIT      | main/renderer split, LAN token auth pattern                                                                |
+| mracko/MSFS-Landing-Inspector                                     | MIT      | landing rate bands, 20-sample on-ground debounce, G cross-check                                            |
+| piero-la-lune/FSE-Planner                                         | MIT      | job-map filters and multi-hop route finder UX                                                              |
+| till213/SkyDolly                                                  | MIT      | SQLite logbook schema, sample-rate strategy, GPX/KML/IGC export design                                     |
+| Pomax/msfs-simconnect-api-wrapper                                 | CC0      | SimVar/unit tables                                                                                         |
+| phpVMS vmsACARS docs                                              | docs     | phase-detection rules                                                                                      |
+| OnAir, Volanta, NeoFly, MSFS 2024 Career, TouchdownFX             | closed   | landing card, grade = min of sub-grades, stackable cargo, rank gates, composite landing score (ideas only) |
+| Little Navmap, Flight Events, Mobile Companion, Python-SimConnect | GPL/AGPL | ideas only; never copy code                                                                                |
 
 ---
 

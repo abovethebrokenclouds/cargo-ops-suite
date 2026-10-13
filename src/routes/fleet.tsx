@@ -14,7 +14,11 @@ export const Route = createFileRoute("/fleet")({
   component: Fleet,
 });
 
-const tone = { Ready: "text-success", "En route": "text-accent", Maintenance: "text-destructive" } as const;
+const tone = {
+  Ready: "text-success",
+  "En route": "text-accent",
+  Maintenance: "text-destructive",
+} as const;
 
 function Fleet() {
   return (
@@ -29,7 +33,9 @@ function Fleet() {
               <span>Base {a.base}</span>
               <span className={tone[a.status]}>{a.status}</span>
             </div>
-            <p className="mt-2 text-sm text-muted-foreground">Max payload {a.payloadKg.toLocaleString()} kg</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Max payload {a.payloadKg.toLocaleString()} kg
+            </p>
           </div>
         ))}
       </div>

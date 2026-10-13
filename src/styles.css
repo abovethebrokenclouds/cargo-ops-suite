@@ -57,14 +57,22 @@
   --input: oklch(1 0 0 / 12%);
   --ring: oklch(0.78 0.17 65);
 
-  --gradient-text: linear-gradient(100deg, oklch(0.88 0.15 85), oklch(0.75 0.19 45) 45%, oklch(0.72 0.14 210));
-  --gradient-glow: radial-gradient(60% 50% at 20% 0%, oklch(0.75 0.19 45 / 18%), transparent 70%),
+  --gradient-text: linear-gradient(
+    100deg,
+    oklch(0.88 0.15 85),
+    oklch(0.75 0.19 45) 45%,
+    oklch(0.72 0.14 210)
+  );
+  --gradient-glow:
+    radial-gradient(60% 50% at 20% 0%, oklch(0.75 0.19 45 / 18%), transparent 70%),
     radial-gradient(50% 40% at 90% 10%, oklch(0.72 0.14 210 / 16%), transparent 70%);
   --shadow-glow: 0 20px 50px -20px oklch(0.75 0.19 45 / 45%);
 }
 
 @layer base {
-  * { border-color: var(--color-border); }
+  * {
+    border-color: var(--color-border);
+  }
   body {
     background: var(--gradient-glow), var(--color-background);
     background-attachment: fixed;
@@ -72,7 +80,12 @@
     font-family: var(--font-sans);
     min-height: 100vh;
   }
-  h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.02em; }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
 }
 
 @utility text-gradient {
@@ -81,8 +94,12 @@
   background-clip: text;
   color: transparent;
 }
-@utility bg-gradient-brand { background-image: var(--gradient-text); }
-@utility shadow-glow { box-shadow: var(--shadow-glow); }
+@utility bg-gradient-brand {
+  background-image: var(--gradient-text);
+}
+@utility shadow-glow {
+  box-shadow: var(--shadow-glow);
+}
 @utility panel {
   background: color-mix(in oklab, var(--card) 80%, transparent);
   border: 1px solid var(--border);
