@@ -119,4 +119,58 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX ledger_at ON ledger (at);
     `,
   },
+  {
+    // P4 company, fleet and finance: owned/leased aircraft, their event log (wear,
+    // repairs, purchases), bank loans (plan §7.2 columns plus a JSON copy), and the
+    // ledger gains a running balance and the company-clock time. P3 `job_payout` rows
+    // become `mission_payout`; their running balance starts from the P3 starting cash
+    // ($250,000) and their company-clock time is 0. The settings row records the phase.
+    version: 4,
+    sql: `
+      CREATE TABLE fleet (
+        id TEXT PRIMARY KEY,
+        registration TEXT NOT NULL,
+        type_key TEXT NOT NULL,
+        ownership TEXT NOT NULL,
+        status TEXT NOT NULL,
+        location TEXT NOT NULL,
+        condition REAL NOT NULL,
+        loan_id TEXT,
+        acquired_at INTEGER NOT NULL,
+        json TEXT NOT NULL
+      );
+      CREATE INDEX fleet_status ON fleet (status);
+      CREATE TABLE aircraft_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        aircraft_id TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        game_at INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        json TEXT
+      );
+      CREATE INDEX aircraft_events_aircraft ON aircraft_events (aircraft_id, id);
+      CREATE TABLE loans (
+        id TEXT PRIMARY KEY,
+        lender TEXT NOT NULL,
+        principal REAL NOT NULL,
+        apr REAL NOT NULL,
+        term_months INTEGER NOT NULL,
+        payment REAL NOT NULL,
+        balance REAL NOT NULL,
+        collateral_type TEXT NOT NULL,
+        collateral_id TEXT NOT NULL,
+        next_due_at INTEGER NOT NULL,
+        missed_count INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        json TEXT NOT NULL
+      );
+      CREATE INDEX loans_status ON loans (status);
+      ALTER TABLE ledger ADD COLUMN balance REAL;
+      ALTER TABLE ledger ADD COLUMN game_at INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX ledger_category ON ledger (category);
+      UPDATE ledger SET category = 'mission_payout' WHERE category = 'job_payout';
+      UPDATE ledger SET balance = 250000 + (SELECT SUM(l2.amount) FROM ledger l2 WHERE l2.id <= ledger.id);
+      INSERT OR REPLACE INTO settings (key, json) VALUES ('economy.phase', '4');
+    `,
+  },
 ];

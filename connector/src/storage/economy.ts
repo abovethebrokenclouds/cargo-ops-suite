@@ -3,16 +3,34 @@
 
 import { z } from "zod";
 import {
+  AIRCRAFT_STATUSES,
+  LEDGER_CATEGORIES,
+  LOAN_STATUSES,
+  OWNERSHIPS,
+  collateralSchema,
   jobSchema,
   missionSchema,
+  pnlMonthSchema,
   touchdownSchema,
   type Job,
   type JobBoard,
   type JobStatus,
+  type LedgerCategory,
   type Mission,
+  type PnlMonth,
   type Touchdown,
 } from "../protocol";
+import {
+  STARTING_CASH,
+  gameMonthIndex,
+  type AircraftEventRecord,
+  type BookAircraft,
+  type BookChanges,
+  type BookLoan,
+} from "../economy";
 import type { Storage } from "./db";
+
+const CAPITAL_CATEGORIES = new Set(["loan_disbursement", "loan_payment", "purchase", "sale"]);
 
 /** Persisted company record (the `company` domain plus generator state). */
 export const companyRecordSchema = z.object({
@@ -37,20 +55,75 @@ export const companyRecordSchema = z.object({
     .default([]),
   /** Aircraft type override; null = auto-match from TITLE. */
   aircraftTypeOverride: z.string().nullable().default(null),
+  // ---- P4 (defaults make a P3 record valid) ----
+  /** Cash the company was founded with; Σ ledger = cash − startingCash. */
+  startingCash: z.number().finite().default(STARTING_CASH),
+  /** Company clock (in-game time), ms since founding. */
+  gameMs: z.number().finite().nonnegative().default(0),
+  monthBilled: z.number().int().nonnegative().default(0),
+  defaultUntilGameMs: z.number().finite().nonnegative().nullable().default(null),
+  fleetCounter: z.number().int().nonnegative().default(0),
+  loanCounter: z.number().int().nonnegative().default(0),
+  selectedAircraftId: z.string().nullable().default(null),
+  pnl: z.array(pnlMonthSchema).default([]),
+  ledgerCount: z.number().int().nonnegative().default(0),
 });
 export type CompanyRecord = z.infer<typeof companyRecordSchema>;
 
-export const LEDGER_CATEGORIES = ["job_payout", "adjustment"] as const;
-export type LedgerCategory = (typeof LEDGER_CATEGORIES)[number] | (string & {});
+export { LEDGER_CATEGORIES };
+export type { LedgerCategory };
 
 export interface LedgerEntry {
   id?: number;
   at: number;
+  /** Company-clock time, ms (0 for P3 rows). */
+  gameMs?: number;
   category: LedgerCategory;
   amount: number;
+  /** Cash after the entry (running balance). */
+  balance?: number | null;
   refType: string | null;
   refId: string | null;
   memo: string | null;
+}
+
+const bookAircraftSchema = z.object({
+  id: z.string().min(1),
+  registration: z.string().min(1),
+  typeKey: z.string().min(1),
+  ownership: z.enum(OWNERSHIPS),
+  status: z.enum(AIRCRAFT_STATUSES),
+  location: z.string().min(2).max(8),
+  hours: z.number().finite().nonnegative(),
+  cycles: z.number().int().nonnegative(),
+  condition: z.number().finite().min(0).max(100),
+  purchasePrice: z.number().finite().nonnegative(),
+  acquiredAt: z.number().finite(),
+  acquiredGameMs: z.number().finite().nonnegative(),
+  readyAtGameMs: z.number().finite().nonnegative().nullable(),
+  loanId: z.string().nullable(),
+});
+export const fleetRecordSchema: z.ZodType<BookAircraft, z.ZodTypeDef, unknown> = bookAircraftSchema;
+
+export const loanRecordSchema: z.ZodType<BookLoan, z.ZodTypeDef, unknown> = z.object({
+  id: z.string().min(1),
+  lenderId: z.string().min(1),
+  principal: z.number().finite().positive(),
+  apr: z.number().finite().nonnegative(),
+  termMonths: z.number().int().positive(),
+  payment: z.number().finite().nonnegative(),
+  balance: z.number().finite().nonnegative(),
+  collateral: collateralSchema,
+  nextDueGameMs: z.number().finite().nonnegative(),
+  missedCount: z.number().int().nonnegative(),
+  paymentsMade: z.number().int().nonnegative(),
+  status: z.enum(LOAN_STATUSES),
+  takenAt: z.number().finite(),
+  takenGameMs: z.number().finite().nonnegative(),
+});
+
+export interface AircraftEventRow extends AircraftEventRecord {
+  id: number;
 }
 
 export interface LogbookEntry {
@@ -233,21 +306,47 @@ export class EconomyRepo {
   addLedger(entry: LedgerEntry): void {
     this.db
       .prepare(
-        "INSERT INTO ledger (at, category, amount, ref_type, ref_id, memo, json) VALUES (?, ?, ?, ?, ?, ?, NULL)",
+        "INSERT INTO ledger (at, category, amount, ref_type, ref_id, memo, json, balance, game_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)",
       )
-      .run(entry.at, entry.category, entry.amount, entry.refType, entry.refId, entry.memo);
+      .run(
+        entry.at,
+        entry.category,
+        entry.amount,
+        entry.refType,
+        entry.refId,
+        entry.memo,
+        entry.balance ?? null,
+        Math.floor(entry.gameMs ?? 0),
+      );
   }
 
-  listLedger(limit = 200): LedgerEntry[] {
+  /** Ledger rows, newest first (insertion order: the order cash changed). */
+  listLedger(
+    limit = 200,
+    options: { beforeId?: number; category?: string } = {},
+  ): Array<LedgerEntry & { id: number }> {
+    const where: string[] = [];
+    const args: Array<number | string> = [];
+    if (options.beforeId !== undefined) {
+      where.push("id < ?");
+      args.push(options.beforeId);
+    }
+    if (options.category) {
+      where.push("category = ?");
+      args.push(options.category);
+    }
     const rows = this.db
       .prepare(
-        "SELECT id, at, category, amount, ref_type, ref_id, memo FROM ledger ORDER BY at DESC, id DESC LIMIT ?",
+        `SELECT id, at, game_at, category, amount, balance, ref_type, ref_id, memo FROM ledger
+         ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`,
       )
-      .all(Math.max(1, Math.min(10_000, Math.floor(limit)))) as Array<{
+      .all(...args, Math.max(1, Math.min(1_000_000, Math.floor(limit)))) as Array<{
       id: number;
       at: number;
+      game_at: number | null;
       category: string;
       amount: number;
+      balance: number | null;
       ref_type: string | null;
       ref_id: string | null;
       memo: string | null;
@@ -255,12 +354,154 @@ export class EconomyRepo {
     return rows.map((r) => ({
       id: r.id,
       at: r.at,
-      category: r.category,
+      gameMs: r.game_at ?? 0,
+      category: r.category as LedgerCategory,
       amount: r.amount,
+      balance: r.balance,
       refType: r.ref_type,
       refId: r.ref_id,
       memo: r.memo,
     }));
+  }
+
+  /** Σ amounts and the number of ledger rows. */
+  ledgerTotals(): { sum: number; count: number } {
+    const row = this.db
+      .prepare("SELECT COALESCE(SUM(ROUND(amount * 100)), 0) AS cents, COUNT(*) AS n FROM ledger")
+      .get() as { cents: number; n: number };
+    return { sum: row.cents / 100, count: row.n };
+  }
+
+  /** Operating P&L per in-game month rebuilt from the ledger (P3 rows are month 0). */
+  pnlFromLedger(): PnlMonth[] {
+    const rows = this.db
+      .prepare("SELECT game_at, category, amount FROM ledger ORDER BY id")
+      .all() as Array<{ game_at: number | null; category: string; amount: number }>;
+    const months = new Map<number, PnlMonth>();
+    for (const r of rows) {
+      if (CAPITAL_CATEGORIES.has(r.category) || r.amount === 0) continue;
+      const month = gameMonthIndex(r.game_at ?? 0);
+      const m = months.get(month) ?? { month, revenue: 0, expense: 0, net: 0 };
+      if (r.amount > 0) m.revenue = Math.round((m.revenue + r.amount) * 100) / 100;
+      else m.expense = Math.round((m.expense - r.amount) * 100) / 100;
+      m.net = Math.round((m.revenue - m.expense) * 100) / 100;
+      months.set(month, m);
+    }
+    return [...months.values()].sort((a, b) => a.month - b.month).slice(-24);
+  }
+
+  // ---- fleet, loans, aircraft events (P4) ----
+
+  saveAircraft(a: BookAircraft): void {
+    this.db
+      .prepare(
+        `INSERT INTO fleet (id, registration, type_key, ownership, status, location, condition, loan_id,
+           acquired_at, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET registration = excluded.registration, type_key = excluded.type_key,
+           ownership = excluded.ownership, status = excluded.status, location = excluded.location,
+           condition = excluded.condition, loan_id = excluded.loan_id, json = excluded.json`,
+      )
+      .run(
+        a.id,
+        a.registration,
+        a.typeKey,
+        a.ownership,
+        a.status,
+        a.location,
+        a.condition,
+        a.loanId,
+        Math.floor(a.acquiredAt),
+        JSON.stringify(a),
+      );
+  }
+
+  listFleet(): BookAircraft[] {
+    const rows = this.db.prepare("SELECT json FROM fleet ORDER BY acquired_at, id").all() as Array<{
+      json: string;
+    }>;
+    return rows.flatMap((r) => {
+      const a = parse(fleetRecordSchema, r.json);
+      return a ? [a] : [];
+    });
+  }
+
+  saveLoan(l: BookLoan): void {
+    this.db
+      .prepare(
+        `INSERT INTO loans (id, lender, principal, apr, term_months, payment, balance, collateral_type,
+           collateral_id, next_due_at, missed_count, status, json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET apr = excluded.apr, term_months = excluded.term_months,
+           payment = excluded.payment, balance = excluded.balance, next_due_at = excluded.next_due_at,
+           missed_count = excluded.missed_count, status = excluded.status, json = excluded.json`,
+      )
+      .run(
+        l.id,
+        l.lenderId,
+        l.principal,
+        l.apr,
+        l.termMonths,
+        l.payment,
+        l.balance,
+        l.collateral.type,
+        l.collateral.id,
+        Math.floor(l.nextDueGameMs),
+        l.missedCount,
+        l.status,
+        JSON.stringify(l),
+      );
+  }
+
+  listLoans(): BookLoan[] {
+    const rows = this.db.prepare("SELECT json FROM loans ORDER BY id").all() as Array<{
+      json: string;
+    }>;
+    return rows.flatMap((r) => {
+      const l = parse(loanRecordSchema, r.json);
+      return l ? [l] : [];
+    });
+  }
+
+  addAircraftEvent(e: AircraftEventRecord): void {
+    this.db
+      .prepare(
+        "INSERT INTO aircraft_events (aircraft_id, at, game_at, kind, json) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(e.aircraftId, Math.floor(e.at), Math.floor(e.gameMs), e.kind, JSON.stringify(e.data));
+  }
+
+  listAircraftEvents(limit = 1_000_000): AircraftEventRow[] {
+    const rows = this.db
+      .prepare(
+        "SELECT id, aircraft_id, at, game_at, kind, json FROM aircraft_events ORDER BY id LIMIT ?",
+      )
+      .all(Math.max(1, Math.floor(limit))) as Array<{
+      id: number;
+      aircraft_id: string;
+      at: number;
+      game_at: number;
+      kind: string;
+      json: string | null;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      aircraftId: r.aircraft_id,
+      at: r.at,
+      gameMs: r.game_at,
+      kind: r.kind,
+      data: parseLoose(r.json) ?? {},
+    }));
+  }
+
+  /** Persist what the company book changed, in one transaction. */
+  persistBook(company: CompanyRecord, changes: BookChanges): void {
+    this.transaction(() => {
+      if (changes.company || changes.ledger.length > 0) this.saveCompany(company);
+      for (const e of changes.ledger) this.addLedger(e);
+      for (const a of changes.aircraft) this.saveAircraft(a);
+      for (const l of changes.loans) this.saveLoan(l);
+      for (const e of changes.events) this.addAircraftEvent(e);
+    });
   }
 
   /** Record the jobs, payload and payout breakdown on the flight row. */

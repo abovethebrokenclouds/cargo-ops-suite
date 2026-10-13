@@ -73,6 +73,8 @@ export interface ConnectorOptions {
   economySeed?: number;
   /** Airport list override (tests). */
   airports?: EconomyAirport[];
+  /** Company clock tick interval, ms (default 1000; 0 = no timer, tests tick by hand). */
+  clockIntervalMs?: number;
 }
 
 export interface RunningConnector {
@@ -183,6 +185,19 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
   }
   session.start();
   log("info", `Listening on ${server.url} (mode ${source.mode})`);
+  // Company clock (P4): in-game time runs with real time while the connector runs.
+  const clockMs = options.clockIntervalMs ?? 1_000;
+  const clock =
+    clockMs > 0 && session.economy
+      ? setInterval(() => {
+          try {
+            session.economy?.tick();
+          } catch (err) {
+            log("warn", `Company clock tick failed: ${err instanceof Error ? err.message : err}`);
+          }
+        }, clockMs)
+      : null;
+  clock?.unref();
 
   return {
     server,
@@ -195,6 +210,7 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
     log,
     recorder,
     stop: async () => {
+      if (clock) clearInterval(clock);
       await server.close();
       await session.stop();
       recorder?.close();

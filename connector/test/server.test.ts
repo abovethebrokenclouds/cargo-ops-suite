@@ -112,7 +112,8 @@ describe("connector server (FakeSource over a real WebSocket)", () => {
       ["flight.start", "brake_not_set"],
       ["flight.end", "no_flight"],
       ["job.accept", "bad_args"],
-      ["fleet.buy", "not_implemented"],
+      ["fleet.buy", "bad_args"],
+      ["fbo.buy", "not_implemented"],
     ];
     for (const [name, code] of expected) {
       client.send({ type: "command", v: PROTOCOL_VERSION, id: `c-${name}`, name, args: {} });
