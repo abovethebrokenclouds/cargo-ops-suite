@@ -33,3 +33,25 @@ jobs:
           if grep -rl "fonts.googleapis.com\|fonts.gstatic.com" dist .output 2>/dev/null; then
             echo "Found a runtime CDN font reference"; exit 1
           fi
+
+  connector:
+    # Standalone npm package; installs nothing at the repo root.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: connector
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: connector/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
