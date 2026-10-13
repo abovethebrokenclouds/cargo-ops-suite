@@ -1,0 +1,81 @@
+# Cargo Ops — Asset and Dependency Inventory
+
+Living record required by the build directive. Every third-party component or
+asset must have a row **before** it is added. Licenses were verified from the
+npm registry `license` field or the project's LICENSE file on 2026-10-13 unless
+marked otherwise. "Planned" rows are not yet in the repository.
+
+Legend — Status: `present` (already in `package.json`), `planned` (approved by
+the plan, not yet added), `ideas-only` (studied, code never copied).
+
+## Runtime libraries (web app)
+
+| Name | Version | Source | License | Attribution | Purpose | Status |
+|---|---|---|---|---|---|---|
+| react, react-dom | 19.2 | https://github.com/facebook/react | MIT | notice | UI | present |
+| @tanstack/react-start, react-router, react-query | 1.168 / 1.170 / 5.101 | https://github.com/TanStack | MIT | notice | framework, routing, async state | present |
+| tailwindcss, @tailwindcss/vite | 4.2 | https://github.com/tailwindlabs/tailwindcss | MIT | notice | styling | present |
+| tw-animate-css | 1.3 | https://github.com/Wombosvideo/tw-animate-css | MIT | notice | utility animations | present |
+| @radix-ui/* (shadcn/ui) | various | https://github.com/radix-ui/primitives | MIT | notice | accessible primitives | present |
+| lucide-react | 0.575 | https://github.com/lucide-icons/lucide | ISC | notice | UI icons | present |
+| recharts | 2.15 | https://github.com/recharts/recharts | MIT | notice | dashboard charts | present |
+| zod | 3.25 | https://github.com/colinhacks/zod | MIT | notice | protocol schemas | present |
+| sonner, cmdk, vaul, embla, react-hook-form, date-fns, clsx, class-variance-authority, tailwind-merge, react-day-picker, input-otp, react-resizable-panels | present versions | respective GitHub repos | MIT | notice | UI utilities (template) | present |
+| @lovable.dev/vite-tanstack-config | 2.25.3 | Lovable | see package | — | Lovable build wrapper | present |
+| @fontsource-variable/space-grotesk | 5.3 | https://github.com/fontsource/fontsource | OFL-1.1 font / MIT packaging | keep OFL.txt | display font | planned |
+| @fontsource-variable/inter | 5.3 | https://github.com/fontsource/fontsource | OFL-1.1 font / MIT packaging | keep OFL.txt | body font | planned |
+| @fontsource-variable/jetbrains-mono | 5.3 | https://github.com/fontsource/fontsource | OFL-1.1 font / MIT packaging | keep OFL.txt | data/mono font | planned |
+| maplibre-gl | 6.14 | https://github.com/maplibre/maplibre-gl-js | BSD-3-Clause | notice; auto attribution control | map renderer | planned |
+| pmtiles | 4.5 | https://github.com/protomaps/PMTiles | BSD-3-Clause | notice | local vector tile protocol | planned |
+| @protomaps/basemaps | 5.7 | https://github.com/protomaps/basemaps | BSD-3-Clause code, CC0 design | Protomaps credit requested | dark basemap style | planned |
+| world-atlas | 2.0 | https://github.com/topojson/world-atlas | ISC (data: Natural Earth, public domain) | none | offline world outline | planned |
+| uplot | 1.6 | https://github.com/leeoniya/uPlot | MIT | notice | telemetry strips | planned |
+| motion | 14.x | https://github.com/motiondivision/motion | MIT | notice | orchestrated animation | planned |
+
+## Runtime libraries (connector, Node 24)
+
+| Name | Version | Source | License | Attribution | Purpose | Notes | Status |
+|---|---|---|---|---|---|---|---|
+| node-simconnect | 4.2.1 | https://github.com/EvenAR/node-simconnect | **LGPL-3.0-or-later** | ship LICENSE text | SimConnect wire-protocol client (pure TS, no SDK binaries) | Used unmodified as a separable `node_modules` dependency; never bundled into a single executable. | planned |
+| ws | 8.22 | https://github.com/websockets/ws | MIT | notice | WebSocket server | — | planned |
+| zod | 3.25 | https://github.com/colinhacks/zod | MIT | notice | message validation | shared with web | planned |
+| node:sqlite | built-in (Node 24) | https://nodejs.org | MIT (Node) | — | local database | Stability 1.2; better-sqlite3 (MIT) is the fallback | planned |
+
+## Dev and test tooling
+
+| Name | Version | Source | License | Purpose | Status |
+|---|---|---|---|---|---|
+| vite, vitest, @vitejs/plugin-react | 8.1 / 4.1 / 5.2 | https://github.com/vitejs | MIT | build, unit tests | present |
+| typescript, typescript-eslint, eslint, prettier | present versions | respective repos | Apache-2.0 / MIT | typecheck, lint, format | present |
+| @testing-library/react, jest-dom, jsdom | present versions | respective repos | MIT | component tests | present |
+| @playwright/test | 1.64 | https://github.com/microsoft/playwright | Apache-2.0 | end-to-end tests | planned |
+| @yao-pkg/pkg | 6.23 | https://github.com/yao-pkg/pkg | MIT | optional connector exe (node-simconnect excluded from bundle) | planned (optional) |
+| go-pmtiles CLI | latest | https://github.com/protomaps/go-pmtiles | BSD-3-Clause | basemap extract script | planned |
+
+## Data and services
+
+| Name | Source | License / terms | Key? | Limits | Attribution | Purpose | Status |
+|---|---|---|---|---|---|---|---|
+| OurAirports CSVs (airports, runways, navaids, frequencies) | https://github.com/davidmegginson/ourairports-data | Public domain (credit appreciated) | No | none; ~20 MB total | optional credit | airport database baseline | planned |
+| MSFS facilities via SimConnect | installed simulator | MSFS SDK EULA (server inside the game; no SDK files shipped) | No | — | — | live airport data | planned |
+| Protomaps daily basemap build (extract) | https://docs.protomaps.com/basemaps/downloads | ODbL produced work (OSM) + Natural Earth PD + CC BY 4.0 landcover if shown | No | copy to own storage, do not hotlink | **"© OpenStreetMap" visible on map** | local basemap | planned (git-ignored file) |
+| OpenFreeMap `dark` style + tiles | https://openfreemap.org | Free public instance, no registration, no stated limits, no SLA, donation-funded; style MIT / CC BY 4.0 design; data ODbL | No | best-effort | © OpenStreetMap contributors · © OpenMapTiles | online fallback basemap | planned (user can disable) |
+| aviationweather.gov Data API (METAR/TAF) | https://aviationweather.gov/data/api/ | US Government work | No | 100 req/min, ≤1 req/min per thread, custom User-Agent required | cite source in UI | weather at origin/destination | planned (user can disable) |
+| SimBrief fetch API | https://developers.navigraph.com/docs/simbrief | free, public fetch by alias, no auth | No | undocumented fair use | — | optional OFP import | planned (optional, P5) |
+
+## Icons, imagery, in-house assets
+
+| Name | Source | License | Attribution | Purpose | Status |
+|---|---|---|---|---|---|
+| Maki icons (airport, airfield, heliport) | https://github.com/mapbox/maki | CC0 1.0 | none | map POI sprites | planned |
+| Aircraft silhouettes and marker SVGs | authored in-repo (`src/assets/`) | project license / CC0 | none | map marker, fleet cards | planned |
+| Gradient/noise/radar backdrops | authored in-repo (CSS/SVG) | project license | none | premium visuals | planned |
+| Photographs | none bundled | — | — | — | not planned (only NASA/DVIDS public domain with stored credit if ever needed) |
+
+## Explicitly rejected (policy)
+
+Mapbox, MapTiler, Stadia Maps (keys/accounts); `tile.openstreetmap.org` raster tiles (usage policy forbids apps and prefetching); Google Fonts CDN at runtime; openAIP (API key, CC BY-NC); Navigraph/Jeppesen (paid); X-Plane apt.dat (GPL data); Python-SimConnect, FsConnect, simconnect-rust (bundle Microsoft SimConnect.dll; AGPL for Python-SimConnect); FSUIPC WebSocket Server (closed); GPL/NC aircraft silhouette sets; Unsplash/Pexels images labelled "open source".
+
+## Ideas-only references (never copied)
+
+Little Navmap (GPL-3.0), MSFS Mobile Companion App (AGPL-3.0), Python-SimConnect (AGPL-3.0), Flight Events (GPL-3.0), FSTRaK (custom non-commercial), AeroACARS (proprietary), OnAir, Volanta, NeoFly, TouchdownFX, MSFS 2024 Career.
