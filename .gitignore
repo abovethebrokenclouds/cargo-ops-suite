@@ -34,3 +34,8 @@ dist-ssr
 # Playwright
 playwright-report
 test-results
+
+# Map data (large, fetched by scripts; never committed)
+data/ourairports/*.csv
+data/basemap/
+*.pmtiles
