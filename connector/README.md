@@ -73,24 +73,64 @@ separation), `logs/connector.log`.
 Bound to `127.0.0.1` only. Every request must carry a `Host` header naming the
 connector (`127.0.0.1:<port>` or `localhost:<port>`), which blocks DNS rebinding.
 
-| Route              | Auth                                                            | Response                                         |
-| ------------------ | --------------------------------------------------------------- | ------------------------------------------------ |
-| `GET /api/health`  | none                                                            | `{ ok, version, mode, sim }`                     |
-| `GET /api/session` | `Origin` absent or an allowed origin                            | `{ token, wsUrl: "/ws" }`                        |
-| `GET /api/status`  | `Authorization: Bearer <token>`                                 | health + seq, clients, paths, store stats        |
-| other `/api/*`     | Bearer token                                                    | `404` JSON                                       |
-| `GET /ws`          | allowed `Origin` **and** token (`?token=` or the first `hello`) | protocol v1 (below)                              |
-| `GET /*`           | none                                                            | static SPA; extension-less paths → `_shell.html` |
+| Route                        | Auth                                                            | Response                                         |
+| ---------------------------- | --------------------------------------------------------------- | ------------------------------------------------ |
+| `GET /api/health`            | none                                                            | `{ ok, version, mode, sim }`                     |
+| `GET /api/session`           | `Origin` absent or an allowed origin                            | `{ token, wsUrl: "/ws" }`                        |
+| `GET /api/status`            | `Authorization: Bearer <token>`                                 | health + seq, clients, paths, store stats        |
+| `GET /api/flights`           | Bearer token                                                    | `{ flights: [...] }`, newest first (≤ 50)        |
+| `GET /api/flights/:id/track` | Bearer token                                                    | `{ id, points: [{ t, lat, lon, altFt, ... }] }`  |
+| other `/api/*`               | Bearer token                                                    | `404` JSON                                       |
+| `GET /ws`                    | allowed `Origin` **and** token (`?token=` or the first `hello`) | protocol v1 (below)                              |
+| `GET /*`                     | none                                                            | static SPA; extension-less paths → `_shell.html` |
 
 WebSocket session (`packages/protocol`): the client sends `hello` with the token →
 `welcome` (`mode: "live"` with SimConnect, `"replay"` with `--sim fake`; `sim.connected`
 is true only after node-simconnect's `open()` resolved) → `snapshot` → `delta`/`event`
 frames sharing one monotonic `seq`. `resync` returns a fresh snapshot. The server
-pings every 15 s. Commands are answered with `ok: false, error.code: "not_implemented"`
-in this version. When the simulator connects or disconnects, every client receives a
+pings every 15 s. Commands: `flight.start` (needs the aircraft on the ground with the
+parking brake set; errors `flight_active`, `no_data`, `not_on_ground`, `brake_not_set`)
+and `flight.end` (completed when Arrived; otherwise `not_arrived` unless
+`args.abort === true`, which ends it as `aborted`; `no_flight` without one). Every
+other command is answered with `ok: false, error.code: "not_implemented"`. When the simulator connects or disconnects, every client receives a
 new `welcome` + `snapshot`, and simulator-derived domains are cleared on disconnect so
 stale values never look live. Close codes: `4401` bad/missing token, `4400` invalid
 first message, `4408` no hello within 5 s.
+
+## Flight tracking (plan §6.2–§6.4)
+
+`src/core/flight-core.ts` runs three pure, deterministic modules on every motion
+update and publishes their results through the store (it is the only producer of
+the `phase` and `flight` domains and of `phase.changed`, `touchdown`,
+`flight.started` and `flight.ended`):
+
+- `phase-fsm.ts`: Boarding → TaxiOut (GS > 5 kt for 3 s) → Takeoff (airborne, GS > 30)
+  → Climb (VS > +300 fpm for 30 s) → Cruise (|VS| < 300 for 30 s) → Descent
+  (VS < −300 for 30 s) → Approach (AGL < 3,000 ft and VS < −100 for 10 s) → Landing
+  (debounced ground contact) → TaxiIn (GS < 30) → Arrived (engines off, brake set).
+  Climb/Cruise/Descent move among themselves; Approach → Climb is a go-around;
+  Landing/TaxiIn → Climb (airborne, VS > +300 for 30 s) is a touch-and-go; Arrived →
+  TaxiOut starts the next leg. On-ground changes need 3 consecutive samples.
+- `landing-analyser.ts`: rate from `PLANE TOUCHDOWN NORMAL VELOCITY` when the sim
+  reports a fresh value (`rateSource: "touchdownVelocity"`), else the last airborne
+  `VERTICAL SPEED` (`"verticalSpeed"`); peak G within 800 ms; bounces (AGL > 35 ft then
+  < 5 ft); grade from `packages/protocol/src/landing.ts`.
+- `flight-tracker.ts`: great-circle distance at ≤ 1 Hz from block-out, teleport flag
+  when a jump exceeds GS × Δt × 3 + 0.05 nm (not counted), block/airborne time on the
+  sim clock (stopped while paused), `noBonus` above 1×, `invalidated` above 8×, crash →
+  status `failed`.
+
+Time: frames carry no simulator time, so the core uses the receive clock × sim rate,
+stopped while paused. A replay that compresses time states it in `sim.simTimeSec`
+(the synthetic demo fixture does), and the core uses that instead. FakeSource passes
+each frame's recorded `t` as the receive clock, so `--speed` never changes the result.
+
+FakeSource strips the `phase`/`flight` domains and the four derived events from any
+fixture, so the connector recomputes them from raw telemetry.
+
+Flights (`flights` table; `summary_json` added by migration 2) and telemetry
+(`telemetry` table: 1 Hz, plus 5 Hz for the 60 s before each touchdown) are written
+to the database of the session's mode: `demo.db` for replays, `cargo-ops.db` live.
 
 ## Protocol sharing
 
@@ -140,7 +180,9 @@ connector/
   its name, the entry is dropped and the definition rebuilt; dependent domains are then
   simply not reported.
 - Entries marked `verified: false`: `SIMULATION RATE`, `PAYLOAD STATION WEIGHT`/`NAME`
-  units, `ENG FUEL FLOW PPH`, `IS ON GROUND` (falls back to `SIM ON GROUND`).
+  units, `ENG FUEL FLOW PPH`, `IS ON GROUND` (falls back to `SIM ON GROUND`),
+  `PLANE TOUCHDOWN NORMAL VELOCITY` (ft/s, ×60; sign taken as unknown, the analyser
+  uses its magnitude) and `PLANE TOUCHDOWN BANK/PITCH DEGREES` (fast definition).
 - System events: `Pause`, `Pause_EX1`, `SimStart`, `SimStop`, `FlightLoaded`,
   `AircraftLoaded`, `Crashed`, `CrashReset`, `1sec`; `requestSystemState("Sim")` on connect.
 - The `sim` domain is only sent once a real `SIMULATION RATE` arrives (the schema needs

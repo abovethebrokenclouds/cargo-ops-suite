@@ -8,6 +8,10 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const port = process.argv[2] ?? "4399";
+// Replay speed: 20x plays the ~6 min synthetic flight in ~19 s, so the flight-tracking
+// spec sees takeoff and a graded landing quickly. The connector times phases on the
+// fixture's own clock, so the speed never changes what it computes.
+const speed = process.env["CARGO_OPS_E2E_SPEED"] ?? "20";
 const main = join(root, "connector/dist/connector/src/cli/main.js");
 const web = join(root, "dist/client");
 for (const [label, path] of [
@@ -29,7 +33,7 @@ const child = spawn(
     "fake",
     "--loop",
     "--speed",
-    "4",
+    speed,
     "--port",
     port,
     "--web",

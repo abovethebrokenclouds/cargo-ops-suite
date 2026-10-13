@@ -14,7 +14,11 @@ function signedDeg(n: number | null): string {
   return `${r > 0 ? "+" : "−"}${Math.abs(r).toFixed(1)}°`;
 }
 
-/** Touchdown summary from the latest `touchdown` event, with a provisional client-side grade. */
+/**
+ * Touchdown summary from the latest `touchdown` event. A connector-analysed event
+ * (touchdownSchema, with `rateSource`) shows the connector's grade; anything else is
+ * graded in the browser and labelled provisional.
+ */
 export function LandingCard({ touchdown }: { touchdown: TouchdownView | null }) {
   if (!touchdown) {
     return (
@@ -34,6 +38,7 @@ export function LandingCard({ touchdown }: { touchdown: TouchdownView | null }) 
   ];
   if (touchdown.bankDeg !== null) items.push(["Bank", signedDeg(touchdown.bankDeg)]);
   if (touchdown.pitchDeg !== null) items.push(["Pitch", signedDeg(touchdown.pitchDeg)]);
+  if (touchdown.bounces !== null) items.push(["Bounces", formatInt(touchdown.bounces)]);
 
   return (
     <div className="flex flex-col gap-5" data-testid="landing-card">
@@ -84,12 +89,21 @@ export function LandingCard({ touchdown }: { touchdown: TouchdownView | null }) 
         ))}
       </dl>
 
-      <p className="text-xs text-muted-foreground">
-        <span className="font-semibold text-warning">
-          Provisional — connector analyser arrives in P2.
-        </span>{" "}
-        Graded in the browser as the worse of the rate and G grades (plan §6.3 bands).
-      </p>
+      {touchdown.analysed ? (
+        <p className="text-xs text-muted-foreground" data-testid="landing-source">
+          Graded by the connector as the worst of the rate and G grades (plan §6.3 bands).
+          {" Rate from "}
+          {touchdown.rateSource === "touchdownVelocity"
+            ? "the simulator's touchdown normal velocity."
+            : "the last airborne vertical-speed sample."}
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground" data-testid="landing-source">
+          <span className="font-semibold text-warning">Provisional</span> — not graded by the
+          connector analyser. Graded in the browser as the worse of the rate and G grades (plan §6.3
+          bands).
+        </p>
+      )}
     </div>
   );
 }

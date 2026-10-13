@@ -12,10 +12,13 @@ export type SimUpdate =
       version?: string;
     }
   | { type: "disconnected"; reason: string }
-  /** Replace the whole state (a replay snapshot). */
-  | { type: "reset"; state: SimState }
+  /**
+   * Replace the whole state (a replay snapshot). `at` is the source's receive clock
+   * in ms (a fixture's recorded `t`); absent means "now" (the session's clock).
+   */
+  | { type: "reset"; state: SimState; at?: number }
   /** Shallow per-domain patch; full domain objects or partial fields. */
-  | { type: "data"; patch: SimStatePatch }
+  | { type: "data"; patch: SimStatePatch; at?: number }
   | { type: "event"; name: EventName; data: unknown };
 
 export type SimListener = (update: SimUpdate) => void;

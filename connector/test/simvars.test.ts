@@ -166,6 +166,21 @@ describe("raw → domain mapping", () => {
     });
   });
 
+  it("adds the latched touchdown values when the sim reports them (ft/s → fpm)", () => {
+    const motion = mapMotion({
+      ...fastRaw,
+      touchdownNormalFps: 2.5,
+      touchdownBankDeg: 1.2,
+      touchdownPitchDeg: -3.5,
+    });
+    assert.equal(motion?.touchdownVelocityFpm, 150);
+    assert.equal(motion?.touchdownBankDeg, 1.2);
+    assert.equal(motion?.touchdownPitchDeg, -3.5);
+    assert.equal(mapMotion(fastRaw)?.touchdownVelocityFpm, undefined, "absent stays absent");
+    const names = buildDatums("fast", counts).map((d) => d.simvar);
+    assert.ok(names.includes("PLANE TOUCHDOWN NORMAL VELOCITY"));
+  });
+
   it("uses SIM ON GROUND when IS ON GROUND is unavailable", () => {
     const { isOnGround: _drop, ...raw } = fastRaw;
     assert.equal(mapMotion({ ...raw, simOnGround: 1 })?.onGround, true);

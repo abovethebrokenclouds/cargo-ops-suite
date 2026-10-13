@@ -55,6 +55,8 @@ export interface ServerOptions {
   log: LogFn;
   /** Extra fields for the authenticated /api/status response. */
   status?: () => Record<string, unknown>;
+  /** Extra authenticated /api routes (e.g. flights); null = not handled here. */
+  routes?: (method: string, pathname: string) => { status: number; body: unknown } | null;
 }
 
 interface Client {
@@ -171,6 +173,11 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       });
       return;
     }
+    const routed = options.routes?.(req.method ?? "GET", pathname) ?? null;
+    if (routed) {
+      json(res, routed.status, routed.body);
+      return;
+    }
     json(res, 404, { error: "not_found" });
   }
 
@@ -269,7 +276,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
           client.rttMs = Math.max(0, Date.now() - msg.t);
           return;
         case "command":
-          send(client, commandResult(msg));
+          send(client, session.command(msg));
           return;
       }
     });
@@ -343,7 +350,7 @@ function rawToString(data: RawData): string {
   return data.toString("utf8");
 }
 
-/** Commands are not implemented in P1; every command gets an honest refusal. */
+/** Honest refusal for a command this connector does not implement. */
 export function commandResult(cmd: Command): ServerMessage {
   return {
     type: "result",

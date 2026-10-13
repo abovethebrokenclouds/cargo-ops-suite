@@ -100,21 +100,27 @@ describe("connector server (FakeSource over a real WebSocket)", () => {
     client.ws.close();
   });
 
-  it("answers ping with pong and commands with not_implemented", async () => {
+  it("answers ping with pong, flight commands with checks, others with not_implemented", async () => {
     const client = await connectClient(wsUrl, origin);
     client.send(hello(connector.token));
     await client.next((m) => m.type === "welcome");
     client.send({ type: "ping", v: PROTOCOL_VERSION, t: 123 });
     const pong = await client.next((m) => m.type === "pong");
     assert.deepEqual(pong, { type: "pong", v: PROTOCOL_VERSION, t: 123 });
-    for (const name of ["flight.start", "flight.end", "job.accept"]) {
+    // The short fixture has no controls domain, so a start is refused (brake unknown).
+    const expected: Array<[string, string]> = [
+      ["flight.start", "brake_not_set"],
+      ["flight.end", "no_flight"],
+      ["job.accept", "not_implemented"],
+    ];
+    for (const [name, code] of expected) {
       client.send({ type: "command", v: PROTOCOL_VERSION, id: `c-${name}`, name, args: {} });
       const result = await client.next((m) => m.type === "result");
       assert.equal(result.type, "result");
       if (result.type !== "result") return;
       assert.equal(result.id, `c-${name}`);
       assert.equal(result.ok, false);
-      if (!result.ok) assert.equal(result.error.code, "not_implemented");
+      if (!result.ok) assert.equal(result.error.code, code, name);
     }
     client.ws.close();
   });
@@ -264,6 +270,46 @@ describe("connector server (FakeSource over a real WebSocket)", () => {
       req.end();
     });
     assert.equal(res, 405);
+  });
+
+  it("serves /api/flights and /api/flights/:id/track behind the bearer token", async () => {
+    const auth = { Authorization: `Bearer ${connector.token}` };
+    assert.equal((await rawGet(port, "/api/flights")).status, 401);
+    connector.flights.save({
+      id: "test-flight",
+      status: "completed",
+      startedAt: "2026-10-13T12:00:00.000Z",
+      endedAt: "2026-10-13T13:00:00.000Z",
+      origin: "KMEM",
+      destination: "KATL",
+      distanceNm: 287.5,
+      blockMin: 60,
+      airborneMin: 50,
+      maxAltFt: 9500,
+      fuelUsedLb: 600,
+      flags: { teleport: false, noBonus: false, invalidated: false, crashed: false, paused: false },
+      landings: [],
+    });
+    connector.flights.addTelemetry("test-flight", [
+      { tMs: 2000, data: { lat: 35.1, lon: -89.9 } },
+      { tMs: 1000, data: { lat: 35, lon: -90 } },
+    ]);
+    const list = await rawGet(port, "/api/flights", auth);
+    assert.equal(list.status, 200);
+    const body = JSON.parse(list.body) as { flights: Array<{ id: string; source: string }> };
+    const found = body.flights.find((f) => f.id === "test-flight");
+    assert.equal(found?.source, "replay");
+    const track = await rawGet(port, "/api/flights/test-flight/track", auth);
+    assert.equal(track.status, 200);
+    assert.deepEqual(JSON.parse(track.body), {
+      id: "test-flight",
+      points: [
+        { lat: 35, lon: -90, t: 1000 },
+        { lat: 35.1, lon: -89.9, t: 2000 },
+      ],
+    });
+    assert.equal((await rawGet(port, "/api/flights/nope/track", auth)).status, 404);
+    assert.equal((await rawGet(port, "/api/flights/../track", auth)).status, 404);
   });
 });
 
