@@ -14,9 +14,17 @@ import {
   type Job,
   type JobsState,
   type Mission,
+  type FleetState,
   type Result,
 } from "../src/protocol";
-import { computePayout, payloadLimitKg, type EconomyAirport } from "../src/economy";
+import {
+  airportLookup,
+  computePayout,
+  flightWear,
+  fuelPrice,
+  payloadLimitKg,
+  type EconomyAirport,
+} from "../src/economy";
 import { aircraftTypeByKey } from "../src/protocol";
 import { loadAirportsData } from "../src/core/economy/airports-data";
 import { ConnectorSession } from "../src/core/session";
@@ -152,15 +160,61 @@ describe("P3 acceptance: KMEM → KATL mission on the replayed fixture", () => {
       assert.equal(late?.value, 0);
 
       const company = r.session.store.getDomain("company") as { cash: number; reputation: number };
-      assert.equal(company.cash, 250_000 + EXPECTED_PAYOUT);
       assert.equal(company.reputation, 52); // +2 for an on-time B landing
 
-      // Persisted: ledger, missions, logbook join.
-      const ledger = r.economy.listLedger();
-      assert.equal(ledger.length, 1);
-      assert.equal(ledger[0]?.category, "job_payout");
-      assert.equal(ledger[0]?.amount, EXPECTED_PAYOUT);
+      // P4: fuel burned at KATL's price, KATL's landing fee and wear on the starter C208B.
       const log = r.economy.logbook();
+      const summary = r.storage.db.prepare("SELECT summary_json FROM flights").get() as {
+        summary_json: string;
+      };
+      const fuelKg =
+        (JSON.parse(summary.summary_json) as { fuelUsedLb: number }).fuelUsedLb * 0.45359237;
+      assert.ok(fuelKg > 250 && fuelKg < 320, `fuel ${fuelKg} kg`);
+      const katl = airportLookup(airports()).get("KATL");
+      assert.ok(katl);
+      const price = fuelPrice(katl, airports());
+      assert.equal(price.usdPerKg, 1.915);
+      const fuel = Math.round(fuelKg * price.usdPerKg * 100) / 100;
+      assert.deepEqual(
+        m.payout?.costs?.map((c) => [c.key, c.amount]),
+        [
+          ["fuel", fuel],
+          ["landing_fee", 300],
+        ],
+      );
+      assert.equal(m.payout?.net, Math.round((EXPECTED_PAYOUT - fuel - 300) * 100) / 100);
+      assert.equal(company.cash, Math.round((250_000 + EXPECTED_PAYOUT - fuel - 300) * 100) / 100);
+      const fleet = r.session.store.getDomain("fleet") as FleetState;
+      const aircraft = fleet.aircraft[0];
+      assert.equal(fleet.aircraft.length, 1);
+      assert.equal(aircraft?.location, "KATL");
+      assert.equal(aircraft?.cycles, 1);
+      const airborneMin = log[0]?.airborneMin ?? 0;
+      const wear = flightWear({
+        airborneMin,
+        peakG: log[0]?.landing?.peakG ?? null,
+        overspeedEvents: 0,
+        crashed: false,
+      });
+      assert.equal(m.wear, wear.total);
+      assert.equal(aircraft?.condition, Math.round((100 - wear.total) * 100) / 100);
+      assert.ok(wear.total > 0.5 && wear.total < 1.5, `wear ${wear.total}`);
+
+      // Persisted: ledger (balanced), missions, logbook join.
+      const ledger = r.economy.listLedger().reverse();
+      assert.deepEqual(
+        ledger.map((e) => [e.category, e.amount]),
+        [
+          ["mission_payout", EXPECTED_PAYOUT],
+          ["fuel", -fuel],
+          ["landing_fee", -300],
+        ],
+      );
+      assert.equal(ledger.at(-1)?.balance, company.cash);
+      assert.equal(
+        Math.round(r.economy.ledgerTotals().sum * 100),
+        Math.round((company.cash - 250_000) * 100),
+      );
       assert.equal(log.length, 1);
       assert.equal(log[0]?.mission?.payout, EXPECTED_PAYOUT);
       assert.equal(log[0]?.landing?.grade, "B");
@@ -175,11 +229,13 @@ describe("P3 acceptance: KMEM → KATL mission on the replayed fixture", () => {
     const tmp = tempDir();
     try {
       const r = rig(frames, tmp.dir);
+      const leased = leaseAtKbna(r);
       r.ok("jobs.refresh", { airport: "KBNA" });
       const job = r.jobs().available.find((j) => j.origin === "KBNA");
       assert.ok(job);
       r.ok("job.accept", { jobId: job.id });
       r.ok("mission.load", { jobIds: [job.id] });
+      assert.equal(r.mission()?.aircraftId, leased);
       r.source.playRange(0, BOARDING_END);
       const res = r.cmd("flight.start");
       assert.equal(res.ok, false);
@@ -214,6 +270,7 @@ describe("P3 acceptance: KMEM → KATL mission on the replayed fixture", () => {
     const tmp = tempDir();
     try {
       const r = rig(frames, tmp.dir);
+      leaseAtKbna(r);
       r.ok("jobs.refresh", { airport: "KBNA" });
       const job = r.jobs().available.find((j) => j.origin === "KBNA");
       assert.ok(job);
@@ -241,8 +298,18 @@ describe("P3 acceptance: KMEM → KATL mission on the replayed fixture", () => {
       assert.equal(m?.status, "failed");
       assert.equal(m?.failure?.code, "invalidated");
       assert.equal(m?.payout, undefined);
-      assert.equal(r.economy.listLedger().length, 0);
-      assert.equal((r.session.store.getDomain("company") as { cash: number }).cash, 250_000);
+      // No payout; the fuel burned and the KATL landing fee are still paid (P4).
+      const ledger = r.economy.listLedger().reverse();
+      assert.deepEqual(
+        ledger.map((e) => e.category),
+        ["fuel", "landing_fee"],
+      );
+      const costs = (m?.costs ?? []).reduce((s, c) => s + c.amount, 0);
+      assert.ok(costs > 300);
+      assert.equal(
+        (r.session.store.getDomain("company") as { cash: number }).cash,
+        Math.round((250_000 - costs) * 100) / 100,
+      );
       assert.equal(r.events("mission.failed").length, 1);
       r.close();
     } finally {
@@ -405,7 +472,8 @@ describe("job and mission commands", () => {
       const r = rig(frames, tmp.dir);
       r.source.playRange(0, 2);
       assert.equal(r.jobs().aircraft.typeKey, "c208b");
-      assert.equal(r.jobs().aircraft.source, "title");
+      // P4: the TITLE matched the fleet's starter C208B, so the board follows the fleet.
+      assert.equal(r.jobs().aircraft.source, "fleet");
       r.ok("settings.update", { aircraftType: "atr72f" });
       assert.equal(r.jobs().aircraft.source, "override");
       assert.equal(r.jobs().boards[0]?.aircraftKey, "atr72f");
@@ -435,6 +503,18 @@ describe("job and mission commands", () => {
     }
   });
 });
+
+/** Dry-lease a second C208B at KBNA and select it (missions need an aircraft at the origin). */
+function leaseAtKbna(r: Rig): string {
+  const a = r.ok<{ id: string; location: string }>("fleet.lease", {
+    typeKey: "c208b",
+    kind: "dry",
+    airport: "KBNA",
+  });
+  assert.equal(a.location, "KBNA");
+  r.ok("fleet.select", { aircraftId: a.id });
+  return a.id;
+}
 
 // ---- fixture variants ----
 

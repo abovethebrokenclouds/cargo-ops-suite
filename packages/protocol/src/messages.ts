@@ -34,6 +34,11 @@ export const EVENT_NAMES = [
   "mission.started",
   "mission.delivered",
   "mission.failed",
+  // P4 company, fleet and finance (additive).
+  "loan.payment",
+  "loan.missed",
+  "aircraft.repossessed",
+  "repair.completed",
 ] as const;
 export const eventNameSchema = z.enum(EVENT_NAMES);
 export type EventName = z.infer<typeof eventNameSchema>;
@@ -53,6 +58,15 @@ export const KNOWN_COMMANDS = [
   "mission.load",
   "mission.unload",
   "mission.abort",
+  // P4 fleet and finance.
+  "fleet.sell",
+  "fleet.lease",
+  "fleet.return",
+  "fleet.repair",
+  "fleet.select",
+  "loan.quote",
+  "loan.take",
+  "loan.payoff",
 ] as const;
 export type KnownCommandName = (typeof KNOWN_COMMANDS)[number];
 

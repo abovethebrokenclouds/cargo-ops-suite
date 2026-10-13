@@ -17,8 +17,9 @@ import {
   SHORT_BAND_SHARE,
   SHORT_JOB_SHARE,
 } from "./constants";
+import { JOB_KIND_MIN_TIER } from "./company-constants";
 import { greatCircleNm, round1 } from "./geo";
-import { computePayout } from "./payout";
+import { computePayout, reputationTier } from "./payout";
 import { Rng, seedFrom } from "./prng";
 import { maxJobDistanceNm, payloadLimitKg, timeLimitMin } from "./rules";
 
@@ -122,6 +123,7 @@ export function generateJobs(options: GenerateOptions): Job[] {
     : null;
   const focusCount = focus ? Math.min(3, count) : 0;
 
+  const tier = reputationTier(options.reputation);
   const jobs: Job[] = [];
   for (let i = 0; i < count; i++) {
     let dest: Candidate | null;
@@ -133,9 +135,16 @@ export function generateJobs(options: GenerateOptions): Job[] {
     }
     if (!dest) continue;
     const bushOk = bushCapable && dest.bush;
+    // Reputation gates job kinds (P4): a kind above the company's tier is never drawn.
     const kind =
       rng.weighted(Object.keys(KIND_WEIGHTS) as CargoKind[], (k) =>
-        k === "bush" ? (bushOk ? KIND_WEIGHTS.bush : 0) : KIND_WEIGHTS[k],
+        tier < JOB_KIND_MIN_TIER[k]
+          ? 0
+          : k === "bush"
+            ? bushOk
+              ? KIND_WEIGHTS.bush
+              : 0
+            : KIND_WEIGHTS[k],
       ) ?? "cargo";
     const [uMin, uMax] = UNITS[kind];
     const units = rng.int(uMin, uMax);

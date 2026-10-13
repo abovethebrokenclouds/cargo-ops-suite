@@ -4,3 +4,4 @@ export * from "./fixture";
 export * from "./landing";
 export * from "./aircraft-types";
 export * from "./economy";
+export * from "./company";

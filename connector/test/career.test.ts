@@ -145,7 +145,15 @@ describe("cargo /api routes and career export/import", () => {
       const exported = (await (await api(a.c, "/api/export/json")).json()) as CareerExport;
       assert.equal(careerExportSchema.safeParse(exported).success, true);
       assert.equal(exported.missions.length, 1);
-      assert.equal(exported.ledger.length, 1);
+      // P4: payout, fuel and landing fee; the starter aircraft and its events travel too.
+      assert.equal(exported.version, 2);
+      assert.deepEqual(
+        exported.ledger.map((e) => e.category),
+        ["mission_payout", "fuel", "landing_fee"],
+      );
+      assert.equal(exported.fleet.length, 1);
+      assert.equal(exported.fleet[0]?.location, "KATL");
+      assert.ok(exported.aircraftEvents.length >= 2);
       assert.equal(exported.flights.length, 1);
 
       const res = await api(b.c, "/api/import", {
@@ -159,7 +167,13 @@ describe("cargo /api routes and career export/import", () => {
       assert.deepEqual(strip(again), strip(exported));
       // The importing connector now shows the imported company.
       const company = b.c.session.store.getDomain("company") as { cash: number };
-      assert.equal(company.cash, 250_000 + 7124);
+      const source = a.c.session.store.getDomain("company") as { cash: number };
+      assert.equal(company.cash, source.cash);
+      assert.ok(company.cash < 250_000 + 7124 && company.cash > 250_000 + 6000);
+      const fleet = b.c.session.store.getDomain("fleet") as {
+        aircraft: Array<{ location: string }>;
+      };
+      assert.equal(fleet.aircraft[0]?.location, "KATL");
 
       const bad = await api(b.c, "/api/import", {
         method: "POST",

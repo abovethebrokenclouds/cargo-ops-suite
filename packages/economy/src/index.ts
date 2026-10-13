@@ -8,3 +8,11 @@ export * from "./payout";
 export * from "./rules";
 export * from "./generator";
 export * from "./route-finder";
+// P4 company, fleet, costs and finance.
+export * from "./company-constants";
+export * from "./clock";
+export * from "./costs";
+export * from "./fleet-rules";
+export * from "./finance";
+export * from "./book";
+export * from "./demo-company";

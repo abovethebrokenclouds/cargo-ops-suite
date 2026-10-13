@@ -73,23 +73,26 @@ separation), `logs/connector.log`.
 Bound to `127.0.0.1` only. Every request must carry a `Host` header naming the
 connector (`127.0.0.1:<port>` or `localhost:<port>`), which blocks DNS rebinding.
 
-| Route                             | Auth                                                            | Response                                                                                                                                   |
-| --------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /api/health`                 | none                                                            | `{ ok, version, mode, sim }`                                                                                                               |
-| `GET /api/session`                | `Origin` absent or an allowed origin                            | `{ token, wsUrl: "/ws" }`                                                                                                                  |
-| `GET /api/status`                 | `Authorization: Bearer <token>`                                 | health + seq, clients, paths, store stats                                                                                                  |
-| `GET /api/flights`                | Bearer token                                                    | `{ flights: [...] }`, newest first (≤ 50)                                                                                                  |
-| `GET /api/flights/:id/track`      | Bearer token                                                    | `{ id, points: [{ t, lat, lon, altFt, ... }] }`                                                                                            |
-| `GET /api/jobs`                   | Bearer token                                                    | jobs domain: `{ boards, available, accepted, aircraft }`                                                                                   |
-| `GET /api/missions`               | Bearer token                                                    | `{ missions: [...] }`, newest first (≤ 50), with payout breakdowns                                                                         |
-| `GET /api/logbook`                | Bearer token                                                    | `{ flights: [...] }` joined with mission, payout, landing grade (≤ 200)                                                                    |
-| `GET /api/export/csv`             | Bearer token                                                    | logbook CSV download (`text/csv`)                                                                                                          |
-| `GET /api/export/gpx?flight=<id>` | Bearer token                                                    | GPX 1.1 track of one flight from the telemetry table                                                                                       |
-| `GET /api/export/json`            | Bearer token                                                    | JSON career export (company, jobs, missions, ledger, flights; no telemetry)                                                                |
-| `POST /api/import`                | Bearer token                                                    | JSON career import (zod-validated, ≤ 32 MB); `409 flight_active` during a flight or mission; the live database refuses replay/demo flights |
-| other `/api/*`                    | Bearer token                                                    | `404` JSON                                                                                                                                 |
-| `GET /ws`                         | allowed `Origin` **and** token (`?token=` or the first `hello`) | protocol v1 (below)                                                                                                                        |
-| `GET /*`                          | none                                                            | static SPA; extension-less paths → `_shell.html`                                                                                           |
+| Route                                   | Auth                                                            | Response                                                                                                                                                                                                              |
+| --------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/health`                       | none                                                            | `{ ok, version, mode, sim }`                                                                                                                                                                                          |
+| `GET /api/session`                      | `Origin` absent or an allowed origin                            | `{ token, wsUrl: "/ws" }`                                                                                                                                                                                             |
+| `GET /api/status`                       | `Authorization: Bearer <token>`                                 | health + seq, clients, paths, store stats                                                                                                                                                                             |
+| `GET /api/flights`                      | Bearer token                                                    | `{ flights: [...] }`, newest first (≤ 50)                                                                                                                                                                             |
+| `GET /api/flights/:id/track`            | Bearer token                                                    | `{ id, points: [{ t, lat, lon, altFt, ... }] }`                                                                                                                                                                       |
+| `GET /api/jobs`                         | Bearer token                                                    | jobs domain: `{ boards, available, accepted, aircraft }`                                                                                                                                                              |
+| `GET /api/missions`                     | Bearer token                                                    | `{ missions: [...] }`, newest first (≤ 50), with payout breakdowns                                                                                                                                                    |
+| `GET /api/ledger?limit&before&category` | Bearer token                                                    | `{ entries, months, cash, startingCash, sum, count, balanced }`: ledger rows newest first (≤ 5,000 per page, `before=<id>` pages back, `category` filters), monthly P&L, and whether Σ amounts = cash − starting cash |
+| `GET /api/fleet`                        | Bearer token                                                    | fleet domain (`aircraft`, `selectedId`, `selection`, `ambiguous`, `value`) + `catalogue` (prices, lease rates, tier gates) + the last 200 `events`                                                                    |
+| `GET /api/loans`                        | Bearer token                                                    | loans domain (`loans`, `creditScore`, `offers`, debt service, DTI) + `lenders`                                                                                                                                        |
+| `GET /api/logbook`                      | Bearer token                                                    | `{ flights: [...] }` joined with mission, payout, landing grade (≤ 200)                                                                                                                                               |
+| `GET /api/export/csv`                   | Bearer token                                                    | logbook CSV download (`text/csv`)                                                                                                                                                                                     |
+| `GET /api/export/gpx?flight=<id>`       | Bearer token                                                    | GPX 1.1 track of one flight from the telemetry table                                                                                                                                                                  |
+| `GET /api/export/json`                  | Bearer token                                                    | JSON career export v2 (company, jobs, missions, ledger, flights, fleet, loans, aircraft events; no telemetry)                                                                                                         |
+| `POST /api/import`                      | Bearer token                                                    | JSON career import (zod-validated, ≤ 32 MB); `409 flight_active` during a flight or mission; the live database refuses replay/demo flights                                                                            |
+| other `/api/*`                          | Bearer token                                                    | `404` JSON                                                                                                                                                                                                            |
+| `GET /ws`                               | allowed `Origin` **and** token (`?token=` or the first `hello`) | protocol v1 (below)                                                                                                                                                                                                   |
+| `GET /*`                                | none                                                            | static SPA; extension-less paths → `_shell.html`                                                                                                                                                                      |
 
 WebSocket session (`packages/protocol`): the client sends `hello` with the token →
 `welcome` (`mode: "live"` with SimConnect, `"replay"` with `--sim fake`; `sim.connected`
@@ -164,9 +167,39 @@ large + medium airports with longest runway and surface). `npm run build` (and
 looks for `data/airports-major.json` next to the build and falls back to the repository
 file. Without it the connector still runs, with job boards disabled (logged).
 
-Storage (migration 3): `missions`, `mission_jobs`, `ledger` (category `job_payout` now;
+Storage (migration 3): `missions`, `mission_jobs`, `ledger` (category `job_payout`, renamed `mission_payout` in P4;
 P4 extends it), `jobs.created_at`/`mission_id`; the company record lives in the v1
 `company` table. Replays write `demo.db`, live sessions `cargo-ops.db`.
+
+## Company, fleet and loans (P4)
+
+The same engine runs the shared `CompanyBook` (`packages/economy/src/book.ts`) and
+publishes the `fleet`, `loans` and `ledger` domains plus the P4 `company` fields (tier
+name, credit score, net worth, debt, company clock). Every cash change is a ledger row
+with a running balance. Commands (all return `{ ok:false, error:{ code, message } }` on
+refusal):
+
+| Command        | Args                                                                        | Refusal codes                                                                                                                                                                    |
+| -------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fleet.buy`    | `{ typeKey, airport?, financing?: { lenderId, termMonths, principal } }`    | `bad_args`, `unknown_type`, `reputation_gate`, `unknown_airport`, `unknown_lender`, `credit_score_too_low`, `ltv_exceeded`, `bad_term`, `insufficient_cash`                      |
+| `fleet.sell`   | `{ aircraftId }`                                                            | `unknown_aircraft`, `not_owned`, `aircraft_busy`, `aircraft_on_mission`, `underwater`                                                                                            |
+| `fleet.lease`  | `{ typeKey, kind: "dry" \| "wet", airport? }`                               | `unknown_type`, `reputation_gate`, `unknown_airport`, `insufficient_cash`                                                                                                        |
+| `fleet.return` | `{ aircraftId }`                                                            | `unknown_aircraft`, `not_leased`, `aircraft_busy`, `aircraft_on_mission`, `insufficient_cash`                                                                                    |
+| `fleet.repair` | `{ aircraftId }`                                                            | `unknown_aircraft`, `aircraft_busy`, `aircraft_on_mission`, `no_wear`, `insufficient_cash`                                                                                       |
+| `fleet.select` | `{ aircraftId \| null }` (null = back to TITLE auto-match)                  | `unknown_aircraft`, `mission_active`                                                                                                                                             |
+| `loan.quote`   | `{ principal, termMonths, lenderId?, collateralValue?, collateral? }`       | returns `{ quotes: [...] }`, each with `ok` and a `code`                                                                                                                         |
+| `loan.take`    | `{ lenderId, principal, termMonths, collateral: { type: "aircraft", id } }` | `unsupported_collateral`, `not_owned`, `collateral_encumbered`, `reputation_gate`, `credit_score_too_low`, `declined_after_default`, `bad_term`, `bad_principal`, `ltv_exceeded` |
+| `loan.payoff`  | `{ loanId }`                                                                | `unknown_loan`, `insufficient_cash`                                                                                                                                              |
+
+`mission.load` now also needs the selected fleet aircraft (`no_aircraft`,
+`aircraft_ambiguous`, `aircraft_busy`, `aircraft_in_maintenance`,
+`aircraft_unairworthy`, `aircraft_not_at_origin`). Events: `loan.payment`,
+`loan.missed`, `aircraft.repossessed`, `repair.completed`.
+
+Company clock: `startConnector` ticks `economy.tick()` every second
+(`clockIntervalMs`, 0 disables it in tests); in-game time = max(wall Δ ≤ 60 s,
+simulator Δ). Storage: migration 4 (`fleet`, `aircraft_events`, `loans`,
+`ledger.balance`/`game_at`). Formulas: `docs/ECONOMY.md` (P4).
 
 ## Protocol sharing
 

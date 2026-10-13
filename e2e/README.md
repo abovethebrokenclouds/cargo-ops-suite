@@ -11,7 +11,10 @@ Playwright specs, two projects:
   `mission.replay.spec.ts` flies a full mission (board → accept → load → replayed flight →
   delivered) and asserts the payout through `/api/missions`, `/api/logbook`, the CSV export and
   the `/logbook` table, because a new replay pass clears the live flight state about a second
-  after arrival.
+  after arrival. Since P4 it also checks, through `/api/ledger` and `/api/fleet`, that the leg
+  booked fuel at the landing airport's price and the landing fee, that the ledger balances and
+  that the aircraft moved and wore as computed; the demo specs check that `/company` and `/fleet`
+  show DEMO-tagged seeded data with every action disabled.
 
 Neither project talks to a simulator. A real SimConnect session is only checked on the owner's
 Windows PC (see `docs/VERIFICATION.md`).

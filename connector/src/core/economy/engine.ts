@@ -22,6 +22,19 @@
 import { randomInt, randomUUID } from "node:crypto";
 import {
   PROTOCOL_VERSION,
+  fleetBuyArgsSchema,
+  fleetLeaseArgsSchema,
+  fleetRepairArgsSchema,
+  fleetReturnArgsSchema,
+  fleetSelectArgsSchema,
+  fleetSellArgsSchema,
+  loanPayoffArgsSchema,
+  loanQuoteArgsSchema,
+  loanTakeArgsSchema,
+  type FleetState,
+  type LedgerState,
+  type LoansState,
+  type MissionCost,
   jobIdArgsSchema,
   jobsRefreshArgsSchema,
   missionLoadArgsSchema,
@@ -43,6 +56,19 @@ import {
   type FuelState,
 } from "../../protocol";
 import {
+  ARRIVAL_RADIUS_NM,
+  CompanyBook,
+  GameClockTicker,
+  KG_PER_LB,
+  MIN_DISPATCH_CONDITION,
+  OverspeedDetector,
+  isAirworthy,
+  newCompanyCore,
+  round2,
+  selectAircraft,
+  type BookAircraft,
+  type BookResult,
+  type Selection,
   BOARD_REFRESH_SIM_MIN,
   REPUTATION,
   STARTING_CASH,
@@ -72,7 +98,6 @@ import type { FlightSample } from "../flight-sample";
 import type { FlightRecord } from "../flight-tracker";
 import type { StateStore } from "../store";
 
-const KG_PER_LB = 0.45359237;
 const MAX_BOARDS = 4;
 const MAX_ACCEPTED = 20;
 /** Fixed seed for a new demo/replay company so replays are reproducible. */
@@ -102,7 +127,13 @@ export class EconomyEngine {
   private readonly log: LogFn;
   private readonly now: () => number;
   private readonly newId: () => string;
-  private company: CompanyRecord;
+  private readonly seedForNew: number;
+  private book: CompanyBook<CompanyRecord>;
+  private readonly ticker = new GameClockTicker();
+  private readonly overspeed = new OverspeedDetector(999);
+  private lastClockSave = Number.NEGATIVE_INFINITY;
+  private publishedGameMinute = -1;
+  private lastClockPublish = 0;
   /** Open jobs: available, accepted or loaded. */
   private readonly jobs = new Map<string, Job>();
   private mission: Mission | null = null;
@@ -120,24 +151,80 @@ export class EconomyEngine {
     this.log = options.log ?? (() => {});
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? (() => `M-${randomUUID().slice(0, 8).toUpperCase()}`);
-    const stored = this.persistRead(() => this.repo?.getCompany() ?? null);
-    this.company = stored ?? {
-      name: "Cargo Ops Logistics",
-      base: "KMEM",
-      cash: STARTING_CASH,
-      reputation: REPUTATION.start,
-      seed: options.seed ?? (options.replay ? DEMO_COMPANY_SEED : randomInt(0, 2 ** 31)),
-      boardCounter: 0,
-      boards: [],
-      aircraftTypeOverride: null,
-    };
-    if (!stored) this.persist(() => this.repo?.saveCompany(this.company));
+    this.seedForNew = options.seed ?? (options.replay ? DEMO_COMPANY_SEED : randomInt(0, 2 ** 31));
+    this.book = this.loadBook();
     for (const job of this.persistRead(
       () => this.repo?.listJobs(["available", "accepted", "loaded"]) ?? [],
     ) ?? [])
       this.jobs.set(job.id, job);
     this.mission = this.persistRead(() => this.repo?.openMission() ?? null);
     if (!this.airports) this.log("warn", "No airport data: job boards are disabled");
+  }
+
+  /** Company, fleet, loans and recent ledger from the database (or a new company). */
+  private loadBook(): CompanyBook<CompanyRecord> {
+    const stored = this.persistRead(() => this.repo?.getCompany() ?? null);
+    let company: CompanyRecord = stored ?? {
+      name: "Cargo Ops Logistics",
+      base: "KMEM",
+      cash: STARTING_CASH,
+      reputation: REPUTATION.start,
+      seed: this.seedForNew,
+      boardCounter: 0,
+      boards: [],
+      aircraftTypeOverride: null,
+      ...newCompanyCore(STARTING_CASH),
+    };
+    if (stored && this.repo) {
+      // P3 records: count the ledger and rebuild the monthly P&L once.
+      const totals = this.persistRead(() => this.repo?.ledgerTotals() ?? null);
+      if (totals && company.ledgerCount !== totals.count) {
+        company = { ...company, ledgerCount: totals.count };
+        if (company.pnl.length === 0) {
+          company = {
+            ...company,
+            pnl: this.persistRead(() => this.repo?.pnlFromLedger() ?? []) ?? [],
+          };
+        }
+      }
+    }
+    const book = new CompanyBook<CompanyRecord>({
+      company,
+      fleet: this.persistRead(() => this.repo?.listFleet() ?? []) ?? [],
+      loans: this.persistRead(() => this.repo?.listLoans() ?? []) ?? [],
+      recent: (this.persistRead(() => this.repo?.listLedger(20) ?? []) ?? []).map((e) => ({
+        at: e.at,
+        gameMs: e.gameMs ?? 0,
+        category: e.category,
+        amount: e.amount,
+        balance: e.balance ?? 0,
+        refType: e.refType,
+        refId: e.refId,
+        memo: e.memo,
+      })),
+      airports: this.airports,
+      now: this.now,
+    });
+    if (book.ensureStarter()) this.log("info", "New company: starter Cessna 208B at the base");
+    if (!stored) book.setCompany(book.company);
+    const changes = book.drain();
+    this.persist(() => this.repo?.persistBook(book.company, { ...changes, company: true }));
+    this.lastClockSave = this.now();
+    this.ticker.reset();
+    return book;
+  }
+
+  private get company(): CompanyRecord {
+    return this.book.company;
+  }
+
+  private set company(value: CompanyRecord) {
+    this.book.setCompany(value);
+  }
+
+  /** Company book (cash, ledger, fleet, loans, clock). */
+  get companyBook(): CompanyBook<CompanyRecord> {
+    return this.book;
   }
 
   get enabled(): boolean {
@@ -153,8 +240,38 @@ export class EconomyEngine {
 
   // ---- state ----
 
+  /**
+   * Board aircraft type: the manual type override → the selected fleet aircraft's type →
+   * the sim TITLE → the default C208B.
+   */
   activeType(): { type: AircraftType; source: AircraftTypeSource } {
-    return resolveAircraftType(this.title, this.company.aircraftTypeOverride);
+    const resolved = resolveAircraftType(this.title, this.company.aircraftTypeOverride);
+    if (resolved.source === "override") return resolved;
+    const selected = this.selectedAircraft();
+    const type = selected ? aircraftTypeByKey(selected.typeKey) : null;
+    if (type) return { type, source: "fleet" };
+    return resolved;
+  }
+
+  /** Which fleet aircraft missions use: manual → TITLE match → the only aircraft. */
+  selection(): Selection {
+    return selectAircraft(
+      this.book.activeFleet(),
+      this.title,
+      this.company.selectedAircraftId,
+      this.parkedAirport(),
+    );
+  }
+
+  selectedAircraft(): BookAircraft | null {
+    return this.book.aircraft(this.selection().id);
+  }
+
+  /** Airport within 3 nm of the aircraft's position, if any. */
+  private parkedAirport(): string | null {
+    const pos = this.store.getDomain("position") as { lat: number; lon: number } | null | undefined;
+    if (!pos || !this.airports) return null;
+    return nearestAirport(this.airports.list, pos, ARRIVAL_RADIUS_NM)?.airport.ident ?? null;
   }
 
   companyDomain(): CompanyState {
@@ -164,7 +281,20 @@ export class EconomyEngine {
       cash: Math.round(this.company.cash * 100) / 100,
       reputation: this.company.reputation,
       reputationTier: reputationTier(this.company.reputation),
+      ...this.book.companyFields(),
     };
+  }
+
+  fleetDomain(): FleetState {
+    return this.book.fleetDomain(this.selection());
+  }
+
+  loansDomain(): LoansState {
+    return this.book.loansDomain();
+  }
+
+  ledgerDomain(): LedgerState {
+    return this.book.ledgerDomain();
   }
 
   jobsDomain(): JobsState {
@@ -189,24 +319,81 @@ export class EconomyEngine {
   }
 
   /** Domains merged into a reset snapshot so a replay restart never drops them. */
-  domains(): { company: CompanyState; jobs: JobsState; mission?: Mission } {
+  domains(): {
+    company: CompanyState;
+    jobs: JobsState;
+    fleet: FleetState;
+    loans: LoansState;
+    ledger: LedgerState;
+    mission?: Mission;
+  } {
     return {
       company: this.companyDomain(),
       jobs: this.jobsDomain(),
+      fleet: this.fleetDomain(),
+      loans: this.loansDomain(),
+      ledger: this.ledgerDomain(),
       ...(this.mission ? { mission: this.mission } : {}),
     };
   }
 
   publish(): void {
+    this.flushBook();
     if (this.mission && this.mission.id !== this.publishedMissionId) {
       if (this.publishedMissionId !== null) this.store.apply({ mission: null });
       this.publishedMissionId = this.mission.id;
     }
+    this.publishedGameMinute = Math.floor(this.company.gameMs / 60_000);
     this.store.apply({
       company: this.companyDomain(),
       jobs: this.jobsDomain(),
+      fleet: this.fleetDomain(),
+      loans: this.loansDomain(),
+      ledger: this.ledgerDomain(),
       ...(this.mission ? { mission: this.mission } : {}),
     });
+  }
+
+  /** Write what the book changed and emit its events (loan.*, repair.completed, …). */
+  private flushBook(): void {
+    if (!this.book.hasPending) return;
+    const changes = this.book.drain();
+    this.persist(() => this.repo?.persistBook(this.company, changes));
+    if (changes.company) this.lastClockSave = this.now();
+    for (const n of changes.notices) {
+      this.log("info", `${n.name} ${JSON.stringify(n.data)}`);
+      this.store.event(n.name, n.data);
+    }
+  }
+
+  /** Move the company clock by `ms` of in-game time at once (tests and tools). */
+  advanceGameTime(ms: number): void {
+    this.book.advance(ms);
+    this.publish();
+  }
+
+  /**
+   * Advance the company clock: max(wall Δ ≤ 60 s, simulator Δ) since the last tick.
+   * Called every second by the connector and on every flight sample.
+   */
+  tick(): void {
+    const delta = this.ticker.tick(this.now());
+    if (delta > 0) this.book.advance(delta);
+    const minute = Math.floor(this.company.gameMs / 60_000);
+    if (this.book.hasPending) {
+      this.publish();
+      return;
+    }
+    const wall = this.now();
+    if (wall - this.lastClockSave >= 30_000) {
+      this.lastClockSave = wall;
+      this.persist(() => this.repo?.saveCompany(this.company));
+    }
+    if (minute !== this.publishedGameMinute && wall - this.lastClockPublish >= 1_000) {
+      this.publishedGameMinute = minute;
+      this.lastClockPublish = wall;
+      this.store.apply({ company: this.companyDomain() });
+    }
   }
 
   /** Called after a store reset: the session put our domains back in the snapshot. */
@@ -250,6 +437,12 @@ export class EconomyEngine {
   private startChecks(m: Mission, at: { lat: number; lon: number } | null): Ok<null> | Fail {
     const origin = this.airports?.get(m.origin);
     if (!origin) return fail("unknown_airport", `Unknown origin ${m.origin}`);
+    if (m.aircraftId) {
+      const a = this.book.aircraft(m.aircraftId);
+      if (!a) return fail("no_aircraft", "The mission aircraft is no longer in the fleet");
+      const ready = this.aircraftReady(a, m.origin);
+      if (!ready.ok) return ready;
+    }
     const where = checkAtOrigin(at, origin);
     if (!where.ok) return where;
     const type = aircraftTypeByKey(m.aircraftKey) ?? this.activeType().type;
@@ -280,8 +473,16 @@ export class EconomyEngine {
 
     if (this.lastTMs !== null && s.tMs > this.lastTMs && s.tMs - this.lastTMs < 600_000) {
       this.simMinSinceBoard += (s.tMs - this.lastTMs) / 60_000;
+      this.ticker.addSim(s.tMs - this.lastTMs);
     }
     this.lastTMs = s.tMs;
+    const flying = this.mission;
+    if (flying && flying.status === "in_progress" && flight && flight.id === flying.flightId) {
+      if (this.overspeed.update(s.iasKt, s.tMs)) {
+        this.log("warn", `Overspeed: ${Math.round(s.iasKt)} kt IAS above Vmo (wear +5 %)`);
+      }
+    }
+    this.tick();
     let changed = false;
     if (this.simMinSinceBoard >= BOARD_REFRESH_SIM_MIN && this.company.boards[0]) {
       this.log("info", "Scheduled job board refresh (in-game time)");
@@ -332,6 +533,10 @@ export class EconomyEngine {
       flownNm: record.distanceNm,
       elapsedMin: record.blockMin,
     };
+    if (m.aircraftId) this.book.setFlying(m.aircraftId, true);
+    const type = aircraftTypeByKey(m.aircraftKey);
+    this.overspeed.reset();
+    this.overspeed.setVmo(type?.vmoKt ?? 999);
     this.persist(() => this.repo?.linkFlight(record.id, m.jobIds, m.payloadKg, null));
     this.persistMission();
     this.log("info", `Mission ${m.id} started on flight ${record.id}`);
@@ -349,16 +554,27 @@ export class EconomyEngine {
       flownNm: record.distanceNm,
       elapsedMin: record.blockMin,
     };
+    const origin = this.airports?.get(m.origin) ?? null;
+    const dest = this.airports?.get(m.destination) ?? null;
+    const parkedAt =
+      last && this.airports
+        ? (nearestAirport(this.airports.list, last, ARRIVAL_RADIUS_NM)?.airport ?? null)
+        : null;
     if (record.status === "aborted") {
-      this.mission = { ...base, status: "aborted" };
+      // Fuel and hours flown are still paid; the aircraft stays where it was (or where it parked).
+      const settled = this.settle(m, record, parkedAt ?? origin, parkedAt, false);
+      this.mission = {
+        ...base,
+        status: "aborted",
+        ...(settled.costs.length ? { costs: settled.costs } : {}),
+        wear: settled.wear,
+      };
       this.returnJobs(m, "accepted");
       this.persistMission();
       this.log("info", `Mission ${m.id} aborted with its flight; jobs returned to accepted`);
       this.publish();
       return;
     }
-    const origin = this.airports?.get(m.origin) ?? null;
-    const dest = this.airports?.get(m.destination) ?? null;
     const landing = record.landings.at(-1) ?? null;
     const grade = landing?.grade ?? null;
     const verdict =
@@ -374,24 +590,30 @@ export class EconomyEngine {
             })
           : fail("unknown_airport", "Mission airports are unknown");
     if (!verdict.ok) {
-      const delta = verdict.code === "crashed" ? REPUTATION.crash : 0;
-      this.company = {
-        ...this.company,
-        reputation: clampReputation(this.company.reputation + delta),
-      };
+      const crashed = verdict.code === "crashed";
+      const delta = crashed ? REPUTATION.crash : 0;
+      if (delta) this.book.adjustReputation(delta);
+      const settled = crashed
+        ? this.settle(m, record, origin, null, true)
+        : this.settle(m, record, parkedAt ?? origin, parkedAt, false);
       this.mission = {
         ...base,
         status: "failed",
         failure: { code: verdict.code, message: verdict.message },
         ...(grade ? { landingGrade: grade } : {}),
         reputationDelta: delta,
+        ...(settled.costs.length ? { costs: settled.costs } : {}),
+        wear: settled.wear,
       };
-      this.returnJobs(m, "failed");
-      this.persist(() => this.repo?.saveCompany(this.company));
-      this.persistMission();
-      this.persist(() =>
-        this.repo?.linkFlight(record.id, m.jobIds, m.payloadKg, { failure: verdict }),
-      );
+      this.repoTx(() => {
+        this.returnJobs(m, "failed");
+        this.flushBook();
+        this.persistMission();
+        this.repo?.linkFlight(record.id, m.jobIds, m.payloadKg, {
+          failure: verdict,
+          costs: settled.costs,
+        });
+      });
       this.log("warn", `Mission ${m.id} failed: ${verdict.message}`);
       this.store.event("mission.failed", {
         missionId: m.id,
@@ -421,39 +643,42 @@ export class EconomyEngine {
     const total = breakdowns.reduce((s, b) => s + b.total, 0);
     const maxLate = Math.max(0, ...m.jobs.map((j) => record.blockMin - j.timeLimitMin));
     const delta = deliveryReputationDelta(grade, maxLate);
-    const at = this.now();
-    this.company = {
-      ...this.company,
-      cash: this.company.cash + total,
-      reputation: clampReputation(reputation + delta),
+    for (const [i, job] of m.jobs.entries()) {
+      this.book.post(
+        "mission_payout",
+        breakdowns[i]?.total ?? 0,
+        "job",
+        job.id,
+        `${job.origin}→${job.destination} ${job.kind} ${job.weightKg} kg (mission ${m.id})`,
+      );
+    }
+    // Fuel at the destination's price, its landing fee, lease hours and wear.
+    const settled = this.settle(m, record, dest, dest, false);
+    this.book.adjustReputation(delta);
+    const costTotal = round2(settled.costs.reduce((s, c) => s + c.amount, 0));
+    const payout = {
+      total,
+      jobs: breakdowns,
+      costs: settled.costs,
+      net: round2(total - costTotal),
     };
-    const payout = { total, jobs: breakdowns };
     this.mission = {
       ...base,
       status: "delivered",
       payout,
       reputationDelta: delta,
       ...(grade ? { landingGrade: grade } : {}),
+      wear: settled.wear,
     };
     this.repoTx(() => {
       this.returnJobs(m, "delivered");
-      this.repo?.saveCompany(this.company);
-      for (const [i, job] of m.jobs.entries()) {
-        this.repo?.addLedger({
-          at,
-          category: "job_payout",
-          amount: breakdowns[i]?.total ?? 0,
-          refType: "job",
-          refId: job.id,
-          memo: `${job.origin}→${job.destination} ${job.kind} ${job.weightKg} kg (mission ${m.id})`,
-        });
-      }
+      this.flushBook();
       this.persistMission();
       this.repo?.linkFlight(record.id, m.jobIds, m.payloadKg, payout);
     });
     this.log(
       "info",
-      `Mission ${m.id} delivered: $${total} (reputation ${delta >= 0 ? "+" : ""}${delta})`,
+      `Mission ${m.id} delivered: $${total} − costs $${costTotal} (reputation ${delta >= 0 ? "+" : ""}${delta}, wear ${settled.wear} %)`,
     );
     for (const [i, job] of m.jobs.entries()) {
       this.store.event("job.completed", {
@@ -466,6 +691,42 @@ export class EconomyEngine {
     this.publish();
   }
 
+  /** Book the leg's costs and wear on the mission aircraft (P4). */
+  private settle(
+    m: Mission,
+    record: FlightRecord,
+    fuelAirport: EconomyAirport | null,
+    landingAirport: EconomyAirport | null,
+    crashed: boolean,
+  ): { costs: MissionCost[]; wear: number } {
+    const overspeed = this.overspeed.count;
+    this.overspeed.reset();
+    if (!m.aircraftId) return { costs: [], wear: 0 };
+    const peaks = record.landings
+      .map((l) => l.peakG)
+      .filter((g): g is number => Number.isFinite(g));
+    const r = this.book.settleFlight(m.aircraftId, {
+      fuelKg: record.fuelUsedLb * KG_PER_LB,
+      fuelAirport,
+      landingAirport,
+      blockMin: record.blockMin,
+      airborneMin: record.airborneMin,
+      peakG: peaks.length ? Math.max(...peaks) : null,
+      overspeedEvents: overspeed,
+      crashed,
+      landings: record.landings.length,
+      refType: "mission",
+      refId: m.id,
+      memo: `Mission ${m.id}`,
+    });
+    this.book.setFlying(m.aircraftId, false);
+    if (!r.ok) {
+      this.log("warn", `Could not settle mission ${m.id}: ${r.message}`);
+      return { costs: [], wear: 0 };
+    }
+    return { costs: r.data.costs, wear: r.data.wear.total };
+  }
+
   // ---- commands ----
 
   handles(name: string): boolean {
@@ -473,12 +734,17 @@ export class EconomyEngine {
       name.startsWith("job.") ||
       name.startsWith("jobs.") ||
       name.startsWith("mission.") ||
+      name.startsWith("fleet.") ||
+      name.startsWith("loan.") ||
       name === "settings.update"
     );
   }
 
   command(cmd: Command): Result {
-    const r = this.run(cmd);
+    const r =
+      cmd.name.startsWith("fleet.") || cmd.name.startsWith("loan.")
+        ? this.runCompany(cmd)
+        : this.run(cmd);
     if (!r.ok) {
       return {
         type: "result",
@@ -606,6 +872,118 @@ export class EconomyEngine {
     }
   }
 
+  /** fleet.* and loan.* commands (P4): validate, apply to the book, persist, publish. */
+  private runCompany(cmd: Command): Ok<unknown> | Fail {
+    const args = cmd.args ?? {};
+    const bad = (e: { issues: Array<{ message: string; path: Array<string | number> }> }) =>
+      fail(
+        "bad_args",
+        e.issues[0] ? `${e.issues[0].path.join(".")}: ${e.issues[0].message}` : "invalid arguments",
+      );
+    const onMission = (aircraftId: string): Fail | null => {
+      const m = this.mission;
+      if (
+        m &&
+        m.aircraftId === aircraftId &&
+        (m.status === "loaded" || m.status === "in_progress")
+      ) {
+        return fail(
+          "aircraft_on_mission",
+          `The aircraft is on mission ${m.id}; unload or finish it first`,
+        );
+      }
+      return null;
+    };
+    const done = <T>(r: BookResult<T>): Ok<T> | Fail => {
+      if (!r.ok) return fail(r.code, r.message);
+      this.publish();
+      return { ok: true, data: r.data };
+    };
+    switch (cmd.name) {
+      case "fleet.buy": {
+        const p = fleetBuyArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(
+          this.book.buy({
+            typeKey: p.data.typeKey,
+            ...(p.data.airport ? { airport: p.data.airport } : {}),
+            ...(p.data.financing ? { financing: p.data.financing } : {}),
+          }),
+        );
+      }
+      case "fleet.sell": {
+        const p = fleetSellArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return onMission(p.data.aircraftId) ?? done(this.book.sell(p.data.aircraftId));
+      }
+      case "fleet.lease": {
+        const p = fleetLeaseArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(
+          this.book.lease({
+            typeKey: p.data.typeKey,
+            kind: p.data.kind,
+            ...(p.data.airport ? { airport: p.data.airport } : {}),
+          }),
+        );
+      }
+      case "fleet.return": {
+        const p = fleetReturnArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return onMission(p.data.aircraftId) ?? done(this.book.returnLease(p.data.aircraftId));
+      }
+      case "fleet.repair": {
+        const p = fleetRepairArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return onMission(p.data.aircraftId) ?? done(this.book.repair(p.data.aircraftId));
+      }
+      case "fleet.select": {
+        const p = fleetSelectArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        const m = this.mission;
+        if (m && (m.status === "loaded" || m.status === "in_progress")) {
+          return fail(
+            "mission_active",
+            "Change aircraft after the open mission is unloaded or done",
+          );
+        }
+        const before = this.activeType().type.key;
+        const r = this.book.select(p.data.aircraftId);
+        if (r.ok && this.activeType().type.key !== before) this.retypeBoard();
+        return done(r.ok ? { ok: true, data: this.fleetDomain() } : r);
+      }
+      case "loan.quote": {
+        const p = loanQuoteArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        const r = this.book.quote({
+          principal: p.data.principal,
+          termMonths: p.data.termMonths,
+          ...(p.data.lenderId ? { lenderId: p.data.lenderId } : {}),
+          ...(p.data.collateralValue !== undefined
+            ? { collateralValue: p.data.collateralValue }
+            : {}),
+          ...(p.data.collateral ? { collateral: p.data.collateral } : {}),
+        });
+        return r.ok ? { ok: true, data: { quotes: r.data } } : fail(r.code, r.message);
+      }
+      case "loan.take": {
+        const p = loanTakeArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.takeLoan(p.data));
+      }
+      case "loan.payoff": {
+        const p = loanPayoffArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.payoff(p.data.loanId));
+      }
+      default:
+        return fail(
+          "not_implemented",
+          `Command ${cmd.name} is not implemented in this connector version`,
+        );
+    }
+  }
+
   private load(ids: string[]): Ok<Mission> | Fail {
     if (
       this.mission &&
@@ -626,7 +1004,20 @@ export class EconomyEngine {
     if (jobs.some((j) => j.origin !== first.origin || j.destination !== first.destination)) {
       return fail("mixed_route", "Stacked jobs must share the same origin and destination");
     }
-    const type = this.activeType().type;
+    // P4: the mission is flown with a fleet aircraft parked at the origin.
+    const selection = this.selection();
+    const aircraft = this.book.aircraft(selection.id);
+    if (!aircraft) {
+      return selection.ambiguous
+        ? fail(
+            "aircraft_ambiguous",
+            "Several fleet aircraft match the simulator aircraft: pick one on the Fleet page",
+          )
+        : fail("no_aircraft", "Select an aircraft you own or lease (Fleet page)");
+    }
+    const ready = this.aircraftReady(aircraft, first.origin);
+    if (!ready.ok) return ready;
+    const type = aircraftTypeByKey(aircraft.typeKey) ?? this.activeType().type;
     const origin = this.airports?.get(first.origin);
     const dest = this.airports?.get(first.destination);
     if (!origin || !dest) return fail("unknown_airport", "Unknown mission airport");
@@ -662,6 +1053,8 @@ export class EconomyEngine {
       jobIds: loaded.map((j) => j.id),
       jobs: loaded,
       aircraftKey: type.key,
+      aircraftId: aircraft.id,
+      registration: aircraft.registration,
       payloadKg,
       distanceNm,
       timeLimitMin: Math.min(...loaded.map((j) => j.timeLimitMin)),
@@ -675,6 +1068,27 @@ export class EconomyEngine {
     });
     this.publish();
     return { ok: true, data: mission };
+  }
+
+  /** The aircraft can fly a mission from `origin` now. */
+  private aircraftReady(a: BookAircraft, origin: string): Ok<null> | Fail {
+    if (a.status === "maintenance") {
+      return fail("aircraft_in_maintenance", `${a.registration} is in maintenance`);
+    }
+    if (a.status !== "available") return fail("aircraft_busy", `${a.registration} is ${a.status}`);
+    if (!isAirworthy(a.condition)) {
+      return fail(
+        "aircraft_unairworthy",
+        `${a.registration} is at ${a.condition} % condition; repair it (dispatch needs ${MIN_DISPATCH_CONDITION} %)`,
+      );
+    }
+    if (a.location !== origin) {
+      return fail(
+        "aircraft_not_at_origin",
+        `${a.registration} is parked at ${a.location}, not at ${origin}`,
+      );
+    }
+    return { ok: true, data: null };
   }
 
   // ---- boards ----
@@ -821,8 +1235,7 @@ export class EconomyEngine {
 
   /** Reload everything from the database (after an import). */
   reload(): void {
-    const stored = this.persistRead(() => this.repo?.getCompany() ?? null);
-    if (stored) this.company = stored;
+    this.book = this.loadBook();
     this.jobs.clear();
     for (const job of this.persistRead(
       () => this.repo?.listJobs(["available", "accepted", "loaded"]) ?? [],

@@ -4,7 +4,15 @@
 import { z } from "zod";
 import { jobSchema, missionSchema } from "../protocol";
 import type { DatabaseKind } from "./db";
-import { companyRecordSchema, type EconomyRepo, type LogbookEntry } from "./economy";
+import { STARTING_CASH } from "../economy";
+import { ledgerCategorySchema } from "../protocol";
+import {
+  companyRecordSchema,
+  fleetRecordSchema,
+  loanRecordSchema,
+  type EconomyRepo,
+  type LogbookEntry,
+} from "./economy";
 import type { FlightTrack } from "./flights";
 
 // ---- CSV ----
@@ -146,18 +154,36 @@ const flightRowSchema = z.object({
 
 const ledgerRowSchema = z.object({
   at: z.number().int(),
-  category: z.string().min(1),
+  /** P3 exports use `job_payout`, imported as `mission_payout`. */
+  category: z
+    .string()
+    .min(1)
+    .transform((c) => (c === "job_payout" ? "mission_payout" : c))
+    .pipe(ledgerCategorySchema),
   amount: z.number().finite(),
   refType: z.string().nullable(),
   refId: z.string().nullable(),
   memo: z.string().nullable(),
+  // P4 (absent in version 1 exports).
+  gameMs: z.number().finite().nonnegative().optional(),
+  balance: z.number().finite().nullable().optional(),
+});
+
+const aircraftEventRowSchema = z.object({
+  aircraftId: z.string().min(1),
+  at: z.number().finite(),
+  gameMs: z.number().finite().nonnegative(),
+  kind: z.string().min(1),
+  data: z.record(z.unknown()),
 });
 
 export const CAREER_FORMAT = "cargo-ops-career";
+/** Version 2 (P4) adds fleet, loans and aircraft events; version 1 (P3) is still accepted. */
+export const CAREER_VERSION = 2;
 
 export const careerExportSchema = z.object({
   format: z.literal(CAREER_FORMAT),
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   exportedAt: z.string(),
   database: z.enum(["live", "demo"]),
   company: companyRecordSchema.nullable(),
@@ -165,8 +191,12 @@ export const careerExportSchema = z.object({
   missions: z.array(missionSchema),
   ledger: z.array(ledgerRowSchema),
   flights: z.array(flightRowSchema),
+  fleet: z.array(fleetRecordSchema).default([]),
+  loans: z.array(loanRecordSchema).default([]),
+  aircraftEvents: z.array(aircraftEventRowSchema).default([]),
 });
 export type CareerExport = z.infer<typeof careerExportSchema>;
+export type CareerExportInput = z.input<typeof careerExportSchema>;
 
 const FLIGHT_COLUMNS = [
   "id",
@@ -215,13 +245,15 @@ export function exportCareer(
       refType: e.refType,
       refId: e.refId,
       memo: e.memo,
+      gameMs: e.gameMs ?? 0,
+      balance: e.balance ?? null,
     }));
   const flights = db
     .prepare(`SELECT ${FLIGHT_COLUMNS.join(", ")} FROM flights ORDER BY started_at, id`)
     .all() as unknown as CareerExport["flights"];
   return {
     format: CAREER_FORMAT,
-    version: 1,
+    version: CAREER_VERSION,
     exportedAt: new Date(now).toISOString(),
     database,
     company: repo.getCompany(),
@@ -229,11 +261,25 @@ export function exportCareer(
     missions,
     ledger,
     flights,
+    fleet: repo.listFleet(),
+    loans: repo.listLoans(),
+    aircraftEvents: repo.listAircraftEvents().map(({ id: _id, ...e }) => e),
   };
 }
 
 export type ImportResult =
-  | { ok: true; counts: { jobs: number; missions: number; ledger: number; flights: number } }
+  | {
+      ok: true;
+      counts: {
+        jobs: number;
+        missions: number;
+        ledger: number;
+        flights: number;
+        fleet: number;
+        loans: number;
+      };
+      version: 1 | 2;
+    }
   | { ok: false; status: number; code: string; message: string };
 
 /**
@@ -268,12 +314,24 @@ export function importCareer(
   const db = repo.db;
   repo.transaction(() => {
     db.exec(
-      "DELETE FROM mission_jobs; DELETE FROM missions; DELETE FROM jobs; DELETE FROM ledger; DELETE FROM company;",
+      "DELETE FROM mission_jobs; DELETE FROM missions; DELETE FROM jobs; DELETE FROM ledger; DELETE FROM company; DELETE FROM fleet; DELETE FROM loans; DELETE FROM aircraft_events;",
     );
-    if (data.company) repo.saveCompany(data.company);
+    if (data.company) {
+      // Version 1 companies get the P4 defaults from the schema; the counter and P&L are
+      // rebuilt from the imported ledger when the engine reloads.
+      repo.saveCompany({ ...data.company, ledgerCount: data.ledger.length });
+    }
     for (const job of data.jobs) repo.saveJob(job);
     for (const m of data.missions) repo.saveMission(m);
-    for (const e of data.ledger) repo.addLedger(e);
+    // Running balance: kept when the export has it, else recomputed from the starting cash.
+    let running = Math.round((data.company?.startingCash ?? STARTING_CASH) * 100);
+    for (const e of data.ledger) {
+      running += Math.round(e.amount * 100);
+      repo.addLedger({ ...e, balance: e.balance ?? running / 100, gameMs: e.gameMs ?? 0 });
+    }
+    for (const a of data.fleet) repo.saveAircraft(a);
+    for (const l of data.loans) repo.saveLoan(l);
+    for (const e of data.aircraftEvents) repo.addAircraftEvent(e);
     const keep = new Set(data.flights.map((f) => f.id));
     const existing = db.prepare("SELECT id FROM flights").all() as Array<{ id: string }>;
     const del = db.prepare("DELETE FROM flights WHERE id = ?");
@@ -295,6 +353,9 @@ export function importCareer(
       missions: data.missions.length,
       ledger: data.ledger.length,
       flights: data.flights.length,
+      fleet: data.fleet.length,
+      loans: data.loans.length,
     },
+    version: data.version,
   };
 }
