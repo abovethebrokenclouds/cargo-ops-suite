@@ -101,7 +101,8 @@ A fixture is a JSONL recording of what the connector sent. A real one lets us te
 the flight-tracking features against genuine MSFS data in the cloud.
 
 1. Start MSFS and load a flight (any aircraft; a short hop is ideal).
-2. In a Command Prompt in the repository folder:
+2. In a Command Prompt in the repository folder (paths you pass are relative to the
+   folder you run the command from):
 
    ```bat
    scripts\start-cargo-ops.cmd --record connector\fixtures\kmem-katl-2026-10-20.jsonl
@@ -115,8 +116,7 @@ the flight-tracking features against genuine MSFS data in the cloud.
 4. Press Ctrl+C after parking. Check the file replays:
 
    ```bat
-   cd connector
-   npm start -- --sim fake --fixture fixtures\kmem-katl-2026-10-20.jsonl --web ..\dist\client --open
+   scripts\start-cargo-ops.cmd --sim fake --fixture connector\fixtures\kmem-katl-2026-10-20.jsonl
    ```
 
    The chip should say `REPLAY`.
