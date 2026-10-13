@@ -172,7 +172,7 @@ export interface ApiResponse {
  *   GET /api/flights/:id/track  → { id, points: [{ t, lat, lon, altFt, ... }] }
  */
 export function flightsApi(repo: FlightRepo) {
-  return (method: string, pathname: string): ApiResponse | null => {
+  return ({ method, pathname }: { method: string; pathname: string }): ApiResponse | null => {
     if (pathname === "/api/flights") {
       if (method !== "GET") return { status: 405, body: { error: "method_not_allowed" } };
       return { status: 200, body: { flights: repo.list() } };

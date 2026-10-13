@@ -37,6 +37,22 @@ export const HOST = "127.0.0.1";
 export const PING_INTERVAL_MS = 15_000;
 const HELLO_TIMEOUT_MS = 5_000;
 const MAX_MESSAGE_BYTES = 64 * 1024;
+/** Largest accepted /api request body (career import), bytes. */
+export const MAX_API_BODY_BYTES = 32 * 1024 * 1024;
+
+/** An authenticated /api request as the route handlers see it. */
+export interface ApiRequest {
+  method: string;
+  pathname: string;
+  query: URLSearchParams;
+  /** Parsed JSON body (POST/PUT/PATCH); undefined without one. */
+  body: unknown;
+}
+
+/** JSON response, or a text download (CSV, GPX, …). */
+export type ApiResult =
+  | { status: number; body: unknown }
+  | { status: number; text: string; contentType: string; filename?: string };
 
 /** WebSocket close codes used by the connector (4000-4999 are application codes). */
 export const CLOSE = {
@@ -59,8 +75,8 @@ export interface ServerOptions {
   log: LogFn;
   /** Extra fields for the authenticated /api/status response. */
   status?: () => Record<string, unknown>;
-  /** Extra authenticated /api routes (e.g. flights); null = not handled here. */
-  routes?: (method: string, pathname: string) => { status: number; body: unknown } | null;
+  /** Extra authenticated /api routes (flights, jobs, exports …); null = not handled here. */
+  routes?: (req: ApiRequest) => ApiResult | null;
 }
 
 interface Client {
@@ -124,7 +140,10 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       return;
     }
     if (pathname === "/api" || pathname.startsWith("/api/")) {
-      handleApi(req, res, pathname);
+      handleApi(req, res, pathname).catch((err: unknown) => {
+        log("warn", `API ${pathname} failed: ${err instanceof Error ? err.message : err}`);
+        if (!res.headersSent) json(res, 500, { error: "internal_error" });
+      });
       return;
     }
     if (pathname.startsWith(TILES_PREFIX)) {
@@ -147,7 +166,11 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     serveStatic(webDir, req, res, pathname);
   });
 
-  function handleApi(req: IncomingMessage, res: ServerResponse, pathname: string): void {
+  async function handleApi(
+    req: IncomingMessage,
+    res: ServerResponse,
+    pathname: string,
+  ): Promise<void> {
     const origin = req.headers.origin;
     if (pathname === "/api/health" && req.method === "GET") {
       json(res, 200, health());
@@ -182,12 +205,44 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       });
       return;
     }
-    const routed = options.routes?.(req.method ?? "GET", pathname) ?? null;
-    if (routed) {
-      json(res, routed.status, routed.body);
+    if (!options.routes) {
+      json(res, 404, { error: "not_found" });
       return;
     }
-    json(res, 404, { error: "not_found" });
+    const method = req.method ?? "GET";
+    let body: unknown = undefined;
+    if (method === "POST" || method === "PUT" || method === "PATCH") {
+      const read = await readBody(req, MAX_API_BODY_BYTES);
+      if (read === null) {
+        json(res, 413, { error: "payload_too_large" });
+        return;
+      }
+      if (read.length > 0) {
+        try {
+          body = JSON.parse(read);
+        } catch {
+          json(res, 400, { error: "invalid_json" });
+          return;
+        }
+      }
+    }
+    const query = new URL(req.url ?? "/", "http://connector.invalid").searchParams;
+    const routed = options.routes({ method, pathname, query, body });
+    if (!routed) {
+      json(res, 404, { error: "not_found" });
+      return;
+    }
+    if ("text" in routed) {
+      res.statusCode = routed.status;
+      res.setHeader("Content-Type", routed.contentType);
+      res.setHeader("Cache-Control", "no-store");
+      if (routed.filename) {
+        res.setHeader("Content-Disposition", `attachment; filename="${routed.filename}"`);
+      }
+      res.end(routed.text);
+      return;
+    }
+    json(res, routed.status, routed.body);
   }
 
   // ---- WebSocket ----
@@ -351,6 +406,25 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       });
     },
   };
+}
+
+/** Read a request body as UTF-8, or null when it exceeds `limit` bytes. */
+function readBody(req: IncomingMessage, limit: number): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let tooLarge = false;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) {
+        tooLarge = true;
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(tooLarge ? null : Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
 }
 
 function rawToString(data: RawData): string {

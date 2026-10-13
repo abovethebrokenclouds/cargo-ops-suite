@@ -15,6 +15,10 @@ import { normalizeOrigin } from "../server/security";
 import { startServer, type RunningServer } from "../server/server";
 import { openStorage, type Storage } from "../storage/db";
 import { FlightRepo, flightsApi } from "../storage/flights";
+import { EconomyRepo } from "../storage/economy";
+import { economyApi } from "../server/economy-api";
+import { loadAirportsData } from "../core/economy/airports-data";
+import type { EconomyAirport } from "../economy";
 
 /** connector/ (the folder holding package.json), found from the compiled file location. */
 export function connectorRoot(start: string = __dirname): string {
@@ -65,6 +69,10 @@ export interface ConnectorOptions {
   pingIntervalMs?: number;
   /** Inject a source (tests). */
   source?: SimSource;
+  /** Seed for a newly created company (tests; default: fixed for replays, random live). */
+  economySeed?: number;
+  /** Airport list override (tests). */
+  airports?: EconomyAirport[];
 }
 
 export interface RunningConnector {
@@ -72,6 +80,7 @@ export interface RunningConnector {
   session: ConnectorSession;
   storage: Storage;
   flights: FlightRepo;
+  economy: EconomyRepo;
   token: string;
   logFile: string | null;
   log: LogFn;
@@ -116,7 +125,33 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
 
   // Flights and telemetry go to the database of this mode (demo.db for replays).
   const flights = new FlightRepo(storage, source.frameSource);
-  const session = new ConnectorSession(source, log, { repo: flights });
+  const economy = new EconomyRepo(storage);
+  let airports: EconomyAirport[] | null = options.airports ?? null;
+  if (!airports) {
+    try {
+      const loaded = loadAirportsData();
+      airports = loaded.airports;
+      log("info", `Airports: ${airports.length} from ${loaded.path}`);
+    } catch (err) {
+      log("warn", `Job boards disabled: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  const session = new ConnectorSession(source, log, {
+    repo: flights,
+    economy: {
+      repo: economy,
+      airports,
+      replay: source.mode !== "live",
+      ...(options.economySeed !== undefined ? { seed: options.economySeed } : {}),
+    },
+  });
+  const flightRoutes = flightsApi(flights);
+  const economyRoutes = economyApi({
+    session,
+    repo: economy,
+    flights,
+    database: storage.kind,
+  });
   const recorder = options.record ? new Recorder(resolve(options.record), session.store) : null;
   if (recorder) log("info", `Recording frames to ${recorder.path}`);
 
@@ -132,7 +167,7 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
       devOrigins,
       ...(options.pingIntervalMs ? { pingIntervalMs: options.pingIntervalMs } : {}),
       log,
-      routes: flightsApi(flights),
+      routes: (req) => flightRoutes(req) ?? economyRoutes(req),
       status: () => ({
         dataDir: options.dataDir,
         database: storage.path,
@@ -154,6 +189,7 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
     session,
     storage,
     flights,
+    economy,
     token: config.token,
     logFile: logger.file,
     log,

@@ -11,6 +11,7 @@ import {
   type Welcome,
 } from "../protocol";
 import type { LogFn, SimSource } from "../sim/source";
+import { EconomyEngine, type EconomyOptions } from "./economy/engine";
 import { FlightCore, type FlightCoreOptions } from "./flight-core";
 import { StateStore } from "./store";
 
@@ -31,15 +32,18 @@ const SIM_DERIVED_DOMAINS = [
 export type LinkListener = () => void;
 
 /** Flight-core options the session passes through (storage, clocks, thresholds). */
-export type SessionOptions = Omit<FlightCoreOptions, "store" | "log"> & {
+export type SessionOptions = Omit<FlightCoreOptions, "store" | "log" | "hooks"> & {
   /** Receive clock for updates without their own timestamp. Default Date.now. */
   receiveClock?: () => number;
+  /** Cargo operations (P3); without it job/mission commands are not implemented. */
+  economy?: Omit<EconomyOptions, "store" | "log">;
 };
 
 export class ConnectorSession {
   readonly id = randomUUID();
   readonly store: StateStore;
   readonly flight: FlightCore;
+  readonly economy: EconomyEngine | null;
   private readonly receiveClock: () => number;
   private readonly linkListeners = new Set<LinkListener>();
   private unsubscribe: (() => void) | null = null;
@@ -52,13 +56,20 @@ export class ConnectorSession {
     this.store = new StateStore(source.frameSource, (domain, reason) =>
       log("debug", `Ignored ${domain} update: ${reason}`),
     );
-    const { receiveClock, ...core } = options;
+    const { receiveClock, economy, ...core } = options;
     this.receiveClock = receiveClock ?? Date.now;
-    this.flight = new FlightCore({ ...core, store: this.store, log });
+    this.economy = economy ? new EconomyEngine({ ...economy, store: this.store, log }) : null;
+    this.flight = new FlightCore({
+      ...core,
+      store: this.store,
+      log,
+      ...(this.economy ? { hooks: this.economy.hooks() } : {}),
+    });
   }
 
   start(): void {
     if (this.unsubscribe) return;
+    this.economy?.start();
     this.unsubscribe = this.source.subscribe((update) => {
       switch (update.type) {
         case "connected":
@@ -72,11 +83,20 @@ export class ConnectorSession {
           break;
         }
         case "reset":
-          this.store.reset(update.state);
+          // Connector-owned economy domains survive a replay restart.
+          this.store.reset(
+            this.economy ? { ...update.state, ...this.economy.domains() } : update.state,
+          );
+          this.economy?.onStoreReset();
+          this.economy?.onAircraftTitle(update.state.aircraft?.title ?? null);
           this.flight.onReset(update.at ?? this.receiveClock());
           break;
         case "data":
           this.store.apply(update.patch);
+          if (update.patch.aircraft !== undefined && this.economy) {
+            const aircraft = this.store.getDomain("aircraft") as { title?: string } | null;
+            this.economy.onAircraftTitle(aircraft?.title ?? null);
+          }
           this.flight.onData(update.patch, update.at ?? this.receiveClock());
           break;
         case "event":
@@ -102,8 +122,9 @@ export class ConnectorSession {
     };
   }
 
-  /** Answer a client command (flight.start / flight.end; others not implemented). */
+  /** Answer a client command: job/mission/settings → economy, flight.* → flight core. */
   command(cmd: Command): Result {
+    if (this.economy?.handles(cmd.name)) return this.economy.command(cmd);
     return this.flight.command(cmd);
   }
 

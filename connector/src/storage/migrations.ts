@@ -75,4 +75,48 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE flights ADD COLUMN summary_json TEXT;
     `,
   },
+  {
+    // P3 cargo operations: missions (one flown leg carrying one or more jobs), the
+    // job ↔ mission link, and a simple ledger whose `category` values P4 extends
+    // (job_payout today; fuel, lease, loan_* … later). Company rows use the v1
+    // `company` table (id 'company'); jobs use the v1 `jobs` table plus two columns.
+    version: 3,
+    sql: `
+      ALTER TABLE jobs ADD COLUMN created_at INTEGER;
+      ALTER TABLE jobs ADD COLUMN mission_id TEXT;
+      CREATE INDEX jobs_origin ON jobs (origin, status);
+      CREATE TABLE missions (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        dest TEXT NOT NULL,
+        aircraft_type TEXT NOT NULL,
+        flight_id TEXT,
+        payload_kg REAL NOT NULL,
+        payout REAL,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        ended_at INTEGER,
+        json TEXT NOT NULL
+      );
+      CREATE INDEX missions_created_at ON missions (created_at);
+      CREATE INDEX missions_flight ON missions (flight_id);
+      CREATE TABLE mission_jobs (
+        mission_id TEXT NOT NULL REFERENCES missions (id) ON DELETE CASCADE,
+        job_id TEXT NOT NULL,
+        PRIMARY KEY (mission_id, job_id)
+      );
+      CREATE TABLE ledger (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at INTEGER NOT NULL,
+        category TEXT NOT NULL,
+        amount REAL NOT NULL,
+        ref_type TEXT,
+        ref_id TEXT,
+        memo TEXT,
+        json TEXT
+      );
+      CREATE INDEX ledger_at ON ledger (at);
+    `,
+  },
 ];

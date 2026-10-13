@@ -10,10 +10,18 @@
 // - The result is final (and emitted once) when the aircraft has stayed on the
 //   ground for `settleMs`, or has been airborne again for `goAroundMs` (a
 //   touch-and-go with a short contact).
-// - grade = min(rate grade, G grade, speed grade); speed grade is null until the
-//   aircraft catalogue provides reference speeds.
+// - grade = min(rate grade, G grade, speed grade); the speed grade compares the
+//   touchdown ground speed with the active aircraft type's typical approach speed
+//   (approximate catalogue figure, P3) and is null when no type is known.
 
-import { gGrade, landingGrade, rateGrade, type RateSource, type Touchdown } from "../protocol";
+import {
+  gGrade,
+  landingGrade,
+  rateGrade,
+  speedGrade,
+  type RateSource,
+  type Touchdown,
+} from "../protocol";
 import { GroundDebouncer, type FlightSample } from "./flight-sample";
 
 export interface LandingConfig {
@@ -58,6 +66,8 @@ export class LandingAnalyser {
   private contact: Contact | null = null;
   /** Sim time of the first contact of the last final touchdown. */
   lastContactMs: number | null = null;
+  /** Reference approach speed for the speed grade, kt (null = no speed grade). */
+  referenceSpeedKt: number | null = null;
 
   constructor(config: Partial<LandingConfig> = {}) {
     this.config = { ...DEFAULT_LANDING_CONFIG, ...config };
@@ -175,11 +185,11 @@ export class LandingAnalyser {
     this.contact = null;
     this.lastAirborne = null;
     this.lastContactMs = contact.first.tMs;
-    return buildTouchdown(contact);
+    return buildTouchdown(contact, this.referenceSpeedKt);
   }
 }
 
-function buildTouchdown(contact: Contact): Touchdown {
+function buildTouchdown(contact: Contact, referenceKt: number | null): Touchdown {
   const first = contact.first;
   let rateFpm: number;
   let rateSource: RateSource;
@@ -197,6 +207,7 @@ function buildTouchdown(contact: Contact): Touchdown {
   const peakG = contact.peakG;
   const rate = rateGrade(rateFpm) ?? "F";
   const g = gGrade(peakG) ?? "F";
+  const speed = speedGrade(first.gsKt, referenceKt);
   return {
     rateFpm: Math.round(rateFpm),
     rateSource,
@@ -207,9 +218,9 @@ function buildTouchdown(contact: Contact): Touchdown {
     lat: first.lat,
     lon: first.lon,
     bounces: contact.bounces,
-    grade: landingGrade(rateFpm, peakG, null) ?? "F",
+    grade: landingGrade(rateFpm, peakG, speed) ?? "F",
     rateGrade: rate,
     gGrade: g,
-    speedGrade: null,
+    speedGrade: speed,
   };
 }
