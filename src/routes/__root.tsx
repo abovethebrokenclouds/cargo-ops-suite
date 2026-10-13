@@ -80,10 +80,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "Cargo Ops" },
-      { name: "description", content: "Cargo airline manager for MSFS 2024." },
+      {
+        name: "description",
+        content:
+          "Cargo Ops: a private cargo-operations companion for Microsoft Flight Simulator 2020 and 2024.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
       {
@@ -120,7 +123,7 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <AppNav />
-      <main className="mx-auto max-w-6xl px-6 pb-20">
+      <main className="mx-auto max-w-7xl px-4 pb-24 md:px-6">
         <Outlet />
       </main>
     </QueryClientProvider>
