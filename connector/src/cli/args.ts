@@ -9,6 +9,7 @@ export interface CliOptions {
   port: number;
   web?: string;
   dataDir?: string;
+  basemapDir?: string;
   devOrigins: string[];
   open: boolean;
   lan: boolean;
@@ -41,6 +42,8 @@ Server
 Data
   --data-dir <dir>        Config, databases and logs (default: %LOCALAPPDATA%\\CargoOps on
                           Windows, $XDG_CONFIG_HOME/cargo-ops or ~/.config/cargo-ops elsewhere)
+  --basemap-dir <dir>     Local basemap folder served under /tiles/ (default: <data-dir>/basemap;
+                          fill it with scripts/fetch-basemap.ps1 or .sh)
   --reset-token           Generate a new access token (open browser tabs must reload)
 
 Other
@@ -116,7 +119,8 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
       case "--record":
       case "--port":
       case "--web":
-      case "--data-dir": {
+      case "--data-dir":
+      case "--basemap-dir": {
         const value = takeValue(flag, inline);
         if (typeof value !== "string") return { ok: false, error: value.error };
         if (flag === "--sim") {
@@ -139,6 +143,7 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
         } else if (flag === "--fixture") options.fixture = value;
         else if (flag === "--record") options.record = value;
         else if (flag === "--web") options.web = value;
+        else if (flag === "--basemap-dir") options.basemapDir = value;
         else options.dataDir = value;
         break;
       }
