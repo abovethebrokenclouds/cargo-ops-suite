@@ -16,6 +16,7 @@ import type { ReactNode } from "react";
 
 import { useHydrated } from "@/hooks/use-hydrated";
 
+import { ShortcutsButton } from "./KeyboardShortcuts";
 import { SimStatusChip } from "./status/SimStatusChip";
 
 type NavItem = {
@@ -104,7 +105,10 @@ export function AppNav({ statusSlot }: { statusSlot?: ReactNode }) {
       <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3 md:px-6">
         <Wordmark />
         <NavLinks className="hidden min-w-0 flex-1 justify-center xl:flex" />
-        <div className="ml-auto flex min-w-0 items-center xl:ml-0">{status}</div>
+        <div className="ml-auto flex min-w-0 items-center gap-2 xl:ml-0">
+          {status}
+          <ShortcutsButton />
+        </div>
       </div>
       <div className="border-t border-border/60 xl:hidden">
         <NavLinks className="scrollbar-none mx-auto max-w-7xl overflow-x-auto px-2 py-1.5 md:px-4" />

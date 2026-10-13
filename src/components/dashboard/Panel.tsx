@@ -24,7 +24,13 @@ export function Panel({
   children,
 }: PanelProps) {
   return (
-    <section className={cn("panel-elevated flex min-w-0 flex-col", className)}>
+    <section
+      className={cn(
+        "panel-elevated flex min-w-0 flex-col",
+        "animate-in fade-in slide-in-from-bottom-1 duration-300 motion-reduce:animate-none",
+        className,
+      )}
+    >
       <header className="flex items-center justify-between gap-3 border-b border-border px-5 py-4 md:px-6">
         <div className="flex min-w-0 items-center gap-3">
           {Icon ? (

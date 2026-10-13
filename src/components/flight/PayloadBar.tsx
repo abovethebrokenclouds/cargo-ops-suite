@@ -2,22 +2,22 @@ import type { PayloadState } from "@cargo-ops/protocol";
 
 import { EMPTY, formatInt } from "@/lib/format";
 import type { WeightsView } from "@/lib/flight/flight-view";
+import { formatWeightLb, weightFromLb, type WeightUnit } from "@/lib/settings/units";
 import { cn } from "@/lib/utils";
 
 export type PayloadBarProps = {
   weights: WeightsView | null;
   stations?: PayloadState["stations"] | null;
+  /** Display unit (per-browser preference); the simulator reports pounds. */
+  unit?: WeightUnit;
 };
-
-function lb(n: number | null | undefined) {
-  return n === null || n === undefined ? EMPTY : `${formatInt(n)} lb`;
-}
 
 /**
  * Stacked weight bar: empty weight, payload and fuel (plus anything else) against max
  * gross weight. No CG. Null weights render an idle rail with em dashes.
  */
-export function PayloadBar({ weights, stations }: PayloadBarProps) {
+export function PayloadBar({ weights, stations, unit = "lb" }: PayloadBarProps) {
+  const lb = (n: number | null | undefined) => formatWeightLb(n, unit);
   const scale = weights ? Math.max(weights.maxGrossLb, weights.totalLb, 1) : 1;
   const pct = (n: number) => `${(n / scale) * 100}%`;
   const loadPct =
@@ -36,11 +36,11 @@ export function PayloadBar({ weights, stations }: PayloadBarProps) {
               data-empty={weights ? undefined : ""}
               data-testid="payload-lb"
             >
-              {weights ? formatInt(weights.payloadLb) : EMPTY}
+              {weights ? formatInt(weightFromLb(weights.payloadLb, unit)) : EMPTY}
             </span>
             {weights ? (
               <span className="font-mono text-sm font-medium uppercase text-muted-foreground">
-                lb
+                {unit}
               </span>
             ) : null}
           </p>

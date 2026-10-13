@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { PageHero } from "@/components/AppNav";
 import { MissionStrip } from "@/components/cargo/MissionStrip";
+import { ConnectionNotice } from "@/components/status/ConnectionNotice";
 import { LiveFlightView } from "@/components/flight/LiveFlightView";
 import { routeView } from "@/lib/flight/flight-view";
 import type { ClientSimState } from "@/lib/sim-state";
@@ -50,6 +51,7 @@ function Flight() {
   return (
     <>
       <PageHero eyebrow="Live flight" title={title} sub={heroSub(state)} />
+      <ConnectionNotice state={state} className="mb-4" />
       <MissionStrip mission={state.sim.mission ?? null} source={state.source} className="mb-4" />
       <LiveFlightView />
     </>

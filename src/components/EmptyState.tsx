@@ -1,9 +1,9 @@
 import type { LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
-export type EmptyStateProps = {
+export type EmptyStateProps = Omit<HTMLAttributes<HTMLDivElement>, "title"> & {
   icon?: LucideIcon;
   title: string;
   description?: ReactNode;
@@ -20,9 +20,11 @@ export function EmptyState({
   eyebrow,
   action,
   className,
+  ...rest
 }: EmptyStateProps) {
   return (
     <div
+      {...rest}
       className={cn(
         "panel-inset flex flex-col items-center justify-center gap-3 px-6 py-10 text-center",
         className,

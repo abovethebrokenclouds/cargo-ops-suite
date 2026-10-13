@@ -1,11 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Database, Gauge, Map as MapIcon, Plug } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 
 import { PageHero } from "@/components/AppNav";
-import { Panel } from "@/components/dashboard/Panel";
-import { Switch } from "@/components/ui/switch";
-import { useOnlineMapsSetting } from "@/lib/settings/map-settings";
+import {
+  BasemapPanel,
+  ConnectorPanel,
+  DataPanel,
+  DemoPanel,
+  SimbriefPanel,
+  UnitsPanel,
+  type SettingsContext,
+} from "@/components/settings/SettingsPanels";
+import { useSimConnection } from "@/lib/transport/useSimConnection";
 
 export const Route = createFileRoute("/settings")({
   head: () => ({
@@ -13,116 +18,40 @@ export const Route = createFileRoute("/settings")({
       { title: "Settings — Cargo Ops" },
       {
         name: "description",
-        content: "Units, connector, basemap, backups and demo mode.",
+        content: "Units, connector, basemap, backups, career export and SimBrief import.",
       },
       { property: "og:title", content: "Settings — Cargo Ops" },
-      { property: "og:description", content: "Units, connector, basemap, backups and demo mode." },
+      {
+        property: "og:description",
+        content: "Units, connector, basemap, backups, career export and SimBrief import.",
+      },
     ],
   }),
   component: SettingsPage,
 });
 
-type Row = { label: string; value: string; note?: string; control?: "online-maps" };
-type Group = { title: string; eyebrow: string; icon: LucideIcon; rows: Row[] };
-
-const groups: Group[] = [
-  {
-    title: "Units",
-    eyebrow: "Display",
-    icon: Gauge,
-    rows: [
-      { label: "Altitude", value: "ft" },
-      { label: "Speed", value: "kt" },
-      { label: "Weight", value: "kg" },
-      { label: "Fuel", value: "lb" },
-    ],
-  },
-  {
-    title: "Connector",
-    eyebrow: "Simulator link",
-    icon: Plug,
-    rows: [
-      { label: "Address", value: "127.0.0.1:4311", note: "P1" },
-      { label: "Pairing token", value: "Not paired", note: "P1" },
-      { label: "Demo mode", value: "On" },
-    ],
-  },
-  {
-    title: "Basemap",
-    eyebrow: "Map",
-    icon: MapIcon,
-    rows: [
-      { label: "Order", value: "Local → Online → Outline" },
-      { label: "Local", value: "PMTiles via connector" },
-      { label: "Online maps (OpenFreeMap)", value: "", control: "online-maps" },
-      { label: "Offline floor", value: "Natural Earth outline" },
-    ],
-  },
-  {
-    title: "Data",
-    eyebrow: "Backups",
-    icon: Database,
-    rows: [
-      { label: "Daily backup", value: "Not configured", note: "P6" },
-      { label: "Export / import", value: "Not available", note: "P6" },
-    ],
-  },
-];
-
 function SettingsPage() {
+  const { state, transportKind } = useSimConnection();
+  const ctx: SettingsContext = {
+    state,
+    served: transportKind === "live",
+    connected: state.connection === "live" || state.connection === "replay",
+  };
   return (
     <>
       <PageHero
         eyebrow="Settings"
         title="Configure."
-        sub="Mostly read-only for now. Each setting becomes editable in the phase noted beside it."
+        sub="Display units for this browser, the connector link, the basemap, backups and your career data."
       />
       <div className="grid-ops">
-        {groups.map((g) => (
-          <Panel
-            key={g.title}
-            className="col-span-12 md:col-span-6"
-            eyebrow={g.eyebrow}
-            title={g.title}
-            icon={g.icon}
-          >
-            <dl className="flex flex-col divide-y divide-border">
-              {g.rows.map((r) => (
-                <div key={r.label} className="flex items-center justify-between gap-4 py-3">
-                  <dt className="text-sm text-muted-foreground">{r.label}</dt>
-                  <dd className="flex items-center gap-2 font-mono text-sm text-foreground">
-                    {r.control === "online-maps" ? <OnlineMapsSwitch /> : r.value}
-                    {r.note ? (
-                      <span className="rounded-sm bg-secondary px-1.5 py-0.5 text-[0.625rem] tracking-[0.12em] text-muted-foreground">
-                        {r.note}
-                      </span>
-                    ) : null}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </Panel>
-        ))}
+        <UnitsPanel />
+        <ConnectorPanel ctx={ctx} />
+        <BasemapPanel ctx={ctx} />
+        <DemoPanel ctx={ctx} />
+        <DataPanel ctx={ctx} />
+        <SimbriefPanel ctx={ctx} />
       </div>
     </>
-  );
-}
-
-/** Per-browser toggle; off keeps the map fully offline (local PMTiles or the outline). */
-function OnlineMapsSwitch() {
-  const [enabled, setEnabled] = useOnlineMapsSetting();
-  return (
-    <span className="flex items-center gap-2">
-      <span className="text-xs text-muted-foreground">
-        {enabled === null ? "…" : enabled ? "On" : "Off"}
-      </span>
-      <Switch
-        checked={enabled ?? false}
-        disabled={enabled === null}
-        onCheckedChange={setEnabled}
-        aria-label="Allow online maps (OpenFreeMap)"
-        data-testid="online-maps-switch"
-      />
-    </span>
   );
 }

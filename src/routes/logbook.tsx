@@ -3,6 +3,7 @@ import { BookOpen, Download, MapPinned } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { PageHero } from "@/components/AppNav";
+import { ConnectionNotice } from "@/components/status/ConnectionNotice";
 import { EmptyState } from "@/components/EmptyState";
 import { PayoutBreakdown } from "@/components/cargo/PayoutBreakdown";
 import { MetricTile } from "@/components/dashboard/MetricTile";
@@ -89,9 +90,11 @@ function Logbook() {
         sub="Verified flights with landing grades, distance flown, missions and payouts."
       />
       <div className="grid-ops">
+        <ConnectionNotice state={state} />
         <MetricTile
           className="col-span-12 md:col-span-6 xl:col-span-3"
           label="Total hours"
+          animate
           value={totals?.hours ?? null}
           format={(n) => n.toFixed(1)}
           unit="h"
@@ -101,12 +104,14 @@ function Logbook() {
         <MetricTile
           className="col-span-6 xl:col-span-3"
           label="Flights"
+          animate
           value={totals?.flights ?? null}
           source={totals ? source : null}
         />
         <MetricTile
           className="col-span-6 xl:col-span-3"
           label="Distance"
+          animate
           value={totals?.nm ?? null}
           unit="nm"
           source={totals ? source : null}
@@ -114,6 +119,7 @@ function Logbook() {
         <MetricTile
           className="col-span-12 xl:col-span-3"
           label="Paid out"
+          animate
           value={totals?.paid ?? null}
           format={formatUsd}
           source={totals ? source : null}
@@ -166,7 +172,7 @@ function Logbook() {
           }
           bodyClassName="p-0 md:p-0"
         >
-          {!connector ? (
+          {state.connection === "demo" ? (
             <p
               className="border-b border-border px-5 py-3 text-xs text-muted-foreground md:px-6"
               data-testid="export-disabled-note"
@@ -238,7 +244,17 @@ function Logbook() {
             <div className="p-5 md:p-6">
               <EmptyState
                 icon={BookOpen}
-                title={connector ? "No flights logged yet" : "No logbook in demo mode"}
+                title={
+                  connector
+                    ? error
+                      ? "Logbook unavailable"
+                      : entries === null
+                        ? "Loading flights…"
+                        : "No flights logged yet"
+                    : state.connection === "demo"
+                      ? "No logbook in demo mode"
+                      : "Waiting for the connector"
+                }
                 description={
                   connector
                     ? (error ?? "Flights are recorded automatically from block-out to arrival.")

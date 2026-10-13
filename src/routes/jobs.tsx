@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Filter, Package, PackageCheck, RefreshCw, Truck } from "lucide-react";
+import { Filter, Package, PackageCheck, RefreshCw, Route as RouteIcon, Truck } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { CARGO_KINDS, type CargoKind, type Job } from "@cargo-ops/protocol";
 import { KIND_LABELS } from "@cargo-ops/economy";
 import { PageHero } from "@/components/AppNav";
+import { ConnectionNotice } from "@/components/status/ConnectionNotice";
 import { EmptyState } from "@/components/EmptyState";
 import { DemandEvents } from "@/components/cargo/DemandEvents";
 import { KindBadge, MissionCard } from "@/components/cargo/MissionCard";
@@ -23,6 +24,7 @@ import {
 } from "@/lib/economy/board";
 import { useCompanyView } from "@/lib/economy/company";
 import { formatInt, formatUsd } from "@/lib/format";
+import { usePlannedFlight } from "@/lib/settings/connector-data";
 import { useCommand, useSimConnection } from "@/lib/transport/useSimConnection";
 import { cn } from "@/lib/utils";
 
@@ -108,6 +110,8 @@ function Jobs() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const demo = state.connection === "demo";
+  // P6: the imported SimBrief plan (only when the player turned the import on).
+  const plan = usePlannedFlight(connector);
 
   const run = async (name: string, args: unknown, success: string) => {
     setBusy(true);
@@ -176,6 +180,7 @@ function Jobs() {
       />
 
       <div className="grid-ops">
+        <ConnectionNotice state={state} />
         {demo ? (
           <div
             className="panel-inset col-span-12 flex flex-wrap items-center gap-3 px-5 py-4 text-sm text-muted-foreground"
@@ -187,9 +192,53 @@ function Jobs() {
           </div>
         ) : null}
 
+        {plan ? (
+          <div
+            className="panel-inset col-span-12 flex flex-wrap items-center justify-between gap-3 px-5 py-4"
+            data-testid="planned-flight-banner"
+          >
+            <p className="flex min-w-0 items-center gap-3 text-sm text-muted-foreground">
+              <RouteIcon className="size-4 shrink-0 text-accent" aria-hidden="true" />
+              <span>
+                SimBrief plan{" "}
+                <span className="font-mono font-semibold text-foreground">
+                  {plan.origin} → {plan.destination}
+                </span>
+                {plan.aircraftIcao ? ` · ${plan.aircraftIcao}` : ""}
+                {plan.payloadKg !== null
+                  ? ` · planned payload ${formatInt(plan.payloadKg)} kg`
+                  : ""}
+                {" · "}
+                {
+                  available.filter(
+                    (j) => j.origin === plan.origin && j.destination === plan.destination,
+                  ).length
+                }{" "}
+                matching contracts on the board
+              </span>
+            </p>
+            <button
+              type="button"
+              className={secondaryButton}
+              disabled={busy}
+              data-testid="planned-flight-refresh"
+              onClick={() =>
+                void run(
+                  "jobs.refresh",
+                  { airport: plan.origin, destination: plan.destination },
+                  `Board refreshed for ${plan.origin} → ${plan.destination}`,
+                )
+              }
+            >
+              Show jobs on this route
+            </button>
+          </div>
+        ) : null}
+
         <MetricTile
           className="col-span-12 md:col-span-6 xl:col-span-4"
           label="Open payout"
+          animate
           value={jobs ? openPayout : null}
           format={formatUsd}
           size="xl"

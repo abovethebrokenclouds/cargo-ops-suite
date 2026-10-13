@@ -10,10 +10,12 @@ import { MissionStrip } from "@/components/cargo/MissionStrip";
 import { ConnectedStatusChip } from "@/components/status/ConnectedStatusChip";
 import { SourceTag } from "@/components/status/SourceTag";
 import { routeView } from "@/lib/flight/flight-view";
-import { EMPTY, formatMinutes, formatUsd } from "@/lib/format";
+import { EMPTY, formatInt, formatMinutes, formatUsd } from "@/lib/format";
 import { jobs } from "@/lib/mock-data";
 import { useAirportLookup } from "@/lib/economy/board";
 import { useCompanyView } from "@/lib/economy/company";
+import { useLogbook } from "@/lib/economy/logbook";
+import { connectionEmpty } from "@/lib/connection-empty";
 import { fuelEnduranceMin, type ClientSimState } from "@/lib/sim-state";
 import { useSimConnection } from "@/lib/transport/useSimConnection";
 
@@ -96,9 +98,12 @@ function Index() {
         payout: liveNext.payoutEstimate,
         deadline: formatMinutes(liveNext.timeLimitMin),
       }
-    : liveJobs
-      ? null
-      : jobs[0];
+    : !liveJobs && state.connection === "demo"
+      ? jobs[0]
+      : null;
+  const offline = connectionEmpty(state);
+  const logbook = useLogbook(state);
+  const recent = logbook.entries?.slice(0, 5) ?? null;
   const route = routeView(state);
   const endurance = fuelEnduranceMin(state.sim.fuel);
   const simName = state.sim.sim?.name ?? state.welcome?.sim.name ?? null;
@@ -106,7 +111,7 @@ function Index() {
   return (
     <>
       <PageHero
-        eyebrow={`Ops centre · Hub ${liveCompany?.base ?? "KMEM"}`}
+        eyebrow={liveCompany ? `Ops centre · Hub ${liveCompany.base}` : "Ops centre"}
         title="Move the world."
         sub="Your cargo operation for Microsoft Flight Simulator 2020 and 2024. Dispatch, fly, get paid."
       >
@@ -127,6 +132,7 @@ function Index() {
         <MetricTile
           className="col-span-12 md:col-span-6 xl:col-span-4"
           label="Company cash"
+          animate
           value={liveCompany ? liveCompany.cash : null}
           format={formatUsd}
           size="xl"
@@ -201,7 +207,13 @@ function Index() {
           eyebrow="Dispatch"
           title="Next best job"
           icon={Package}
-          action={liveJobs ? <SourceTag source={state.source} /> : <DemoTag />}
+          action={
+            liveJobs ? (
+              <SourceTag source={state.source} />
+            ) : state.connection === "demo" ? (
+              <DemoTag />
+            ) : null
+          }
         >
           {next ? (
             <div className="flex flex-wrap items-end justify-between gap-6">
@@ -230,7 +242,13 @@ function Index() {
               </div>
             </div>
           ) : (
-            <EmptyState icon={Package} title="No jobs available" />
+            <EmptyState
+              icon={Package}
+              title={offline?.title ?? "No jobs available"}
+              description={
+                offline?.description ?? "Refresh a board on the job board to generate contracts."
+              }
+            />
           )}
         </Panel>
 
@@ -244,9 +262,11 @@ function Index() {
           {fleetList.length === 0 ? (
             <EmptyState
               icon={Plane}
-              title={view.demo ? "Building the demo fleet…" : "No fleet data"}
+              title={view.demo ? "Building the demo fleet…" : (offline?.title ?? "No aircraft yet")}
               description={
-                view.demo ? undefined : "Start the local connector to manage your fleet."
+                view.demo
+                  ? undefined
+                  : (offline?.description ?? "Buy or lease an aircraft on the Fleet page.")
               }
             />
           ) : (
@@ -295,12 +315,58 @@ function Index() {
           eyebrow="Logbook"
           title="Recent flights"
           icon={History}
+          action={<SourceTag source={recent && recent.length > 0 ? state.source : null} />}
         >
-          <EmptyState
-            icon={History}
-            title="No flights logged yet"
-            description="Completed flights appear here with landing grade, distance and payload once tracking lands in P2–P3."
-          />
+          {recent && recent.length > 0 ? (
+            <ul className="flex flex-col gap-2" data-testid="dashboard-recent">
+              {recent.map((e) => (
+                <li
+                  key={e.id}
+                  className="panel-inset flex items-center justify-between gap-3 px-4 py-3"
+                >
+                  <div className="min-w-0">
+                    <p className="font-mono text-sm font-semibold text-foreground">
+                      {e.origin ?? "????"} → {e.destination ?? "????"}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {e.startedAt ? e.startedAt.slice(0, 16).replace("T", " ") : EMPTY} ·{" "}
+                      {e.distanceNm === null ? EMPTY : `${formatInt(e.distanceNm)} nm`} ·{" "}
+                      {e.mission ? e.mission.status : e.status}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-mono text-sm font-semibold text-accent">
+                      {e.landing?.grade ?? EMPTY}
+                    </p>
+                    <p className="font-tabular text-xs text-muted-foreground">
+                      {e.mission?.payout != null ? formatUsd(e.mission.payout) : EMPTY}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState
+              icon={History}
+              title={
+                offline?.title ??
+                (state.connection === "demo"
+                  ? "No logbook in demo mode"
+                  : logbook.error
+                    ? "Logbook unavailable"
+                    : recent === null
+                      ? "Loading flights…"
+                      : "No flights logged yet")
+              }
+              description={
+                offline?.description ??
+                (state.connection === "demo"
+                  ? "Run the local connector: tracked flights land here with grade, distance and payout."
+                  : (logbook.error ??
+                    "Flights are recorded automatically from block-out to arrival."))
+              }
+            />
+          )}
         </Panel>
       </div>
     </>
