@@ -17,14 +17,14 @@ build and owns the SQLite database.
 
 ## Commands (run in `connector/`)
 
-| Command                 | What it does                                                              |
-| ----------------------- | ------------------------------------------------------------------------- |
-| `npm ci`                | Install the exact dependency versions from `package-lock.json`.           |
-| `npm run build`         | Compile to `dist/` (connector + shared protocol).                         |
-| `npm start -- [flags]`  | Run `dist/connector/src/cli/main.js`.                                     |
-| `npm run typecheck`     | Type-check sources and tests without emitting.                            |
-| `npm test`              | Compile sources and tests to `dist-test/` and run them with `node:test`.  |
-| `npm run fixtures:sync` | Copy the web demo fixture into `fixtures/` (never edit the copy by hand). |
+| Command                 | What it does                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- |
+| `npm ci`                | Install the exact dependency versions from `package-lock.json`.                                         |
+| `npm run build`         | Compile to `dist/` (connector + shared protocol + economy) and copy the airport data into `dist/data/`. |
+| `npm start -- [flags]`  | Run `dist/connector/src/cli/main.js`.                                                                   |
+| `npm run typecheck`     | Type-check sources and tests without emitting.                                                          |
+| `npm test`              | Compile sources and tests to `dist-test/` and run them with `node:test`.                                |
+| `npm run fixtures:sync` | Copy the web demo fixture into `fixtures/` (never edit the copy by hand).                               |
 
 From the repository root on Windows, `scripts\start-cargo-ops.cmd` does all of this
 for you; see `docs/SETUP_WINDOWS.md`.
@@ -73,26 +73,40 @@ separation), `logs/connector.log`.
 Bound to `127.0.0.1` only. Every request must carry a `Host` header naming the
 connector (`127.0.0.1:<port>` or `localhost:<port>`), which blocks DNS rebinding.
 
-| Route                        | Auth                                                            | Response                                         |
-| ---------------------------- | --------------------------------------------------------------- | ------------------------------------------------ |
-| `GET /api/health`            | none                                                            | `{ ok, version, mode, sim }`                     |
-| `GET /api/session`           | `Origin` absent or an allowed origin                            | `{ token, wsUrl: "/ws" }`                        |
-| `GET /api/status`            | `Authorization: Bearer <token>`                                 | health + seq, clients, paths, store stats        |
-| `GET /api/flights`           | Bearer token                                                    | `{ flights: [...] }`, newest first (≤ 50)        |
-| `GET /api/flights/:id/track` | Bearer token                                                    | `{ id, points: [{ t, lat, lon, altFt, ... }] }`  |
-| other `/api/*`               | Bearer token                                                    | `404` JSON                                       |
-| `GET /ws`                    | allowed `Origin` **and** token (`?token=` or the first `hello`) | protocol v1 (below)                              |
-| `GET /*`                     | none                                                            | static SPA; extension-less paths → `_shell.html` |
+| Route                             | Auth                                                            | Response                                                                                                                                   |
+| --------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/health`                 | none                                                            | `{ ok, version, mode, sim }`                                                                                                               |
+| `GET /api/session`                | `Origin` absent or an allowed origin                            | `{ token, wsUrl: "/ws" }`                                                                                                                  |
+| `GET /api/status`                 | `Authorization: Bearer <token>`                                 | health + seq, clients, paths, store stats                                                                                                  |
+| `GET /api/flights`                | Bearer token                                                    | `{ flights: [...] }`, newest first (≤ 50)                                                                                                  |
+| `GET /api/flights/:id/track`      | Bearer token                                                    | `{ id, points: [{ t, lat, lon, altFt, ... }] }`                                                                                            |
+| `GET /api/jobs`                   | Bearer token                                                    | jobs domain: `{ boards, available, accepted, aircraft }`                                                                                   |
+| `GET /api/missions`               | Bearer token                                                    | `{ missions: [...] }`, newest first (≤ 50), with payout breakdowns                                                                         |
+| `GET /api/logbook`                | Bearer token                                                    | `{ flights: [...] }` joined with mission, payout, landing grade (≤ 200)                                                                    |
+| `GET /api/export/csv`             | Bearer token                                                    | logbook CSV download (`text/csv`)                                                                                                          |
+| `GET /api/export/gpx?flight=<id>` | Bearer token                                                    | GPX 1.1 track of one flight from the telemetry table                                                                                       |
+| `GET /api/export/json`            | Bearer token                                                    | JSON career export (company, jobs, missions, ledger, flights; no telemetry)                                                                |
+| `POST /api/import`                | Bearer token                                                    | JSON career import (zod-validated, ≤ 32 MB); `409 flight_active` during a flight or mission; the live database refuses replay/demo flights |
+| other `/api/*`                    | Bearer token                                                    | `404` JSON                                                                                                                                 |
+| `GET /ws`                         | allowed `Origin` **and** token (`?token=` or the first `hello`) | protocol v1 (below)                                                                                                                        |
+| `GET /*`                          | none                                                            | static SPA; extension-less paths → `_shell.html`                                                                                           |
 
 WebSocket session (`packages/protocol`): the client sends `hello` with the token →
 `welcome` (`mode: "live"` with SimConnect, `"replay"` with `--sim fake`; `sim.connected`
 is true only after node-simconnect's `open()` resolved) → `snapshot` → `delta`/`event`
 frames sharing one monotonic `seq`. `resync` returns a fresh snapshot. The server
 pings every 15 s. Commands: `flight.start` (needs the aircraft on the ground with the
-parking brake set; errors `flight_active`, `no_data`, `not_on_ground`, `brake_not_set`)
+parking brake set; errors `flight_active`, `no_data`, `not_on_ground`, `brake_not_set`;
+with a loaded mission also `not_at_origin` beyond 3 nm, `insufficient_fuel`, `over_mtow`)
 and `flight.end` (completed when Arrived; otherwise `not_arrived` unless
-`args.abort === true`, which ends it as `aborted`; `no_flight` without one). Every
-other command is answered with `ok: false, error.code: "not_implemented"`. When the simulator connects or disconnects, every client receives a
+`args.abort === true`, which ends it as `aborted`; `no_flight` without one). Cargo
+commands (P3, see `docs/ECONOMY.md`): `jobs.list`, `jobs.refresh {airport?, destination?}`,
+`job.accept {jobId}`, `job.release {jobId}`, `mission.load {jobIds}`, `mission.unload`,
+`mission.abort`, `settings.update {aircraftType?: key | null, base?}`; errors include
+`bad_args`, `unknown_airport`, `job_unavailable`, `job_not_accepted`, `job_loaded`,
+`mixed_route`, `payload_exceeded`, `runway_unsuitable`, `out_of_range`, `mission_active`,
+`no_mission`, `mission_in_progress`, `unknown_type`. Every other command is answered with
+`ok: false, error.code: "not_implemented"`. When the simulator connects or disconnects, every client receives a
 new `welcome` + `snapshot`, and simulator-derived domains are cleared on disconnect so
 stale values never look live. Close codes: `4401` bad/missing token, `4400` invalid
 first message, `4408` no hello within 5 s.
@@ -132,6 +146,28 @@ Flights (`flights` table; `summary_json` added by migration 2) and telemetry
 (`telemetry` table: 1 Hz, plus 5 Hz for the 60 s before each touchdown) are written
 to the database of the session's mode: `demo.db` for replays, `cargo-ops.db` live.
 
+## Cargo operations (P3)
+
+`src/core/economy/engine.ts` owns the `company`, `jobs` and `mission` domains and the
+`mission.started`, `mission.delivered`, `mission.failed` and `job.completed` events. It
+observes the flight core through hooks: start at the origin (3 nm), leg verification at
+Arrived (≥ 90 % of the great circle, parked within 3 nm of the destination, no teleport,
+not invalidated), payout with a full breakdown, crash → failed. Its domains survive a
+replay restart (they are merged into the reset snapshot). Boards are seeded from the
+company seed (fixed for a new demo/replay company, random for a new live one). Formulas
+and constants: `docs/ECONOMY.md`.
+
+Airport data: the job generator needs the bundled OurAirports subset (public domain,
+large + medium airports with longest runway and surface). `npm run build` (and
+`npm test`) copy `../src/assets/data/airports-major.json` into `dist/data/` with
+`scripts/copy-data.mjs`, so a built connector is self-contained; at runtime the loader
+looks for `data/airports-major.json` next to the build and falls back to the repository
+file. Without it the connector still runs, with job boards disabled (logged).
+
+Storage (migration 3): `missions`, `mission_jobs`, `ledger` (category `job_payout` now;
+P4 extends it), `jobs.created_at`/`mission_id`; the company record lives in the v1
+`company` table. Replays write `demo.db`, live sessions `cargo-ops.db`.
+
 ## Protocol sharing
 
 The connector uses the exact zod schemas from `packages/protocol/src` without
@@ -158,13 +194,14 @@ connector/
   src/sim/       SimSource interface, SimConnectSource, FakeSource,
                  simvars.ts (THE SimVar table), mapping.ts (pure raw → domain functions)
   src/core/      StateStore (snapshot/delta/seq), ConnectorSession (welcome, link),
-                 Recorder (JSONL), config (data dir, token), logger
+                 Recorder (JSONL), config (data dir, token), logger,
+                 economy/ (job boards, missions, airport data loader)
   src/storage/   node:sqlite adapter (WAL, migrations; schema from plan §3.3)
   src/server/    node:http + ws server, origin/host/token checks, static serving
   src/cli/       argument parsing, app composition, main entry point
   test/          node:test suites (compiled to dist-test/)
   fixtures/      replay fixtures (demo-kmem-katl.jsonl is SYNTHETIC; see fixtures/README.md)
-  scripts/       clean.mjs, sync-fixtures.mjs
+  scripts/       clean.mjs, sync-fixtures.mjs, copy-data.mjs
 ```
 
 ## SimConnect notes (unverified until tested on the PC)

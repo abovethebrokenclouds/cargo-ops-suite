@@ -30,6 +30,8 @@
       "zod": ["./node_modules/zod"]
     }
   },
-  "include": ["src/**/*.ts", "../packages/protocol/src/**/*.ts"],
-  "exclude": ["../packages/protocol/src/**/*.test.ts", "node_modules", "dist", "dist-test"]
+  "include": ["src/**/*.ts", "../packages/protocol/src/**/*.ts", "../packages/economy/src/**/*.ts"],
+  "exclude": [
+    "../packages/protocol/src/**/*.test.ts",
+    "../packages/economy/src/**/*.test.ts", "node_modules", "dist", "dist-test"]
 }

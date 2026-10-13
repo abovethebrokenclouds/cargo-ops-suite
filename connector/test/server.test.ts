@@ -100,7 +100,7 @@ describe("connector server (FakeSource over a real WebSocket)", () => {
     client.ws.close();
   });
 
-  it("answers ping with pong, flight commands with checks, others with not_implemented", async () => {
+  it("answers ping with pong, flight/job commands with checks, others with not_implemented", async () => {
     const client = await connectClient(wsUrl, origin);
     client.send(hello(connector.token));
     await client.next((m) => m.type === "welcome");
@@ -111,7 +111,8 @@ describe("connector server (FakeSource over a real WebSocket)", () => {
     const expected: Array<[string, string]> = [
       ["flight.start", "brake_not_set"],
       ["flight.end", "no_flight"],
-      ["job.accept", "not_implemented"],
+      ["job.accept", "bad_args"],
+      ["fleet.buy", "not_implemented"],
     ];
     for (const [name, code] of expected) {
       client.send({ type: "command", v: PROTOCOL_VERSION, id: `c-${name}`, name, args: {} });

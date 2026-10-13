@@ -48,8 +48,8 @@ export const DERIVED_EVENTS: ReadonlySet<EventName> = new Set<EventName>([
   "flight.started",
   "flight.ended",
 ]);
-/** Domains the connector derives itself; dropped from fixtures. */
-export const DERIVED_DOMAINS = ["phase", "flight"] as const;
+/** Domains the connector derives (flight core) or owns (economy); dropped from fixtures. */
+export const DERIVED_DOMAINS = ["phase", "flight", "company", "jobs", "mission"] as const;
 
 function stripDerived<T extends SimState | SimStatePatch>(value: T): T {
   const out = { ...value };
@@ -115,6 +115,11 @@ export class FakeSource implements SimSource {
   playAll(): void {
     for (const frame of this.frames) this.play(frame);
     this.loops++;
+  }
+
+  /** Emit frames [from, to) synchronously (tests: stop mid-flight to send commands). */
+  playRange(from: number, to: number = this.frames.length): void {
+    for (const frame of this.frames.slice(from, to)) this.play(frame);
   }
 
   async stop(): Promise<void> {

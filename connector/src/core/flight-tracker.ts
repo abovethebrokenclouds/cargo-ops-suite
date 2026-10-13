@@ -150,8 +150,19 @@ export class FlightTracker {
     this.flight?.landings.push(td);
   }
 
-  /** flight.start: on the ground with the parking brake set, no flight running. */
-  start(s: FlightSample | null, onGround: boolean | null, ctx: TrackerContext): TrackerResult {
+  /** flight.start preconditions without starting: null when a start would be accepted. */
+  precheck(
+    s: FlightSample | null,
+    onGround: boolean | null,
+  ): { ok: false; code: string; message: string } | null {
+    const r = this.check(s, onGround);
+    return r.ok ? null : r;
+  }
+
+  private check(
+    s: FlightSample | null,
+    onGround: boolean | null,
+  ): { ok: true; sample: FlightSample } | { ok: false; code: string; message: string } {
     if (this.flight) {
       return { ok: false, code: "flight_active", message: "A flight is already running" };
     }
@@ -166,6 +177,14 @@ export class FlightTracker {
     if (s.parkingBrake !== true) {
       return { ok: false, code: "brake_not_set", message: "Start requires the parking brake set" };
     }
+    return { ok: true, sample: s };
+  }
+
+  /** flight.start: on the ground with the parking brake set, no flight running. */
+  start(s: FlightSample | null, onGround: boolean | null, ctx: TrackerContext): TrackerResult {
+    const check = this.check(s, onGround);
+    if (!check.ok) return check;
+    s = check.sample;
     this.beginLeg(s);
     const event = this.startFlight(ctx);
     return { ok: true, record: event.data, events: [event] };

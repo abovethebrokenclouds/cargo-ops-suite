@@ -30,6 +30,21 @@ import { PhaseFsm, type PhaseFsmConfig, type PhaseTransition } from "./phase-fsm
 import type { StateStore } from "./store";
 import { TelemetryRecorder } from "./telemetry-recorder";
 
+/** Optional observers (the economy engine) of the flight core's lifecycle. */
+export interface FlightHooks {
+  /** Extra flight.start preconditions (e.g. the loaded mission's origin); null = allowed. */
+  beforeStart?(sample: FlightSample): { code: string; message: string } | null;
+  /** Every processed sample, after the tracker (flight = the running flight's domain). */
+  onSample?(sample: FlightSample, flight: FlightState | null, onGround: boolean | null): void;
+  onFlightStarted?(record: FlightRecord, explicit: boolean): void;
+  /** After the flight row is saved, before the flight.ended event. */
+  onFlightEnded?(record: FlightRecord, last: FlightSample | null): void;
+  /** The store was reset (session start, replay restart). */
+  onReset?(): void;
+  /** Reference approach speed for the landing speed grade, kt. */
+  referenceSpeedKt?(): number | null;
+}
+
 export interface FlightCoreOptions {
   store: StateStore;
   log?: LogFn;
@@ -40,6 +55,7 @@ export interface FlightCoreOptions {
   phase?: Partial<PhaseFsmConfig>;
   landing?: Partial<LandingConfig>;
   tracker?: Partial<TrackerConfig>;
+  hooks?: FlightHooks;
 }
 
 export class FlightCore {
@@ -53,11 +69,14 @@ export class FlightCore {
   private readonly repo: FlightRepo | null;
   private lastSample: FlightSample | null = null;
   private publishedFlightId: string | null = null;
+  private explicitStart = false;
+  hooks: FlightHooks;
 
   constructor(options: FlightCoreOptions) {
     this.store = options.store;
     this.log = options.log ?? (() => {});
     this.repo = options.repo ?? null;
+    this.hooks = options.hooks ?? {};
     this.fsm = new PhaseFsm(options.phase);
     this.analyser = new LandingAnalyser(options.landing);
     this.tracker = new FlightTracker(
@@ -79,6 +98,7 @@ export class FlightCore {
     this.telemetry.end();
     this.lastSample = null;
     this.publishedFlightId = null;
+    this.hooks.onReset?.();
     this.process(atMs);
   }
 
@@ -101,12 +121,21 @@ export class FlightCore {
   /** flight.start / flight.end; other commands are not implemented yet. */
   command(cmd: Command): Result {
     if (cmd.name === "flight.start") {
+      const pre = this.tracker.precheck(this.lastSample, this.fsm.onGround);
+      if (pre) return failure(cmd.id, pre.code, pre.message);
+      const blocked = this.lastSample ? (this.hooks.beforeStart?.(this.lastSample) ?? null) : null;
+      if (blocked) return failure(cmd.id, blocked.code, blocked.message);
+      this.explicitStart = true;
       const result = this.tracker.start(this.lastSample, this.fsm.onGround, this.context());
-      if (!result.ok) return failure(cmd.id, result.code, result.message);
+      if (!result.ok) {
+        this.explicitStart = false;
+        return failure(cmd.id, result.code, result.message);
+      }
       const transition = this.fsm.restart();
       if (transition) this.publishPhase(transition);
       if (this.lastSample) this.telemetry.begin(this.lastSample.tMs);
       this.handleTrackerEvents(result.events);
+      this.explicitStart = false;
       this.publishFlight();
       return success(cmd.id, result.record);
     }
@@ -172,6 +201,7 @@ export class FlightCore {
     }
     if (transition) this.publishPhase(transition);
 
+    this.analyser.referenceSpeedKt = this.hooks.referenceSpeedKt?.() ?? null;
     const touchdown = this.analyser.update(sample);
     if (touchdown) {
       this.store.event("touchdown", touchdown);
@@ -194,6 +224,11 @@ export class FlightCore {
     this.telemetry.sample(sample, this.fsm.phase);
     this.handleTrackerEvents(events);
     this.publishFlight();
+    this.hooks.onSample?.(
+      sample,
+      this.tracker.active ? this.tracker.domain() : null,
+      this.fsm.onGround,
+    );
   }
 
   private publishPhase(transition: PhaseTransition): void {
@@ -208,9 +243,13 @@ export class FlightCore {
         this.persist(() => this.repo?.save(record));
         this.telemetry.attach(record.id);
         this.log("info", `Flight ${record.id} started`);
+        this.store.event(event.name, record);
+        this.hooks.onFlightStarted?.(record, this.explicitStart);
+        continue;
       } else {
         this.persist(() => this.repo?.save(record));
         this.telemetry.end();
+        this.hooks.onFlightEnded?.(record, this.lastSample);
         this.log(
           "info",
           `Flight ${record.id} ended (${record.status}): ${record.distanceNm} nm, block ${record.blockMin} min`,
