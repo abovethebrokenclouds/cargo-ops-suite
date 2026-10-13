@@ -22,3 +22,10 @@ Record on the Windows PC with `--record <file>` (see `docs/SETUP_WINDOWS.md`). A
 recording starts with a snapshot and contains frames with `source: "sim"`; it replays
 with `--sim fake --fixture <file>`. Commit real recordings here without the `demo-`
 prefix and note the simulator, aircraft and date in this file.
+
+## `simbrief-ofp.handmade.json` (HAND-MADE, not a recording)
+
+A SimBrief OFP in JSON written by hand for the P6 import tests (`connector/test/simbrief.test.ts`,
+`packages/protocol/src/simbrief.test.ts`). Field names follow SimBrief's publicly documented JSON
+format as far as known; every value is invented. It is not a SimBrief response and contains no
+real account. Replace it with a real OFP fetched on the PC once the import is verified.

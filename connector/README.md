@@ -43,6 +43,7 @@ for you; see `docs/SETUP_WINDOWS.md`.
                         the Vite dev origins http://localhost:8080, http://127.0.0.1:8080
 --data-dir <dir>        Config, databases, logs (default below)
 --reset-token           Generate a new access token
+--backup-keep <n>       Database backups kept in <data-dir>/backups (default 14; 0 = no daily backup)
 --open                  Open the browser when ready (start / open / xdg-open)
 --verbose               Debug logging
 --lan                   Not implemented; refuses to start
@@ -66,7 +67,7 @@ npm start -- --record fixtures/kmem-katl-2026-10-20.jsonl   # record a real flig
 
 Contents: `config.json` (the access token, 32 random bytes as hex, created on first
 run), `cargo-ops.db` (live sessions), `demo.db` (replay sessions; plan §3.2 demo
-separation), `logs/connector.log`.
+separation), `logs/connector.log`, `backups/` (P6, below).
 
 ## HTTP and WebSocket API
 
@@ -94,6 +95,12 @@ connector (`127.0.0.1:<port>` or `localhost:<port>`), which blocks DNS rebinding
 | `GET /api/export/gpx?flight=<id>`       | Bearer token                                                    | GPX 1.1 track of one flight from the telemetry table                                                                                                                                                                                                               |
 | `GET /api/export/json`                  | Bearer token                                                    | JSON career export v4 (company with demand activity and milestones, jobs, missions, ledger, flights, fleet with P5 systems/defects and insurance, loans, aircraft events, used market listings, FBOs, FBO transactions, demand events; no telemetry); v1–v3 import |
 | `POST /api/import`                      | Bearer token                                                    | JSON career import (zod-validated, ≤ 32 MB); `409 flight_active` during a flight or mission; the live database refuses replay/demo flights                                                                                                                         |
+| `GET /api/backups`                      | Bearer token                                                    | `{ dir, keep, database, backups: [{ name, sizeBytes, createdAt, kind: daily\|manual }], restore: [steps] }`, newest first                                                                                                                                          |
+| `POST /api/backups`                     | Bearer token                                                    | on-demand `VACUUM INTO` backup → `201 { backup, removed }`; `409 backup_exists` within the same second                                                                                                                                                             |
+| `GET /api/simbrief`                     | Bearer token                                                    | `{ settings: { enabled, username, userId }, plan, endpoint, verified: false }`                                                                                                                                                                                     |
+| `PUT /api/simbrief`                     | Bearer token                                                    | update `{ enabled?, username?, userId? }` (strict zod; `400 bad_request`)                                                                                                                                                                                          |
+| `POST /api/simbrief/import`             | Bearer token                                                    | fetch the latest OFP → `{ plan }`; `409 simbrief_disabled`/`simbrief_no_user`/`simbrief_busy`, `429 rate_limited` (30 s), `504 simbrief_timeout`, `502 simbrief_unreachable`/`simbrief_error`/`simbrief_invalid`                                                   |
+| `DELETE /api/simbrief/plan`             | Bearer token                                                    | forget the planned flight                                                                                                                                                                                                                                          |
 | other `/api/*`                          | Bearer token                                                    | `404` JSON                                                                                                                                                                                                                                                         |
 | `GET /ws`                               | allowed `Origin` **and** token (`?token=` or the first `hello`) | protocol v1 (below)                                                                                                                                                                                                                                                |
 | `GET /*`                                | none                                                            | static SPA; extension-less paths → `_shell.html`                                                                                                                                                                                                                   |
@@ -263,6 +270,27 @@ sim AI), `fbo.built` (construction or module done), `demand.event`, `milestone.r
 `insurance.claim`. Domains: `fbos`, `demand` (new), `insurance` on owned fleet aircraft,
 `milestones` on the company. Storage: migration 6 (`fbos`, `fbo_modules`,
 `fbo_transactions`, `demand_events`, `demand_index`, `insurance_policies`, `milestones`).
+
+## Backups, SimBrief and packaging (P6)
+
+`src/storage/backups.ts`: `VACUUM INTO <data-dir>/backups/<db>-YYYYMMDD.db` at start and then
+hourly when today's file is missing (live database only), on-demand
+`<db>-YYYYMMDD-HHMMSS.db` through `POST /api/backups`, then rotation to the newest
+`--backup-keep` files of that database (`<db>` is `cargo-ops` or `demo`). Restore is manual
+with the connector stopped (docs/SETUP_WINDOWS.md §6).
+
+`src/core/simbrief.ts`: optional SimBrief OFP import, off by default. The player's username or
+pilot ID is kept in the `settings` table; `POST /api/simbrief/import` fetches
+`https://www.simbrief.com/api/xml.fetcher.php?(userid|username)=…&json=1` with a
+`CargoOps/<version>` User-Agent, one request at a time, at most one per 30 s, 10 s timeout,
+no retries, and maps it with `packages/protocol/src/simbrief.ts` (tested against the
+HAND-MADE `fixtures/simbrief-ofp.handmade.json`; unverified against a real OFP). The username
+is never logged.
+
+Packaging: no single-file executable is built — that would bundle `node-simconnect`
+(LGPL-3.0-or-later); it stays an unmodified module in `node_modules`. The supported launcher
+is `scripts\start-cargo-ops.cmd`; `scripts\create-shortcut.ps1` adds Start-menu, desktop and
+startup shortcuts.
 
 ## Protocol sharing
 

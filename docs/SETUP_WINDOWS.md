@@ -87,6 +87,7 @@ Everything lives in `%LOCALAPPDATA%\CargoOps` (paste that into Explorer's addres
 | `cargo-ops.db`       | Your career database (live flights only).                          |
 | `demo.db`            | Database used by replays (`--sim fake`), kept separate on purpose. |
 | `logs\connector.log` | Connector log. Attach it when something goes wrong.                |
+| `backups\`           | Daily and on-demand database backups (newest 14 kept).             |
 
 **Token reset:** stop the connector and start it with `--reset-token`
 (`scripts\start-cargo-ops.cmd --reset-token`), or delete `config.json`. Reload open
@@ -94,6 +95,28 @@ browser tabs afterwards. The token only protects the local API from other web pa
 the page served by the connector fetches it automatically.
 
 Use `--data-dir <folder>` to keep everything somewhere else.
+
+### Backups and restore
+
+While the connector runs it writes a daily copy of the career database to
+`%LOCALAPPDATA%\CargoOps\backups\cargo-ops-YYYYMMDD.db` (SQLite `VACUUM INTO`, a consistent
+copy even mid-session) and keeps the newest **14** (`--backup-keep 30` keeps more,
+`--backup-keep 0` turns the daily backup off). **Settings → Data → Back up now** writes an
+extra `cargo-ops-YYYYMMDD-HHMMSS.db` at any time, and the list of backups is shown there.
+Replays (`--sim fake`) never write daily backups; their on-demand backups are named
+`demo-….db`.
+
+Restoring is done by hand, with the connector **stopped** (there is no restore button on
+purpose — replacing an open database is not safe):
+
+1. Close the connector window (or press Ctrl+C in it).
+2. Copy the current `cargo-ops.db` somewhere safe.
+3. Copy the backup you want over `%LOCALAPPDATA%\CargoOps\cargo-ops.db`.
+4. Delete `cargo-ops.db-wal` and `cargo-ops.db-shm` next to it if they exist.
+5. Start Cargo Ops again and reload the browser tab.
+
+**Settings → Data** also exports the whole career as one JSON file and imports such a file
+(import replaces the current career; back up first).
 
 ## 7. Recording your first real fixture
 
@@ -200,3 +223,60 @@ Downloads `airports.csv` and `runways.csv` from OurAirports (public domain) into
 `data\ourairports\` (git-ignored) and regenerates `src\assets\data\airports-major.json`
 (large and medium airports with the longest runway). `data\ourairports\SOURCE.md` records
 the date. Rebuild the web app afterwards (`scripts\start-cargo-ops.cmd -Rebuild`).
+
+## 11. Install as an app (PWA) in Edge or Chrome
+
+Cargo Ops ships a web app manifest and its own icons, served by the connector, so the browser
+can install it as a separate window with its own taskbar icon:
+
+1. Start Cargo Ops and open <http://127.0.0.1:4311>.
+2. **Edge:** menu `…` → **Apps** → **Install Cargo Ops**. **Chrome:** the install icon at the
+   right end of the address bar, or menu `⋮` → **Cast, save and share** → **Install page as
+   app…** (older versions: **Install Cargo Ops…**).
+3. Launch it from the Start menu like any app. It still needs the connector running: the
+   installed window is just the same page without browser chrome.
+
+There is no service worker (nothing is cached offline; the app always talks to the live
+connector). Current Chrome and Edge no longer require one for installation; if your browser
+does not offer **Install**, use **Create shortcut… → Open as window** instead, and note it in
+`docs/VERIFICATION.md`. If you change the port, the installed app keeps the old address —
+reinstall it from the new one.
+
+## 12. Shortcuts and starting with Windows
+
+Create Start-menu and desktop shortcuts to the launcher (no administrator rights needed):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\create-shortcut.ps1              # Start menu + desktop
+powershell -ExecutionPolicy Bypass -File scripts\create-shortcut.ps1 -Startup     # also start with Windows
+powershell -ExecutionPolicy Bypass -File scripts\create-shortcut.ps1 -Remove -Startup   # undo -Startup
+```
+
+`-Startup` puts a shortcut into your Startup folder (`shell:startup`) that runs
+`scripts\start-cargo-ops.cmd -NoOpen` in a minimised window, so the connector is up when you
+open the installed app. To do it by hand: press Win+R, type `shell:startup`, and create a
+shortcut there to `scripts\start-cargo-ops.cmd` with `-NoOpen` appended to the target.
+
+## 13. Why there is no single .exe
+
+The plan allowed an optional single-file connector executable (for example with
+`@yao-pkg/pkg`). It is deliberately **not** built: such a tool bundles every dependency into
+the executable, and `node-simconnect` is LGPL-3.0-or-later — Cargo Ops keeps it as an
+ordinary, unmodified, separately replaceable module in `connector\node_modules` with its
+licence text, which is the simple way to honour the LGPL. Packaging an exe that leaves it
+outside would save little over the current launcher. `scripts\start-cargo-ops.cmd` (plus
+the shortcuts above) is the supported way to start Cargo Ops.
+
+## 14. SimBrief flight plans (optional, off by default)
+
+**Settings → SimBrief flight plan import** can fetch your latest SimBrief OFP: turn it on,
+enter **your own** SimBrief username or pilot ID (free SimBrief account; the pilot ID is in
+your SimBrief account settings), Save, then **Import latest OFP**. The connector then sends
+your username/ID to `www.simbrief.com` (public fetch API, no key) — nothing is sent before you
+press Import. The job board shows the planned route and a button that refreshes the board with
+contracts from the planned origin to the planned destination.
+
+At most one request per 30 s, 10 s timeout, no automatic retries. The username is stored only
+in your local database (`settings` table), never in the repository. The field mapping was
+written against SimBrief's documented format and a hand-made sample: please check that the
+imported route, fuel and payload match your OFP and note it in `docs/VERIFICATION.md`.
