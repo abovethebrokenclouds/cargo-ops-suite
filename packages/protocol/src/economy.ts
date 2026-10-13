@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AIRCRAFT_TYPE_SOURCES } from "./aircraft-types";
+import { companyClockSchema } from "./company";
 import { landingGradeSchema } from "./landing";
 
 // Cargo operations (plan §5 P3, §7): jobs, missions, the minimal company and the
@@ -123,9 +124,24 @@ export type MissionStatus = z.infer<typeof missionStatusSchema>;
 
 const reasonSchema = z.object({ code: z.string().min(1), message: z.string() });
 
+/** One operating cost of a flown mission (P4): fuel, landing fee, lease hours. */
+export const missionCostSchema = z.object({
+  key: z.enum(["fuel", "landing_fee", "lease"]),
+  label: z.string(),
+  /** Dollars charged (positive number; booked as a negative ledger entry). */
+  amount: finite().nonnegative(),
+  note: z.string().optional(),
+});
+export type MissionCost = z.infer<typeof missionCostSchema>;
+
 export const missionPayoutSchema = z.object({
+  /** Sum of the job payouts (revenue), dollars. */
   total: finite().nonnegative(),
   jobs: z.array(payoutBreakdownSchema),
+  /** Operating costs of the flight (P4; absent in P3 records). */
+  costs: z.array(missionCostSchema).optional(),
+  /** total − costs (P4), dollars. */
+  net: finite().optional(),
 });
 export type MissionPayout = z.infer<typeof missionPayoutSchema>;
 
@@ -158,10 +174,17 @@ export const missionSchema = z.object({
   landingGrade: landingGradeSchema.optional(),
   payout: missionPayoutSchema.optional(),
   reputationDelta: finite().optional(),
+  /** Fleet aircraft the mission is flown with (P4). */
+  aircraftId: z.string().optional(),
+  registration: z.string().optional(),
+  /** Costs charged when the flight ended without a payout (P4). */
+  costs: z.array(missionCostSchema).optional(),
+  /** Condition lost on this flight, percentage points (P4). */
+  wear: finite().nonnegative().optional(),
 });
 export type Mission = z.infer<typeof missionSchema>;
 
-/** `company` state domain (minimal until P4). */
+/** `company` state domain. P4 fields are optional so P3 frames still parse. */
 export const companyDomainSchema = z.object({
   name: z.string().min(1),
   base: icao(),
@@ -169,6 +192,16 @@ export const companyDomainSchema = z.object({
   reputation: finite().min(0).max(100),
   /** floor(reputation / 20), 0–5. */
   reputationTier: z.number().int().min(0).max(5),
+  /** Tier name (Startup … Elite). */
+  tierName: z.string().optional(),
+  /** Credit score 0–850. */
+  creditScore: z.number().int().min(0).max(850).optional(),
+  /** cash + owned aircraft value − debt. */
+  netWorth: finite().optional(),
+  /** Outstanding loan principal. */
+  debt: finite().nonnegative().optional(),
+  startingCash: finite().optional(),
+  clock: companyClockSchema.optional(),
 });
 export type CompanyState = z.infer<typeof companyDomainSchema>;
 

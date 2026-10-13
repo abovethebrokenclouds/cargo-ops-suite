@@ -7,6 +7,9 @@ import { z } from "zod";
 // payload with typical fuel, range the practical range with a moderate load,
 // cruise a typical cruise TAS, fuel burn a typical cruise burn, and approach a
 // typical final-approach speed used as the landing speed-grade reference (§6.3).
+// P4 adds engine count, a Vmo/Vne figure for the overspeed detector, a new-aircraft
+// price and lease rates: APPROXIMATE gameplay figures (in-house, rounded from public
+// list-price reporting), not quotes and not copied from any dataset.
 
 /** Runway surface classes derived from OurAirports surface codes. */
 export const SURFACE_CLASSES = ["paved", "gravel", "turf", "dirt", "water", "unknown"] as const;
@@ -39,6 +42,19 @@ export const aircraftTypeSchema = z.object({
   fuelBurnKgH: z.number().positive(),
   /** Typical final-approach speed, kt: the landing speed-grade reference. */
   approachKt: z.number().positive(),
+  /** Engine count (dry leases bill per engine-hour). */
+  engines: z.number().int().positive(),
+  /**
+   * Maximum operating / never-exceed indicated airspeed, kt (approximate): above it for
+   * 3 s of simulator time counts one overspeed event in the wear model.
+   */
+  vmoKt: z.number().positive(),
+  /** New-aircraft catalogue price, USD (approximate, gameplay; not a quote). */
+  priceUsd: z.number().positive(),
+  /** Dry lease rate, USD per engine-hour of block time (fuel billed separately). */
+  dryLeaseUsdPerEngineHour: z.number().positive(),
+  /** Wet lease rate, USD per block hour, fuel included. */
+  wetLeaseUsdPerBlockHour: z.number().positive(),
   /**
    * TITLE match rules: the type matches when every keyword of ANY group appears in
    * the lower-cased TITLE. Earlier catalogue entries win.
@@ -62,6 +78,11 @@ export const AIRCRAFT_TYPES: readonly AircraftType[] = [
     surfaces: UNPAVED,
     fuelBurnKgH: 110,
     approachKt: 60,
+    engines: 1,
+    vmoKt: 151,
+    priceUsd: 2_300_000,
+    dryLeaseUsdPerEngineHour: 280,
+    wetLeaseUsdPerBlockHour: 650,
     match: [["porter"], ["pc-6"], ["pc6"]],
   },
   {
@@ -75,6 +96,11 @@ export const AIRCRAFT_TYPES: readonly AircraftType[] = [
     surfaces: UNPAVED,
     fuelBurnKgH: 150,
     approachKt: 70,
+    engines: 1,
+    vmoKt: 182,
+    priceUsd: 2_600_000,
+    dryLeaseUsdPerEngineHour: 300,
+    wetLeaseUsdPerBlockHour: 750,
     match: [["kodiak"]],
   },
   {
@@ -88,6 +114,11 @@ export const AIRCRAFT_TYPES: readonly AircraftType[] = [
     surfaces: UNPAVED,
     fuelBurnKgH: 170,
     approachKt: 80,
+    engines: 1,
+    vmoKt: 175,
+    priceUsd: 2_700_000,
+    dryLeaseUsdPerEngineHour: 320,
+    wetLeaseUsdPerBlockHour: 800,
     match: [["208"], ["caravan"]],
   },
   {
@@ -101,6 +132,11 @@ export const AIRCRAFT_TYPES: readonly AircraftType[] = [
     surfaces: UNPAVED,
     fuelBurnKgH: 280,
     approachKt: 75,
+    engines: 2,
+    vmoKt: 170,
+    priceUsd: 7_000_000,
+    dryLeaseUsdPerEngineHour: 380,
+    wetLeaseUsdPerBlockHour: 1_600,
     match: [["twin otter"], ["dhc-6"], ["dhc6"]],
   },
   {
@@ -114,6 +150,11 @@ export const AIRCRAFT_TYPES: readonly AircraftType[] = [
     surfaces: ["paved", "gravel", "turf"],
     fuelBurnKgH: 230,
     approachKt: 85,
+    engines: 1,
+    vmoKt: 240,
+    priceUsd: 5_500_000,
+    dryLeaseUsdPerEngineHour: 520,
+    wetLeaseUsdPerBlockHour: 1_150,
     match: [["pc-12"], ["pc12"]],
   },
   {
@@ -127,6 +168,11 @@ export const AIRCRAFT_TYPES: readonly AircraftType[] = [
     surfaces: ["paved", "gravel"],
     fuelBurnKgH: 300,
     approachKt: 100,
+    engines: 2,
+    vmoKt: 263,
+    priceUsd: 8_000_000,
+    dryLeaseUsdPerEngineHour: 420,
+    wetLeaseUsdPerBlockHour: 1_700,
     match: [["king air"], ["kingair"], ["b350"]],
   },
   {
@@ -140,6 +186,11 @@ export const AIRCRAFT_TYPES: readonly AircraftType[] = [
     surfaces: ["paved"],
     fuelBurnKgH: 750,
     approachKt: 115,
+    engines: 2,
+    vmoKt: 250,
+    priceUsd: 20_000_000,
+    dryLeaseUsdPerEngineHour: 650,
+    wetLeaseUsdPerBlockHour: 3_400,
     match: [["atr 72"], ["atr72"], ["atr-72"], ["atr 42"], ["atr42"]],
   },
   {
@@ -153,6 +204,11 @@ export const AIRCRAFT_TYPES: readonly AircraftType[] = [
     surfaces: ["paved"],
     fuelBurnKgH: 1_000,
     approachKt: 125,
+    engines: 2,
+    vmoKt: 286,
+    priceUsd: 25_000_000,
+    dryLeaseUsdPerEngineHour: 750,
+    wetLeaseUsdPerBlockHour: 4_000,
     match: [["dash 8"], ["dash8"], ["dhc-8"], ["q400"]],
   },
   {
@@ -166,6 +222,11 @@ export const AIRCRAFT_TYPES: readonly AircraftType[] = [
     surfaces: ["paved"],
     fuelBurnKgH: 2_500,
     approachKt: 135,
+    engines: 2,
+    vmoKt: 350,
+    priceUsd: 35_000_000,
+    dryLeaseUsdPerEngineHour: 1_300,
+    wetLeaseUsdPerBlockHour: 8_500,
     match: [["a320"], ["a321"]],
   },
   {
@@ -179,6 +240,11 @@ export const AIRCRAFT_TYPES: readonly AircraftType[] = [
     surfaces: ["paved"],
     fuelBurnKgH: 2_500,
     approachKt: 145,
+    engines: 2,
+    vmoKt: 340,
+    priceUsd: 40_000_000,
+    dryLeaseUsdPerEngineHour: 1_400,
+    wetLeaseUsdPerBlockHour: 9_000,
     match: [["737"], ["b738"]],
   },
   {
@@ -192,6 +258,11 @@ export const AIRCRAFT_TYPES: readonly AircraftType[] = [
     surfaces: ["paved"],
     fuelBurnKgH: 10_000,
     approachKt: 160,
+    engines: 4,
+    vmoKt: 365,
+    priceUsd: 180_000_000,
+    dryLeaseUsdPerEngineHour: 3_500,
+    wetLeaseUsdPerBlockHour: 30_000,
     match: [["747"], ["b748"]],
   },
 ];
@@ -214,7 +285,8 @@ export function matchAircraftType(title: string | null | undefined): AircraftTyp
   return null;
 }
 
-export const AIRCRAFT_TYPE_SOURCES = ["override", "title", "default"] as const;
+/** override: manual type; fleet: the selected fleet aircraft (P4); title: TITLE match. */
+export const AIRCRAFT_TYPE_SOURCES = ["override", "fleet", "title", "default"] as const;
 export type AircraftTypeSource = (typeof AIRCRAFT_TYPE_SOURCES)[number];
 
 /** Resolve the active type: manual override → TITLE match → default. */
