@@ -1,4 +1,4 @@
-# Cargo Ops — Economy (P3 + P4)
+# Cargo Ops — Economy (P3 + P4 + P5)
 
 Every formula, constant and rule of the cargo operations lane, as implemented. The
 code is `packages/economy/src` (pure, deterministic, shared by the connector and the
@@ -394,10 +394,247 @@ tagged DEMO with all actions disabled.
 
 ## Deferred
 
-- P5: used aircraft and per-system defects, airworthiness inspections, ferry permits and
-  ferry flights (moving aircraft without a mission), FBOs (FBO collateral), insurance
-  premiums (category exists), dynamic demand and fuel prices, milestones (placeholder on
-  the Company page), IFR/night/weather condition bonuses, small/GA airports, transit
-  cargo.
+- P5 part 2 (next lane): FBOs (own maintenance shops extend `isMaintenanceCapable`, FBO
+  collateral), insurance premiums (category exists), dynamic demand and fuel prices,
+  milestones (placeholder on the Company page), IFR/night/weather condition bonuses,
+  small/GA airports, transit cargo.
 - Leases are never cancelled for non-payment: their monthly fee is booked even when it
   drives cash negative (only loans have a missed-payment path).
+
+---
+
+# P5 — used aircraft and airworthiness
+
+Code: `packages/economy/src/{maintenance-constants,airworthiness,market}.ts` and the P5
+parts of `book.ts` (pure, seeded, shared by the connector and the browser demo); the
+connector's `core/economy/engine.ts` (dispatch gate on `mission.load` / `flight.start`,
+ferry flights, dry-tank detection, commands); protocol `packages/protocol/src/maintenance.ts`.
+Every constant lives in `maintenance-constants.ts`. Worked examples are unit tests in
+`packages/economy/test/maintenance.test.ts` and `connector/test/airworthiness.test.ts`.
+
+## Systems and the P4 `condition`
+
+Every airframe tracks ten systems, each with a condition 0–100 % and a list of defects:
+
+| System                       | Weight | Cost factor | Time factor |
+| ---------------------------- | ------ | ----------- | ----------- |
+| Engine(s)                    | 0.20   | 1.6         | 1.5         |
+| Propeller / thrust reversers | 0.06   | 1.0         | 1.0         |
+| Airframe / structure         | 0.20   | 1.3         | 1.3         |
+| Landing gear & brakes        | 0.12   | 0.9         | 1.0         |
+| Avionics                     | 0.08   | 1.0         | 0.8         |
+| Electrical                   | 0.07   | 0.6         | 0.8         |
+| Fuel system                  | 0.08   | 0.7         | 1.0         |
+| Hydraulics                   | 0.07   | 0.7         | 1.0         |
+| Cargo hold / door            | 0.07   | 0.5         | 0.7         |
+| Interior / paint             | 0.05   | 0.4         | 0.6         |
+
+- **The P4 `condition` is now derived**: `condition = Σ weight × system condition` (to
+  0.01 %). The protocol field keeps its meaning (and the P4 overhaul/value formulas keep
+  using it), so P4 clients still read a correct number.
+- **Migration of P4 aircraft** (on load, after migration 5): the stored condition is mapped
+  onto every system (so the weighted mean is unchanged), no defects, a current annual
+  inspection dated at the company clock and airframe hours of the first P5 load, and a P4
+  repair in progress becomes an already-paid overhaul order ending at its `readyAtGameMs`.
+- **Wear** (P4 formula unchanged) lands on the systems so the weighted mean drops by exactly
+  the P4 wear (until a system reaches 0): flight-hour and crash wear evenly; touchdown-G wear
+  half evenly, half on gear + airframe (`Δ = 0.5 × g / (0.12 + 0.20)`); overspeed wear half
+  evenly, half on the airframe (`Δ = 0.5 × o / 0.20`).
+  Example (P4's 150 min, 1.85 G, one overspeed: 1.25 + 3 + 5 = 9.25): every system −5.25,
+  gear −4.6875 more, airframe −4.6875 − 12.5 more → engines **94.75**, gear **90.06**,
+  airframe **77.56**, condition **90.75** = 100 − 9.25. The replayed KMEM→KATL leg (0.88)
+  leaves every system at 99.12 %.
+- The P4 **overhaul** (`fleet.repair`) is unchanged: 8 % × price × wear / 100, 2 h + 1.5 h ×
+  wear; it brings every system back to 100 % (it does not fix defects).
+
+## Defects
+
+`{ id, system, severity, title, repairCost, downtimeHours, hidden, cause, foundGameMs?,
+fuelBurnPct?, payloadPct?, deferredAtHours? }`. Titles are short generated phrases per
+system and severity (in-house).
+
+| Severity  | Cost share of the catalogue price | Hours | Effect                                                                                                                                                           |
+| --------- | --------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| cosmetic  | 0.04 %                            | 4     | none                                                                                                                                                             |
+| minor     | 0.2 %                             | 8     | +1 % fuel; must be repaired or **deferred** (MEL) to fly; a deferral lasts 30 flight hours                                                                       |
+| major     | 0.8 %                             | 24    | +5–15 % fuel and −5–15 % max payload (rolled per defect, payload penalty ≤ 30 % in total); escalates to grounding with 3 % per airborne hour (≤ 50 % per flight) |
+| grounding | 2.5 %                             | 60    | not airworthy until repaired                                                                                                                                     |
+
+```
+repair cost (maintenance airport) = price × severity share × system cost factor × parts rarity
+downtime   (maintenance airport) = severity hours × system time factor
+field repair (elsewhere)          = cost × 1.35, time × 1.5
+parts rarity: PC-6 1.25, DHC-6 1.2, 747-8F 1.2, Kodiak 1.15, ATR/Dash 8 1.1, PC-12 1.05, others 1
+```
+
+Examples (C208B $2.7M): engine grounding **$108,000 / 90 h** (field $145,800 / 135 h);
+engine major **$34,560 / 36 h**; gear minor **$4,860 / 8 h**; interior cosmetic **$432 /
+2.4 h**; a PC-6 engine grounding costs **$115,000** (rarity 1.25). Fuel billed after a
+flight = kg burned × (1 + known defect fuel % / 100) × the airport price (the cost note
+says so); `mission.load` caps the payload at `payload limit × (1 − payload penalty)`.
+
+## Airworthiness gate (plan §7.1)
+
+Dispatch (`mission.load`, an explicit `flight.start`, a ferry permit request) first lets
+**hidden defects surface** (`defect.found` each; `aircraft.grounded` when one grounds it),
+then requires:
+
+1. no known **grounding** defect (`grounding_defect`);
+2. every known **minor** defect repaired or deferred (`minor_not_deferred`) and no deferral
+   past 30 flight hours (`deferral_expired`);
+3. every **system ≥ 20 %** (`system_below_minimum`);
+4. a current **annual inspection** (`annual_due`): due 12 in-game months (360 days) or
+   100 flight hours after the last one, whichever first; "soon" within 30 days or 10 h.
+
+Major defects do not block dispatch (they cost fuel and payload and may escalate). A
+refusal is `aircraft_unairworthy` with a message listing every reason and `error.reasons`
+(`[{code, message}]`, additive in the result schema). An explicit `flight.start` without a
+mission is refused the same way when the selected fleet aircraft is parked where the sim
+is (free flights in other aircraft are unaffected). Badge: **Airworthy**, **Grounded**,
+**Ferry only** (a permit is active), **Annual due** (the annual is the only reason).
+
+Annual inspection (`fleet.annual`): **0.4 % of the catalogue price × rarity × shop factor**,
+downtime by category (single-piston 12 h, single-turboprop 16, twin-turboprop 24, regional
+36, narrowbody 48, widebody 72) × shop time factor; on completion the clock restarts at
+that time and the airframe hours, and hidden defects surface (`inspection.completed`).
+C208B: **$10,800 / 16 h** at a large airport, $14,580 / 24 h elsewhere; PC-6 $11,500.
+
+Deferral (`fleet.defer`): minor defects only, free; records the airframe hours.
+Example: deferred at 10 h → 30 h left; at 40.5 h the gate reports `deferral_expired`.
+
+## Ferry permits
+
+- **Maintenance-capable airports**: `MaintenanceCapability.isMaintenanceCapable(icao)`;
+  P5 part 1 = every **large** airport of the bundled data. The FBO lane wraps it with the
+  player's own maintenance shops (and may lower the shop factors).
+- **Eligible** (`fleet.ferryPermit`): available, no known grounding defect, every system
+  ≥ 10 %, and a reason to ferry (the gate fails, or a major defect is open); not already at
+  a maintenance-capable airport (`at_maintenance_airport`: repair there); destination =
+  the **nearest** maintenance-capable airport within the type's range.
+- Fee **$400 × the landing-fee category factor** (C208B $400, 737 $3,200), ledger `permit`;
+  **payload cap 10 % of max payload** (C208B 136 kg: crew and baggage).
+- The aircraft is **Ferry only**: `mission.load` refuses it (`ferry_only`, no job revenue).
+  The next flight without a mission by the selected aircraft, starting within 3 nm of the
+  permit origin, is the ferry: an explicit start is refused above the payload cap
+  (`ferry_payload_cap`); at the end the leg books fuel, the landing fee and wear (and
+  defect rolls) with `refType = "ferry"`, the aircraft moves to where it parked, and the
+  permit is used up (once airborne). A connector restart mid-ferry keeps the permit unused.
+- Example (connector test, only KATL capable): C208B at KMEM with 100 h since the annual →
+  permit KMEM→KATL 287.7 nm, $400, ≤ 136 kg; the replayed flight with 250 lb payload books
+  fuel + the $300 KATL landing fee, no payout; then the annual at KATL ($10,800, 16 h).
+
+## Repair queue
+
+Every repair, overhaul and annual is a **maintenance order** `{kind, defectIds, airport,
+shop, cost, hours, startGameMs, readyAtGameMs}`, paid when queued. Orders of one aircraft
+run **back to back** on the company clock (`start = max(now, last order's end)`); the
+aircraft is `maintenance` until its last order ends (`repair.completed` / `inspection.completed`).
+`fleet.repairDefect` repairs one known defect, `fleet.repairAll` every known defect not
+yet queued, at the shop where the aircraft is parked. The fleet domain's `maintenance`
+list is the board (ETA = `readyAtGameMs`). Example: engine grounding $108,000 / 90 h
+queued, then the gear minor ($4,860 / 8 h) starts at 90 h and ends at 98 h.
+
+## Wear → new defects (seeded per flight)
+
+Seed = FNV-1a(company seed, aircraft id, "flight", cycles before, flight ref). New defects
+are known at once (`defect.found`, `aircraft.grounded` when grounding):
+
+- a system crossing **75 / 50 / 30 %** rolls **50 %** for a defect on it (75: cosmetic 40 /
+  minor 60; 50: minor 60 / major 40; 30: major 60 / grounding 40);
+- **hard landing** peak G > 1.6: chance `0.3 + (G − 1.6) / 0.4` (≤ 1) of a gear (60 %) or
+  airframe (40 %) defect: < 1.9 G minor/major (60/40), < 2.3 G major/grounding (70/30),
+  ≥ 2.3 G grounding (1.7 G → 55 %);
+- **overspeed**: per event 50 % for an airframe minor or major (50/50);
+- **tanks run dry**: an engine major and a fuel-system minor. Detected by the connector
+  when, during a mission or ferry flight and airborne, the sim's fuel quantity drops to
+  `max(1 lb, 0.5 % of the fuel at block-out)` (C208B with 1,700 lb: 8.5 lb);
+- **crash**: 2–4 grounding defects on distinct systems (airframe, gear, engines,
+  propeller); **written off** when the condition after the crash wear (+50) is below 25 %
+  (status `written_off`, leaves the fleet; a loan on it stays to be paid);
+- every open **major** escalates to grounding at 3 % per airborne hour (≤ 50 %).
+
+## Used market
+
+Generation seed = FNV-1a(company seed, "market", generation); 12 listings per generation,
+a new generation every **7 in-game days** (`market.refresh` on demand); listings with an
+inspection pending or done stay across generations.
+
+- **Type**: weighted by category (single 3, twin 2, regional 1.5, narrowbody 1,
+  widebody 0.5). **Location**: 65 % within 600 nm of the base, else any bundled airport;
+  its runway must suit the type (a ferry may be needed to bring it home).
+- **Age** 1–30 years; **hours** = age × category hours/year (single-piston 250,
+  single-turboprop 450, twin 550, regional 1,400, narrowbody 2,400, widebody 3,200) ×
+  0.6–1.4 (utilisation); **cycles** = hours × 1.3 / 1.1 / 1.0 / 0.9 / 0.6 / 0.2.
+- **Systems**: base = 95 − 1.1 × age − 8 × (utilisation − 1) ± 5 (35–98), each system
+  base −12…+8 (12–100).
+- **Defects**: `rand(0, 1 + ⌊age / 8⌋)` plus one more 25 % of the time; severity cosmetic 30 /
+  minor 34 / major 24 / grounding 12; hidden 10 / 25 / 35 / 50 %. Hidden defects never
+  leave the connector (not in frames, `/api/market` or the demo view).
+- **Seller note**: an opener + a tail by condition (≥ 80 good, ≥ 55 mid, else poor) from
+  short in-house phrases; "grounded" when a grounding defect is disclosed.
+
+### Value and asking price (listings and resale share it)
+
+```
+base      = price × max(0.4, 1 − 0.00002 × hours) × (0.7 + 0.3 × condition) × ageFactor
+ageFactor = max(0.4, 1 − 0.035 × completed years)
+discount  = min(0.6, 2 × known repair bill / base)          (hidden defects are not priced)
+value     = base × (1 − discount)
+asking    = round to $500 of value × (1 + noise), noise ∈ [−8 %, +8 %)
+```
+
+A new aircraft (age 0, no defects) is worth exactly the P4 market value, so P4 values and
+the $2.7M starter are unchanged in its first in-game year. Owned aircraft age with the
+company clock (12 × 30-day months a year). **Resale** (`fleet.sell`) = 90 % × this value,
+reputation unchanged.
+
+Worked example: C208B, 12 years, 6,000 h, 75 %, one known engine major ($34,560):
+P4 value 2.7M × 0.88 × 0.925 = $2,197,800; × 0.58 = **$1,274,724**; discount 2 × 34,560 /
+1,274,724 = **5.42 %**; value **$1,205,633.96**; with noise +3 % → asking **$1,242,000**;
+inspection fee **$6,210**.
+
+Bargain example (unit test, seed 4242, UL-1-8): a 26-year-old C208B with a disclosed
+grounding defect listed at $552,000; inspect, buy, repair everything, and the 90 % resale
+exceeds price + inspection + repairs.
+
+### Pre-purchase inspection and the uninspected purchase
+
+- `market.inspect`: fee **0.5 % of the asking price** (ledger `inspection`), done after
+  **24 in-game hours**: every hidden defect becomes known (`inspection.completed` with the
+  count).
+- `market.buy {listingId, financing?}` (same financing rules as `fleet.buy`; collateral =
+  the asking price): the aircraft is delivered where it is listed with its age, hours,
+  cycles, systems and defects (hidden ones stay hidden) and a current annual. **Without a
+  completed inspection** the purchase rolls (seed FNV-1a(company seed, "purchase",
+  listing id)) one extra **hidden grounding defect** with chance **8 % + 1.2 % per year of
+  age (≤ 45 %)**: 1 year 9.2 %, 20 years 32 %. Hidden defects surface on the first dispatch.
+
+### Acceptance (connector, `airworthiness.test.ts`)
+
+Seed 4242, generation 1: **UL-1-7**, a 4-year-old C208B at KYNG (medium) with nothing
+disclosed, asking $2,279,000. Bought uninspected (Jetwash-financed after a loan on the
+starter) it looks airworthy; the first `mission.load` at KYNG reveals the rolled interior
+grounding defect and is refused with `aircraft_unairworthy` / `grounding_defect`
+(`defect.found`, `aircraft.grounded`); `fleet.repairAll` at field rates (2.7M × 2.5 % × 0.4
+= $27,000 × 1.35 = **$36,450**, 36 h × 1.5 = **54 h**) → `aircraft_in_maintenance` → after
+54 in-game hours `repair.completed` → `mission.load` succeeds. **A used aircraft with a
+grounding defect cannot be dispatched until repaired.** The ledger balances throughout.
+
+## Storage, export, API (P5)
+
+Migration 5 (`CREATE TABLE IF NOT EXISTS market_listings(id, generation, type_key,
+location, asking_price, inspection, json)`, settings `economy.phase = 5`); fleet rows keep
+their table and gain JSON fields (systems, defects, annual, ferryPermit, orders,
+defectCounter, ageYears), normalised from P4 rows on load. The company record gains
+`marketGeneration`, `marketRefreshedGameMs`, `orderCounter` (defaults keep P4 rows valid).
+Career export **version 3** adds `market` (listings, hidden defects included, so an import
+restores them); versions 1 and 2 import (an empty market is regenerated). API:
+`GET /api/market` (Bearer). Demo/replay data stays in `demo.db`.
+
+## Demo (P5)
+
+`buildDemoCompany` also keeps a seeded market (refreshing every 7 days), inspects the
+cheapest affordable listing within 600 nm on day 52, buys it financed on day 53.5, defers
+its minor defects and queues the rest near the end, so the demo shows DEMO-tagged
+listings, a used aircraft with defects in the systems panel and a maintenance board ETA,
+with every action disabled.

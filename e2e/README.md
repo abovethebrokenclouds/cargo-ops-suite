@@ -14,7 +14,12 @@ Playwright specs, two projects:
   after arrival. Since P4 it also checks, through `/api/ledger` and `/api/fleet`, that the leg
   booked fuel at the landing airport's price and the landing fee, that the ledger balances and
   that the aircraft moved and wore as computed; the demo specs check that `/company` and `/fleet`
-  show DEMO-tagged seeded data with every action disabled.
+  show DEMO-tagged seeded data with every action disabled. P5: `used-aircraft.replay.spec.ts`
+  exercises the airworthiness gate through the connector API (WebSocket commands sent from the
+  page's own origin + `/api` reads): a used aircraft whose uninspected purchase hides a grounding
+  defect (picked deterministically from the replay company's seed) is refused on its first
+  dispatch with `grounding_defect`, and the repair lands on the maintenance board; the demo spec
+  checks the DEMO-tagged used market, systems panel and maintenance board.
 
 Neither project talks to a simulator. A real SimConnect session is only checked on the owner's
 Windows PC (see `docs/VERIFICATION.md`).

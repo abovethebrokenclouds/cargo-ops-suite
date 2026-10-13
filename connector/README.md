@@ -85,10 +85,11 @@ connector (`127.0.0.1:<port>` or `localhost:<port>`), which blocks DNS rebinding
 | `GET /api/ledger?limit&before&category` | Bearer token                                                    | `{ entries, months, cash, startingCash, sum, count, balanced }`: ledger rows newest first (≤ 5,000 per page, `before=<id>` pages back, `category` filters), monthly P&L, and whether Σ amounts = cash − starting cash |
 | `GET /api/fleet`                        | Bearer token                                                    | fleet domain (`aircraft`, `selectedId`, `selection`, `ambiguous`, `value`) + `catalogue` (prices, lease rates, tier gates) + the last 200 `events`                                                                    |
 | `GET /api/loans`                        | Bearer token                                                    | loans domain (`loans`, `creditScore`, `offers`, debt service, DTI) + `lenders`                                                                                                                                        |
+| `GET /api/market`                       | Bearer token                                                    | P5 used market domain (`listings` with known defects only, `generation`, `refreshedGameMs`, `nextRefreshGameMs`); hidden defects never leave the connector                                                            |
 | `GET /api/logbook`                      | Bearer token                                                    | `{ flights: [...] }` joined with mission, payout, landing grade (≤ 200)                                                                                                                                               |
 | `GET /api/export/csv`                   | Bearer token                                                    | logbook CSV download (`text/csv`)                                                                                                                                                                                     |
 | `GET /api/export/gpx?flight=<id>`       | Bearer token                                                    | GPX 1.1 track of one flight from the telemetry table                                                                                                                                                                  |
-| `GET /api/export/json`                  | Bearer token                                                    | JSON career export v2 (company, jobs, missions, ledger, flights, fleet, loans, aircraft events; no telemetry)                                                                                                         |
+| `GET /api/export/json`                  | Bearer token                                                    | JSON career export v3 (company, jobs, missions, ledger, flights, fleet with P5 systems/defects, loans, aircraft events, used market listings; no telemetry); v1/v2 import                                             |
 | `POST /api/import`                      | Bearer token                                                    | JSON career import (zod-validated, ≤ 32 MB); `409 flight_active` during a flight or mission; the live database refuses replay/demo flights                                                                            |
 | other `/api/*`                          | Bearer token                                                    | `404` JSON                                                                                                                                                                                                            |
 | `GET /ws`                               | allowed `Origin` **and** token (`?token=` or the first `hello`) | protocol v1 (below)                                                                                                                                                                                                   |
@@ -200,6 +201,37 @@ Company clock: `startConnector` ticks `economy.tick()` every second
 (`clockIntervalMs`, 0 disables it in tests); in-game time = max(wall Δ ≤ 60 s,
 simulator Δ). Storage: migration 4 (`fleet`, `aircraft_events`, `loans`,
 `ledger.balance`/`game_at`). Formulas: `docs/ECONOMY.md` (P4).
+
+## Used aircraft and airworthiness (P5, part 1)
+
+The book adds per-system condition and defects, the airworthiness gate, maintenance
+orders on the company clock and a seeded used market (formulas: `docs/ECONOMY.md`, P5).
+`mission.load` and an explicit `flight.start` (with a loaded mission, or without one when
+the selected aircraft is parked where the sim is) first let hidden defects surface, then
+refuse with `aircraft_unairworthy` and `error.reasons` (`grounding_defect`,
+`minor_not_deferred`, `deferral_expired`, `system_below_minimum`, `annual_due`); a
+loaded aircraft with a ferry permit is refused with `ferry_only`. A flight without a
+mission by the selected aircraft holding a permit, from the permit origin, is a ferry
+(fuel, landing fee and wear booked as `ferry`, no revenue). Fuel quantity reaching
+`max(1 lb, 0.5 % of block-out fuel)` in flight counts as dry tanks.
+
+| Command              | Args                        | Refusal codes                                                                                                                                                                                   |
+| -------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `market.refresh`     | `{}`                        | `no_airport_data`                                                                                                                                                                               |
+| `market.inspect`     | `{ listingId }`             | `unknown_listing`, `already_inspected`, `insufficient_cash`                                                                                                                                     |
+| `market.buy`         | `{ listingId, financing? }` | `unknown_listing`, `unknown_type`, `reputation_gate`, `unknown_lender`, `credit_score_too_low`, `ltv_exceeded`, `bad_term`, `insufficient_cash`                                                 |
+| `fleet.repairDefect` | `{ aircraftId, defectId }`  | `unknown_aircraft`, `aircraft_busy`, `aircraft_on_mission`, `unknown_defect`, `already_queued`, `insufficient_cash`                                                                             |
+| `fleet.repairAll`    | `{ aircraftId }`            | `unknown_aircraft`, `aircraft_busy`, `aircraft_on_mission`, `no_defects`, `insufficient_cash`                                                                                                   |
+| `fleet.annual`       | `{ aircraftId }`            | `unknown_aircraft`, `aircraft_busy`, `aircraft_on_mission`, `already_queued`, `insufficient_cash`                                                                                               |
+| `fleet.ferryPermit`  | `{ aircraftId }`            | `unknown_aircraft`, `aircraft_busy`, `aircraft_on_mission`, `permit_active`, `ferry_not_allowed`, `at_maintenance_airport`, `ferry_out_of_range`, `no_maintenance_airport`, `insufficient_cash` |
+| `fleet.defer`        | `{ aircraftId, defectId }`  | `unknown_aircraft`, `unknown_defect`, `not_deferrable`, `already_deferred`                                                                                                                      |
+
+Events: `defect.found`, `inspection.completed` (pre-purchase or annual),
+`aircraft.grounded` (also on a write-off). Domains: `market` (new) and P5 fields on every
+fleet aircraft (`systems`, `airworthiness`, `annual`, `ferryPermit`, `maintenance`,
+`repairAllCost/Hours`, `ageYears`) plus the fleet `maintenance` board. Storage:
+migration 5 (`market_listings`; P4 fleet rows normalised on load). `EconomyOptions.maintenance`
+injects the `MaintenanceCapability` (default: large airports; the FBO lane extends it).
 
 ## Protocol sharing
 
