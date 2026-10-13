@@ -7,6 +7,8 @@ import { defineConfig, devices } from "@playwright/test";
 const DEMO_PORT = 5180;
 const CONNECTOR_PORT = 4399;
 const executablePath = process.env["PW_CHROMIUM_PATH"];
+// MapLibre needs WebGL; headless Chromium gets it from SwiftShader (software GL).
+const webglArgs = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
 
 export default defineConfig({
   testDir: "e2e",
@@ -17,7 +19,7 @@ export default defineConfig({
   reporter: process.env["CI"] ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     ...devices["Desktop Chrome"],
-    ...(executablePath ? { launchOptions: { executablePath } } : {}),
+    launchOptions: { args: webglArgs, ...(executablePath ? { executablePath } : {}) },
     trace: "retain-on-failure",
   },
   projects: [

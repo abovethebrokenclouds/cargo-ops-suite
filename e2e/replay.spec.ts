@@ -42,4 +42,30 @@ test.describe("replay mode against the local connector (--sim fake)", () => {
     const traversal = await request.get("/%2e%2e/%2e%2e/package.json");
     expect([400, 404]).toContain(traversal.status());
   });
+
+  test("/map without a local basemap falls back to the outline and tags REPLAY", async ({
+    page,
+  }) => {
+    const external: string[] = [];
+    page.on("request", (req) => {
+      const host = new URL(req.url()).hostname;
+      if (host !== "127.0.0.1" && host !== "localhost") external.push(req.url());
+    });
+    await page.addInitScript(() => window.localStorage.setItem("cargo-ops.map.online", "off"));
+    await page.goto("/map");
+    await expect(page.getByTestId("ops-map")).toHaveAttribute("data-ready", "true", {
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId("basemap-badge")).toHaveText("Offline outline");
+    await expect(page.getByTestId("aircraft-marker")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("map-flight-panel").getByText("REPLAY")).toBeVisible();
+    expect(external).toEqual([]);
+  });
+
+  test("health reports the basemap and /tiles refuses bad names", async ({ request }) => {
+    const health = await request.get("/api/health");
+    expect((await health.json()).basemap).toEqual({ local: false });
+    expect((await request.get("/tiles/basemap.pmtiles")).status()).toBe(404);
+    expect((await request.get("/tiles/Bad_Name.pmtiles")).status()).toBe(400);
+  });
 });
