@@ -173,4 +173,25 @@ export const MIGRATIONS: readonly Migration[] = [
       INSERT OR REPLACE INTO settings (key, json) VALUES ('economy.phase', '4');
     `,
   },
+  {
+    // P5 used aircraft and airworthiness: the used market's listings (hidden defects
+    // included, so they live only in the database, never in a frame). Per-aircraft systems,
+    // defects, annual inspection, ferry permit and maintenance orders are new fields of the
+    // fleet row's JSON: a P4 row is normalised when it is loaded (its condition mapped onto
+    // every system, no defects, a current annual from the migration time).
+    version: 5,
+    sql: `
+      CREATE TABLE IF NOT EXISTS market_listings (
+        id TEXT PRIMARY KEY,
+        generation INTEGER NOT NULL,
+        type_key TEXT NOT NULL,
+        location TEXT NOT NULL,
+        asking_price REAL NOT NULL,
+        inspection TEXT NOT NULL,
+        json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS market_listings_generation ON market_listings (generation);
+      INSERT OR REPLACE INTO settings (key, json) VALUES ('economy.phase', '5');
+    `,
+  },
 ];

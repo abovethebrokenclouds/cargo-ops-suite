@@ -9,6 +9,7 @@ import { ledgerCategorySchema } from "../protocol";
 import {
   companyRecordSchema,
   fleetRecordSchema,
+  listingRecordSchema,
   loanRecordSchema,
   type EconomyRepo,
   type LogbookEntry,
@@ -178,12 +179,16 @@ const aircraftEventRowSchema = z.object({
 });
 
 export const CAREER_FORMAT = "cargo-ops-career";
-/** Version 2 (P4) adds fleet, loans and aircraft events; version 1 (P3) is still accepted. */
-export const CAREER_VERSION = 2;
+/**
+ * Version 3 (P5) adds the used market's listings (and fleet rows carry systems, defects,
+ * annual, ferry permit and maintenance orders); version 2 (P4) adds fleet, loans and
+ * aircraft events; versions 1 and 2 are still accepted.
+ */
+export const CAREER_VERSION = 3;
 
 export const careerExportSchema = z.object({
   format: z.literal(CAREER_FORMAT),
-  version: z.union([z.literal(1), z.literal(2)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   exportedAt: z.string(),
   database: z.enum(["live", "demo"]),
   company: companyRecordSchema.nullable(),
@@ -194,6 +199,7 @@ export const careerExportSchema = z.object({
   fleet: z.array(fleetRecordSchema).default([]),
   loans: z.array(loanRecordSchema).default([]),
   aircraftEvents: z.array(aircraftEventRowSchema).default([]),
+  market: z.array(listingRecordSchema).default([]),
 });
 export type CareerExport = z.infer<typeof careerExportSchema>;
 export type CareerExportInput = z.input<typeof careerExportSchema>;
@@ -264,6 +270,7 @@ export function exportCareer(
     fleet: repo.listFleet(),
     loans: repo.listLoans(),
     aircraftEvents: repo.listAircraftEvents().map(({ id: _id, ...e }) => e),
+    market: repo.listListings(),
   };
 }
 
@@ -277,8 +284,9 @@ export type ImportResult =
         flights: number;
         fleet: number;
         loans: number;
+        market: number;
       };
-      version: 1 | 2;
+      version: 1 | 2 | 3;
     }
   | { ok: false; status: number; code: string; message: string };
 
@@ -314,7 +322,7 @@ export function importCareer(
   const db = repo.db;
   repo.transaction(() => {
     db.exec(
-      "DELETE FROM mission_jobs; DELETE FROM missions; DELETE FROM jobs; DELETE FROM ledger; DELETE FROM company; DELETE FROM fleet; DELETE FROM loans; DELETE FROM aircraft_events;",
+      "DELETE FROM mission_jobs; DELETE FROM missions; DELETE FROM jobs; DELETE FROM ledger; DELETE FROM company; DELETE FROM fleet; DELETE FROM loans; DELETE FROM aircraft_events; DELETE FROM market_listings;",
     );
     if (data.company) {
       // Version 1 companies get the P4 defaults from the schema; the counter and P&L are
@@ -332,6 +340,7 @@ export function importCareer(
     for (const a of data.fleet) repo.saveAircraft(a);
     for (const l of data.loans) repo.saveLoan(l);
     for (const e of data.aircraftEvents) repo.addAircraftEvent(e);
+    for (const l of data.market) repo.saveListing(l);
     const keep = new Set(data.flights.map((f) => f.id));
     const existing = db.prepare("SELECT id FROM flights").all() as Array<{ id: string }>;
     const del = db.prepare("DELETE FROM flights WHERE id = ?");
@@ -355,6 +364,7 @@ export function importCareer(
       flights: data.flights.length,
       fleet: data.fleet.length,
       loans: data.loans.length,
+      market: data.market.length,
     },
     version: data.version,
   };

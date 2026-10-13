@@ -28,6 +28,15 @@ import {
   fleetReturnArgsSchema,
   fleetSelectArgsSchema,
   fleetSellArgsSchema,
+  fleetAnnualArgsSchema,
+  fleetDeferArgsSchema,
+  fleetFerryPermitArgsSchema,
+  fleetRepairAllArgsSchema,
+  fleetRepairDefectArgsSchema,
+  marketBuyArgsSchema,
+  marketInspectArgsSchema,
+  marketRefreshArgsSchema,
+  type MarketState,
   loanPayoffArgsSchema,
   loanQuoteArgsSchema,
   loanTakeArgsSchema,
@@ -58,16 +67,17 @@ import {
 import {
   ARRIVAL_RADIUS_NM,
   CompanyBook,
+  formatGameTime,
   GameClockTicker,
   KG_PER_LB,
-  MIN_DISPATCH_CONDITION,
   OverspeedDetector,
-  isAirworthy,
   newCompanyCore,
+  tanksDryThresholdLb,
   round2,
   selectAircraft,
   type BookAircraft,
   type BookResult,
+  type MaintenanceCapability,
   type Selection,
   BOARD_REFRESH_SIM_MIN,
   REPUTATION,
@@ -113,12 +123,20 @@ export interface EconomyOptions {
   /** Seed for a newly created company (default: demo seed for replays, random live). */
   seed?: number;
   replay?: boolean;
+  /** P5: where maintenance is available (default: large airports; the FBO lane extends it). */
+  maintenance?: MaintenanceCapability;
 }
 
-type Fail = { ok: false; code: string; message: string };
+type Reason = { code: string; message: string };
+type Fail = { ok: false; code: string; message: string; reasons?: Reason[] };
 type Ok<T> = { ok: true; data: T };
 
-const fail = (code: string, message: string): Fail => ({ ok: false, code, message });
+const fail = (code: string, message: string, reasons?: Reason[]): Fail => ({
+  ok: false,
+  code,
+  message,
+  ...(reasons?.length ? { reasons } : {}),
+});
 
 export class EconomyEngine {
   private readonly store: StateStore;
@@ -128,6 +146,7 @@ export class EconomyEngine {
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly seedForNew: number;
+  private readonly maintenance: MaintenanceCapability | undefined;
   private book: CompanyBook<CompanyRecord>;
   private readonly ticker = new GameClockTicker();
   private readonly overspeed = new OverspeedDetector(999);
@@ -143,6 +162,11 @@ export class EconomyEngine {
   private lastTMs: number | null = null;
   private simMinSinceBoard = 0;
   private lastExpiryCheck = 0;
+  /** P5: a ferry flight in progress (aircraft with a permit, no mission). */
+  private ferry: { aircraftId: string; flightId: string } | null = null;
+  /** P5: fuel at block-out and whether the tanks ran dry on the current tracked flight. */
+  private fuelAtStartLb: number | null = null;
+  private tanksDry = false;
 
   constructor(options: EconomyOptions) {
     this.store = options.store;
@@ -152,6 +176,7 @@ export class EconomyEngine {
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? (() => `M-${randomUUID().slice(0, 8).toUpperCase()}`);
     this.seedForNew = options.seed ?? (options.replay ? DEMO_COMPANY_SEED : randomInt(0, 2 ** 31));
+    this.maintenance = options.maintenance;
     this.book = this.loadBook();
     for (const job of this.persistRead(
       () => this.repo?.listJobs(["available", "accepted", "loaded"]) ?? [],
@@ -204,8 +229,11 @@ export class EconomyEngine {
       })),
       airports: this.airports,
       now: this.now,
+      market: this.persistRead(() => this.repo?.listListings() ?? []) ?? [],
+      ...(this.maintenance ? { maintenance: this.maintenance } : {}),
     });
     if (book.ensureStarter()) this.log("info", "New company: starter Cessna 208B at the base");
+    book.ensureMarket();
     if (!stored) book.setCompany(book.company);
     const changes = book.drain();
     this.persist(() => this.repo?.persistBook(book.company, { ...changes, company: true }));
@@ -297,6 +325,10 @@ export class EconomyEngine {
     return this.book.ledgerDomain();
   }
 
+  marketDomain(): MarketState {
+    return this.book.marketDomain();
+  }
+
   jobsDomain(): JobsState {
     const { type, source } = this.activeType();
     const all = [...this.jobs.values()];
@@ -325,6 +357,7 @@ export class EconomyEngine {
     fleet: FleetState;
     loans: LoansState;
     ledger: LedgerState;
+    market: MarketState;
     mission?: Mission;
   } {
     return {
@@ -333,6 +366,7 @@ export class EconomyEngine {
       fleet: this.fleetDomain(),
       loans: this.loansDomain(),
       ledger: this.ledgerDomain(),
+      market: this.marketDomain(),
       ...(this.mission ? { mission: this.mission } : {}),
     };
   }
@@ -350,6 +384,7 @@ export class EconomyEngine {
       fleet: this.fleetDomain(),
       loans: this.loansDomain(),
       ledger: this.ledgerDomain(),
+      market: this.marketDomain(),
       ...(this.mission ? { mission: this.mission } : {}),
     });
   }
@@ -427,11 +462,53 @@ export class EconomyEngine {
     };
   }
 
-  private beforeStart(s: FlightSample): { code: string; message: string } | null {
+  private beforeStart(s: FlightSample): Omit<Fail, "ok"> | null {
     const m = this.mission;
-    if (!m || m.status !== "loaded") return null;
+    if (!m || m.status !== "loaded") {
+      // P5: no mission. The selected aircraft, parked where the sim is, must be airworthy
+      // unless it holds a ferry permit (then the payload cap applies).
+      const r = this.freeFlightChecks(s);
+      if (r.ok) return null;
+      const { ok: _ok, ...rest } = r;
+      this.publish();
+      return rest;
+    }
     const r = this.startChecks(m, s);
-    return r.ok ? null : { code: r.code, message: r.message };
+    if (r.ok) return null;
+    const { ok: _ok, ...rest } = r;
+    this.publish();
+    return rest;
+  }
+
+  /** The selected fleet aircraft when the sim sits within 3 nm of where it is parked. */
+  private parkedSelected(at: { lat: number; lon: number } | null): BookAircraft | null {
+    const a = this.selectedAircraft();
+    if (!a || !at || !this.airports) return null;
+    const here = this.airports.get(a.location);
+    if (!here || greatCircleNm(at, here) > ARRIVAL_RADIUS_NM) return null;
+    return a;
+  }
+
+  private freeFlightChecks(at: { lat: number; lon: number } | null): Ok<null> | Fail {
+    const a = this.parkedSelected(at);
+    if (!a || a.status !== "available") return { ok: true, data: null };
+    if (a.ferryPermit) return this.ferryPayloadCheck(a);
+    const r = this.book.dispatchCheck(a.id);
+    return r.ok ? { ok: true, data: null } : fail(r.code, r.message, r.reasons);
+  }
+
+  private ferryPayloadCheck(a: BookAircraft): Ok<null> | Fail {
+    const permit = a.ferryPermit;
+    if (!permit) return { ok: true, data: null };
+    const weights = this.store.getDomain("weights") as WeightsState | null | undefined;
+    const kg = weights ? weights.payloadLb * KG_PER_LB : 0;
+    if (kg > permit.payloadCapKg) {
+      return fail(
+        "ferry_payload_cap",
+        `Payload ${Math.round(kg)} kg exceeds the ferry permit cap of ${permit.payloadCapKg} kg`,
+      );
+    }
+    return { ok: true, data: null };
   }
 
   private startChecks(m: Mission, at: { lat: number; lon: number } | null): Ok<null> | Fail {
@@ -477,9 +554,24 @@ export class EconomyEngine {
     }
     this.lastTMs = s.tMs;
     const flying = this.mission;
-    if (flying && flying.status === "in_progress" && flight && flight.id === flying.flightId) {
+    const tracked =
+      (flying && flying.status === "in_progress" && flight && flight.id === flying.flightId) ||
+      (this.ferry !== null && flight !== null && flight.id === this.ferry.flightId);
+    if (tracked) {
       if (this.overspeed.update(s.iasKt, s.tMs)) {
         this.log("warn", `Overspeed: ${Math.round(s.iasKt)} kt IAS above Vmo (wear +5 %)`);
+      }
+      // P5: fuel quantity reaching ~0 in flight means the tanks ran dry.
+      if (s.fuelLb !== null) {
+        if (this.fuelAtStartLb === null) this.fuelAtStartLb = s.fuelLb;
+        if (
+          !this.tanksDry &&
+          onGround === false &&
+          s.fuelLb <= tanksDryThresholdLb(this.fuelAtStartLb)
+        ) {
+          this.tanksDry = true;
+          this.log("warn", `Fuel exhausted in flight (${s.fuelLb.toFixed(1)} lb)`);
+        }
       }
     }
     this.tick();
@@ -505,8 +597,13 @@ export class EconomyEngine {
   }
 
   private onFlightStarted(record: FlightRecord, explicit: boolean): void {
+    this.fuelAtStartLb = null;
+    this.tanksDry = false;
     const m = this.mission;
-    if (!m || m.status !== "loaded") return;
+    if (!m || m.status !== "loaded") {
+      this.startFerry(record, explicit);
+      return;
+    }
     if (!explicit) {
       const r = this.startChecks(m, this.lastParked);
       if (!r.ok) {
@@ -544,7 +641,63 @@ export class EconomyEngine {
     this.publish();
   }
 
+  /** P5: a flight without a mission by the selected aircraft holding a ferry permit. */
+  private startFerry(record: FlightRecord, explicit: boolean): void {
+    const pos = explicit
+      ? ((this.store.getDomain("position") as { lat: number; lon: number } | null | undefined) ??
+        null)
+      : this.lastParked;
+    const a = this.parkedSelected(pos);
+    if (!a?.ferryPermit || a.status !== "available") return;
+    const cap = this.ferryPayloadCheck(a);
+    if (!cap.ok) {
+      this.log("info", `Ferry not started: ${cap.message}`);
+      return;
+    }
+    this.ferry = { aircraftId: a.id, flightId: record.id };
+    this.book.setFlying(a.id, true);
+    const type = aircraftTypeByKey(a.typeKey);
+    this.overspeed.reset();
+    this.overspeed.setVmo(type?.vmoKt ?? 999);
+    this.log(
+      "info",
+      `Ferry ${a.registration} ${a.ferryPermit.origin}→${a.ferryPermit.destination} started on flight ${record.id}`,
+    );
+    this.publish();
+  }
+
+  private endFerry(record: FlightRecord, last: FlightSample | null): void {
+    const f = this.ferry;
+    if (!f) return;
+    this.ferry = null;
+    const a = this.book.aircraft(f.aircraftId);
+    const origin = a?.ferryPermit ? (this.airports?.get(a.ferryPermit.origin) ?? null) : null;
+    const parkedAt =
+      last && this.airports
+        ? (nearestAirport(this.airports.list, last, ARRIVAL_RADIUS_NM)?.airport ?? null)
+        : null;
+    const crashed = record.status === "failed" && record.flags.crashed;
+    const r = this.settleAircraft(f.aircraftId, record, {
+      fuelAirport: crashed ? origin : (parkedAt ?? origin),
+      landingAirport: crashed ? null : parkedAt,
+      crashed,
+      refType: "ferry",
+      refId: record.id,
+      memo: `Ferry ${a?.registration ?? f.aircraftId}`,
+    });
+    if (record.airborneMin > 0) this.book.consumeFerryPermit(f.aircraftId);
+    this.log(
+      "info",
+      `Ferry flight ${record.id} ended at ${parkedAt?.ident ?? "no airport"}: costs $${round2(r.costs.reduce((s, c) => s + c.amount, 0))}, wear ${r.wear}`,
+    );
+    this.publish();
+  }
+
   private onFlightEnded(record: FlightRecord, last: FlightSample | null): void {
+    if (this.ferry && this.ferry.flightId === record.id) {
+      this.endFerry(record, last);
+      return;
+    }
     const m = this.mission;
     if (!m || m.status !== "in_progress" || m.flightId !== record.id) return;
     const endedAt = new Date(this.now()).toISOString();
@@ -699,29 +852,59 @@ export class EconomyEngine {
     landingAirport: EconomyAirport | null,
     crashed: boolean,
   ): { costs: MissionCost[]; wear: number } {
-    const overspeed = this.overspeed.count;
-    this.overspeed.reset();
-    if (!m.aircraftId) return { costs: [], wear: 0 };
-    const peaks = record.landings
-      .map((l) => l.peakG)
-      .filter((g): g is number => Number.isFinite(g));
-    const r = this.book.settleFlight(m.aircraftId, {
-      fuelKg: record.fuelUsedLb * KG_PER_LB,
+    if (!m.aircraftId) {
+      this.overspeed.reset();
+      return { costs: [], wear: 0 };
+    }
+    return this.settleAircraft(m.aircraftId, record, {
       fuelAirport,
       landingAirport,
-      blockMin: record.blockMin,
-      airborneMin: record.airborneMin,
-      peakG: peaks.length ? Math.max(...peaks) : null,
-      overspeedEvents: overspeed,
       crashed,
-      landings: record.landings.length,
       refType: "mission",
       refId: m.id,
       memo: `Mission ${m.id}`,
     });
-    this.book.setFlying(m.aircraftId, false);
+  }
+
+  /** Costs, wear and (P5) defect rolls of a flown leg on a fleet aircraft. */
+  private settleAircraft(
+    aircraftId: string,
+    record: FlightRecord,
+    o: {
+      fuelAirport: EconomyAirport | null;
+      landingAirport: EconomyAirport | null;
+      crashed: boolean;
+      refType: string;
+      refId: string;
+      memo: string;
+    },
+  ): { costs: MissionCost[]; wear: number } {
+    const overspeed = this.overspeed.count;
+    this.overspeed.reset();
+    const tanksDry = this.tanksDry;
+    this.tanksDry = false;
+    this.fuelAtStartLb = null;
+    const peaks = record.landings
+      .map((l) => l.peakG)
+      .filter((g): g is number => Number.isFinite(g));
+    const r = this.book.settleFlight(aircraftId, {
+      fuelKg: record.fuelUsedLb * KG_PER_LB,
+      fuelAirport: o.fuelAirport,
+      landingAirport: o.landingAirport,
+      blockMin: record.blockMin,
+      airborneMin: record.airborneMin,
+      peakG: peaks.length ? Math.max(...peaks) : null,
+      overspeedEvents: overspeed,
+      crashed: o.crashed,
+      landings: record.landings.length,
+      refType: o.refType,
+      refId: o.refId,
+      memo: o.memo,
+      tanksDry,
+    });
+    this.book.setFlying(aircraftId, false);
     if (!r.ok) {
-      this.log("warn", `Could not settle mission ${m.id}: ${r.message}`);
+      this.log("warn", `Could not settle ${o.memo}: ${r.message}`);
       return { costs: [], wear: 0 };
     }
     return { costs: r.data.costs, wear: r.data.wear.total };
@@ -736,13 +919,16 @@ export class EconomyEngine {
       name.startsWith("mission.") ||
       name.startsWith("fleet.") ||
       name.startsWith("loan.") ||
+      name.startsWith("market.") ||
       name === "settings.update"
     );
   }
 
   command(cmd: Command): Result {
     const r =
-      cmd.name.startsWith("fleet.") || cmd.name.startsWith("loan.")
+      cmd.name.startsWith("fleet.") ||
+      cmd.name.startsWith("loan.") ||
+      cmd.name.startsWith("market.")
         ? this.runCompany(cmd)
         : this.run(cmd);
     if (!r.ok) {
@@ -751,7 +937,11 @@ export class EconomyEngine {
         v: PROTOCOL_VERSION,
         id: cmd.id,
         ok: false,
-        error: { code: r.code, message: r.message },
+        error: {
+          code: r.code,
+          message: r.message,
+          ...(r.reasons?.length ? { reasons: r.reasons } : {}),
+        },
       };
     }
     return { type: "result", v: PROTOCOL_VERSION, id: cmd.id, ok: true, data: r.data };
@@ -895,7 +1085,11 @@ export class EconomyEngine {
       return null;
     };
     const done = <T>(r: BookResult<T>): Ok<T> | Fail => {
-      if (!r.ok) return fail(r.code, r.message);
+      if (!r.ok) {
+        // A refused command may still have changed state (hidden defects surfacing).
+        if (this.book.hasPending) this.publish();
+        return fail(r.code, r.message, r.reasons);
+      }
       this.publish();
       return { ok: true, data: r.data };
     };
@@ -976,6 +1170,55 @@ export class EconomyEngine {
         if (!p.success) return bad(p.error);
         return done(this.book.payoff(p.data.loanId));
       }
+      // ---- P5 used market and airworthiness ----
+      case "market.refresh": {
+        const p = marketRefreshArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.refreshMarket());
+      }
+      case "market.inspect": {
+        const p = marketInspectArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.inspectListing(p.data.listingId));
+      }
+      case "market.buy": {
+        const p = marketBuyArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(
+          this.book.buyListing({
+            listingId: p.data.listingId,
+            ...(p.data.financing ? { financing: p.data.financing } : {}),
+          }),
+        );
+      }
+      case "fleet.repairDefect": {
+        const p = fleetRepairDefectArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return (
+          onMission(p.data.aircraftId) ??
+          done(this.book.repairDefect(p.data.aircraftId, p.data.defectId))
+        );
+      }
+      case "fleet.repairAll": {
+        const p = fleetRepairAllArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return onMission(p.data.aircraftId) ?? done(this.book.repairAll(p.data.aircraftId));
+      }
+      case "fleet.annual": {
+        const p = fleetAnnualArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return onMission(p.data.aircraftId) ?? done(this.book.annualInspection(p.data.aircraftId));
+      }
+      case "fleet.ferryPermit": {
+        const p = fleetFerryPermitArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return onMission(p.data.aircraftId) ?? done(this.book.ferryPermit(p.data.aircraftId));
+      }
+      case "fleet.defer": {
+        const p = fleetDeferArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.defer(p.data.aircraftId, p.data.defectId));
+      }
       default:
         return fail(
           "not_implemented",
@@ -1016,7 +1259,10 @@ export class EconomyEngine {
         : fail("no_aircraft", "Select an aircraft you own or lease (Fleet page)");
     }
     const ready = this.aircraftReady(aircraft, first.origin);
-    if (!ready.ok) return ready;
+    if (!ready.ok) {
+      if (this.book.hasPending) this.publish();
+      return ready;
+    }
     const type = aircraftTypeByKey(aircraft.typeKey) ?? this.activeType().type;
     const origin = this.airports?.get(first.origin);
     const dest = this.airports?.get(first.destination);
@@ -1036,11 +1282,13 @@ export class EconomyEngine {
       );
     }
     const payloadKg = jobs.reduce((s, j) => s + j.weightKg, 0);
-    const limit = payloadLimitKg(type, distanceNm);
+    // P5: open major defects reduce the max payload (≤ 30 %).
+    const penalty = this.book.gate(aircraft).payloadPenaltyPct;
+    const limit = Math.floor(payloadLimitKg(type, distanceNm) * (1 - penalty / 100));
     if (payloadKg > limit) {
       return fail(
         "payload_exceeded",
-        `${payloadKg} kg exceeds the ${limit} kg the ${type.name} can carry on this leg (max payload − leg fuel)`,
+        `${payloadKg} kg exceeds the ${limit} kg the ${type.name} can carry on this leg (max payload − leg fuel${penalty > 0 ? `, −${penalty} % for major defects` : ""})`,
       );
     }
     const id = this.newId();
@@ -1070,18 +1318,25 @@ export class EconomyEngine {
     return { ok: true, data: mission };
   }
 
-  /** The aircraft can fly a mission from `origin` now. */
+  /**
+   * The aircraft can fly a mission from `origin` now: not in maintenance or busy, no ferry
+   * permit (a ferry carries no revenue), and the P5 airworthiness gate passes after any
+   * hidden defects surface (`aircraft_unairworthy` with every reason).
+   */
   private aircraftReady(a: BookAircraft, origin: string): Ok<null> | Fail {
     if (a.status === "maintenance") {
-      return fail("aircraft_in_maintenance", `${a.registration} is in maintenance`);
+      const at = a.readyAtGameMs !== null ? ` until ${formatGameTime(a.readyAtGameMs)}` : "";
+      return fail("aircraft_in_maintenance", `${a.registration} is in maintenance${at}`);
     }
     if (a.status !== "available") return fail("aircraft_busy", `${a.registration} is ${a.status}`);
-    if (!isAirworthy(a.condition)) {
+    if (a.ferryPermit) {
       return fail(
-        "aircraft_unairworthy",
-        `${a.registration} is at ${a.condition} % condition; repair it (dispatch needs ${MIN_DISPATCH_CONDITION} %)`,
+        "ferry_only",
+        `${a.registration} holds a ferry permit to ${a.ferryPermit.destination}: fly the ferry first (no revenue)`,
       );
     }
+    const gate = this.book.dispatchCheck(a.id);
+    if (!gate.ok) return fail(gate.code, gate.message, gate.reasons);
     if (a.location !== origin) {
       return fail(
         "aircraft_not_at_origin",
@@ -1235,6 +1490,7 @@ export class EconomyEngine {
 
   /** Reload everything from the database (after an import). */
   reload(): void {
+    this.ferry = null;
     this.book = this.loadBook();
     this.jobs.clear();
     for (const job of this.persistRead(
@@ -1249,6 +1505,6 @@ export class EconomyEngine {
 
   /** True while a mission is flying (imports are refused then). */
   get missionInProgress(): boolean {
-    return this.mission?.status === "in_progress";
+    return this.mission?.status === "in_progress" || this.ferry !== null;
   }
 }
