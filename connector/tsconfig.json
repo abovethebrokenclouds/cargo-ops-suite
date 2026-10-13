@@ -1,0 +1,35 @@
+{
+  // Compiles the connector together with the shared protocol package.
+  // rootDir is the repository root so the output mirrors it inside dist/:
+  //   dist/connector/src/...        (connector)
+  //   dist/packages/protocol/src/...(shared zod schemas)
+  // Both live under connector/, so `require("zod")` from the compiled protocol
+  // resolves to connector/node_modules/zod with nothing installed at the root.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node10",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "rootDir": "..",
+    "outDir": "dist",
+    "sourceMap": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    // Type-check and resolve zod from the connector's own node_modules, even for
+    // files under packages/protocol (whose nearest node_modules is the web app's).
+    "paths": {
+      "zod": ["./node_modules/zod"]
+    }
+  },
+  "include": ["src/**/*.ts", "../packages/protocol/src/**/*.ts"],
+  "exclude": ["../packages/protocol/src/**/*.test.ts", "node_modules", "dist", "dist-test"]
+}
