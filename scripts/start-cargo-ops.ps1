@@ -60,10 +60,8 @@ if ($ConnectorArgs.Count -gt 0) { $runArgs += $ConnectorArgs }
 
 Write-Host ""
 Write-Host "Starting Cargo Ops. Leave this window open while you fly; press Ctrl+C to stop."
-Push-Location $connector
-try {
-  & node @runArgs
-  exit $LASTEXITCODE
-} finally {
-  Pop-Location
-}
+# Run from the caller's folder (no Push-Location): relative paths you pass, such as
+# --record connector\fixtures\my-flight.jsonl, then resolve from where you ran the
+# script. The connector's own defaults are anchored to its install folder.
+& node @runArgs
+exit $LASTEXITCODE
