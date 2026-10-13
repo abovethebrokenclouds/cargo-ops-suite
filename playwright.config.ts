@@ -27,6 +27,12 @@ export default defineConfig({
     {
       name: "demo",
       testMatch: /demo\.spec\.ts/,
+      // The demo project runs on the unbundled Vite dev server, where loading hundreds of
+      // modules dominates time-to-hydrate: measured 1–4 s locally and up to 5.7 s at 4× CPU
+      // throttling, which is what a CI runner looks like. A 15 s assertion budget keeps the
+      // checks about labels (DEMO DATA, never LIVE), not dev-server speed. The replay project
+      // runs the production build and keeps the 5 s default.
+      expect: { timeout: 15_000 },
       use: { baseURL: `http://127.0.0.1:${DEMO_PORT}` },
     },
     {
