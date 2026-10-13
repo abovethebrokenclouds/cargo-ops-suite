@@ -127,16 +127,42 @@ test.describe("demo mode (no connector)", () => {
     await page.goto("/fleet");
     await expect(page.getByTestId("demo-fleet-note")).toBeVisible();
     const cards = page.getByTestId("fleet-card");
-    await expect(cards).toHaveCount(2, { timeout: 30_000 });
+    await expect(cards).toHaveCount(3, { timeout: 30_000 });
     await expect(cards.first().getByText("DEMO")).toBeVisible();
     await expect(cards.first().getByTestId("financed-badge")).toBeVisible();
     await expect(cards.nth(1).getByTestId("lease-badge")).toHaveText("Dry lease");
     await expect(cards.first().getByTestId("repair-aircraft")).toBeDisabled();
     await expect(page.getByTestId("fleet-disabled-note")).toBeVisible();
+    await page.getByTestId("tab-new-aircraft").click();
     const market = page.getByTestId("market-type");
     expect(await market.count()).toBeGreaterThan(8);
     await expect(market.first().getByTestId("buy-aircraft")).toBeDisabled();
     await expect(market.first().getByTestId("lease-aircraft")).toBeDisabled();
+  });
+
+  test("/fleet used market: DEMO-tagged listings, systems and maintenance, actions disabled", async ({
+    page,
+  }) => {
+    await page.goto("/fleet");
+    await expect(page.getByTestId("fleet-card")).toHaveCount(3, { timeout: 30_000 });
+    // Hangar: the used PC-6 bought in the demo is in the shop with an ETA.
+    await expect(page.getByTestId("maintenance-order").first()).toBeVisible();
+    await expect(page.getByTestId("maintenance-eta").first()).toContainText("ETA Month");
+    await page.getByTestId("show-systems").nth(2).click();
+    const systems = page.getByTestId("systems-panel");
+    await expect(systems.getByRole("meter")).toHaveCount(10);
+    await expect(systems.getByTestId("severity-badge").first()).toBeVisible();
+    await expect(systems.getByTestId("repair-all")).toBeDisabled();
+    // Used market tab.
+    await page.getByTestId("tab-used-market").click();
+    await expect(page.getByTestId("market-disabled-note")).toBeVisible();
+    const listings = page.getByTestId("listing-card");
+    await expect(listings).toHaveCount(12);
+    await expect(listings.first().getByText("DEMO")).toBeVisible();
+    await expect(listings.first().getByTestId("asking-price")).toHaveText(/^\$[\d,]+$/);
+    await expect(listings.first().getByTestId("buy-listing")).toBeDisabled();
+    await expect(page.getByTestId("inspect-listing").first()).toBeDisabled();
+    await expect(page.getByTestId("market-refresh")).toBeDisabled();
   });
 
   test("/logbook in demo mode has no flights and exports are disabled", async ({ page }) => {
