@@ -1,0 +1,33 @@
+{
+  "_comment": "HAND-MADE sample written for tests (P6). NOT a real SimBrief response: field names follow SimBrief's publicly documented JSON OFP format (xml.fetcher.php?json=1) as far as known; values are invented. Replace with a recorded OFP once one is fetched on the PC.",
+  "fetch": { "userid": "000000", "static_id": "", "status": "Success", "time": "0.0123" },
+  "params": {
+    "request_id": "HANDMADE-0001",
+    "user_id": "000000",
+    "time_generated": "1792252800",
+    "static_id": "",
+    "ofp_layout": "LIDO",
+    "airac": "2610",
+    "units": "lbs"
+  },
+  "general": {
+    "icao_airline": "CGO",
+    "flight_number": "208",
+    "route": "MEM J42 RQZ HONIE2",
+    "air_distance": "302",
+    "route_distance": "297",
+    "initial_altitude": "11000"
+  },
+  "origin": { "icao_code": "KMEM", "iata_code": "MEM", "name": "MEMPHIS INTL", "plan_rwy": "36L" },
+  "destination": {
+    "icao_code": "KATL",
+    "iata_code": "ATL",
+    "name": "HARTSFIELD-JACKSON ATLANTA INTL",
+    "plan_rwy": "26R"
+  },
+  "alternate": { "icao_code": "KPDK", "name": "DEKALB-PEACHTREE" },
+  "aircraft": { "icaocode": "C208", "name": "CESSNA 208B GRAND CARAVAN", "reg": "N208CG" },
+  "fuel": { "plan_ramp": "1450", "plan_takeoff": "1415", "enroute_burn": "780" },
+  "weights": { "payload": "1852", "cargo": "1852", "pax_count": "0", "est_tow": "8650" },
+  "times": { "est_time_enroute": "6660" }
+}

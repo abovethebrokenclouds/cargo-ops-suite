@@ -7,3 +7,4 @@ export * from "./economy";
 export * from "./company";
 export * from "./maintenance";
 export * from "./fbo";
+export * from "./simbrief";
