@@ -9,6 +9,7 @@ import type {
   FleetState,
   LedgerState,
   LoansState,
+  MarketState,
   Source,
 } from "@cargo-ops/protocol";
 import { buildDemoCompany, reputationTier, type AirportLookup } from "@cargo-ops/economy";
@@ -21,6 +22,8 @@ export interface CompanyView {
   fleet: FleetState | null;
   loans: LoansState | null;
   ledger: LedgerState | null;
+  /** P5 used aircraft market. */
+  market: MarketState | null;
   /** True when commands go to a real connector. */
   connector: boolean;
   demo: boolean;
@@ -31,6 +34,7 @@ export interface DemoDomains {
   fleet: FleetState;
   loans: LoansState;
   ledger: LedgerState;
+  market: MarketState;
 }
 
 /** The seeded DEMO company's domains (deterministic for the bundled airport list). */
@@ -49,6 +53,7 @@ export function demoDomains(lookup: AirportLookup): DemoDomains {
     fleet: book.fleetDomain(selection),
     loans: book.loansDomain(),
     ledger: book.ledgerDomain(),
+    market: book.marketDomain(),
   };
 }
 
@@ -63,6 +68,7 @@ export function useCompanyView(state: ClientSimState, lookup: AirportLookup | nu
       fleet: demoData?.fleet ?? null,
       loans: demoData?.loans ?? null,
       ledger: demoData?.ledger ?? null,
+      market: demoData?.market ?? null,
       connector: false,
       demo: true,
     };
@@ -74,6 +80,7 @@ export function useCompanyView(state: ClientSimState, lookup: AirportLookup | nu
     fleet: state.sim.fleet ?? null,
     loans: state.sim.loans ?? null,
     ledger: state.sim.ledger ?? null,
+    market: state.sim.market ?? null,
     connector: connected,
     demo: false,
   };
@@ -94,6 +101,8 @@ export const LEDGER_LABELS: Record<string, string> = {
   interest: "Interest",
   insurance: "Insurance",
   adjustment: "Adjustment",
+  inspection: "Inspection",
+  permit: "Ferry permit",
 };
 
 export const OWNERSHIP_LABELS = {

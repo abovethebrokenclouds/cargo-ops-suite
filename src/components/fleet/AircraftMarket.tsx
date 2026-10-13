@@ -151,33 +151,59 @@ export function AircraftMarket({
           );
         })}
       </ul>
-      <BuyDialog
-        type={buying}
+      <PurchaseDialog
+        open={buying !== null}
+        title={`Buy ${buying?.name ?? ""}`}
+        description={`Catalogue price ${formatUsd(buying?.priceUsd ?? 0)} (approximate, for gameplay). Delivered to the active aircraft's airport, else the base.`}
+        price={buying?.priceUsd ?? 0}
         company={company}
         loans={loans}
         busy={busy}
         onClose={() => setBuying(null)}
-        run={run}
+        onConfirm={(financing) =>
+          buying
+            ? run(
+                "fleet.buy",
+                financing ? { typeKey: buying.key, financing } : { typeKey: buying.key },
+                `Bought a ${buying.name}`,
+              )
+            : Promise.resolve(false)
+        }
       />
       <LeaseDialog type={leasing} busy={busy} onClose={() => setLeasing(null)} run={run} />
     </>
   );
 }
 
-function BuyDialog({
-  type,
+export interface Financing {
+  lenderId: string;
+  termMonths: number;
+  principal: number;
+}
+
+/** Buy with cash or a bank loan (new aircraft and used listings share it). */
+export function PurchaseDialog({
+  open,
+  title,
+  description,
+  warning,
+  price,
   company,
   loans,
   busy,
   onClose,
-  run,
+  onConfirm,
 }: {
-  type: AircraftType | null;
+  open: boolean;
+  title: string;
+  description: string;
+  warning?: string | undefined;
+  price: number;
   company: CompanyState | null;
   loans: LoansState | null;
   busy: boolean;
   onClose: () => void;
-  run: RunCommand;
+  onConfirm: (financing: Financing | undefined) => Promise<boolean>;
 }) {
   const eligible = useMemo(() => (loans?.offers ?? []).filter((o) => o.eligible), [loans]);
   const [finance, setFinance] = useState(false);
@@ -185,7 +211,6 @@ function BuyDialog({
   const [term, setTerm] = useState("60");
   const [share, setShare] = useState(70);
   const offer = eligible.find((o) => o.lenderId === lenderId) ?? eligible[0] ?? null;
-  const price = type?.priceUsd ?? 0;
   const maxShare = Math.round((offer?.maxLtv ?? 0) * 100);
   const pct = Math.min(share, maxShare);
   const principal = finance && offer ? Math.round((price * pct) / 100) : 0;
@@ -197,15 +222,17 @@ function BuyDialog({
   const cash = company?.cash ?? 0;
   const termOk = offer ? months >= offer.minTermMonths && months <= offer.maxTermMonths : true;
   return (
-    <Dialog open={type !== null} onOpenChange={(open) => (open ? null : onClose())}>
+    <Dialog open={open} onOpenChange={(o) => (o ? null : onClose())}>
       <DialogContent className={dialogClass}>
         <DialogHeader>
-          <DialogTitle>Buy {type?.name}</DialogTitle>
-          <DialogDescription>
-            Catalogue price {formatUsd(price)} (approximate, for gameplay). Delivered to the active
-            aircraft's airport, else the base.
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
+        {warning ? (
+          <p className="rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning" role="note">
+            {warning}
+          </p>
+        ) : null}
         <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
@@ -287,17 +314,13 @@ function BuyDialog({
           <button
             type="button"
             className={primaryButton}
-            disabled={busy || !type || cashNeeded > cash || (finance && !termOk)}
+            disabled={busy || !open || cashNeeded > cash || (finance && !termOk)}
             onClick={() => {
-              if (!type) return;
-              const args =
+              const financing =
                 finance && offer && principal > 0
-                  ? {
-                      typeKey: type.key,
-                      financing: { lenderId: offer.lenderId, termMonths: months, principal },
-                    }
-                  : { typeKey: type.key };
-              void run("fleet.buy", args, `Bought a ${type.name}`).then((ok) => ok && onClose());
+                  ? { lenderId: offer.lenderId, termMonths: months, principal }
+                  : undefined;
+              void onConfirm(financing).then((ok) => ok && onClose());
             }}
           >
             Confirm purchase
