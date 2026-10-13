@@ -8,6 +8,9 @@ import { STARTING_CASH } from "../economy";
 import { ledgerCategorySchema } from "../protocol";
 import {
   companyRecordSchema,
+  demandEventRecordSchema,
+  fboRecordSchema,
+  fboTransactionSchema,
   fleetRecordSchema,
   listingRecordSchema,
   loanRecordSchema,
@@ -180,15 +183,17 @@ const aircraftEventRowSchema = z.object({
 
 export const CAREER_FORMAT = "cargo-ops-career";
 /**
- * Version 3 (P5) adds the used market's listings (and fleet rows carry systems, defects,
+ * Version 4 (P5 part 2) adds FBOs, FBO transactions and demand events (the company carries
+ * demand activity, counters and milestones; fleet rows carry insurance and incidents);
+ * version 3 (P5) adds the used market's listings (and fleet rows carry systems, defects,
  * annual, ferry permit and maintenance orders); version 2 (P4) adds fleet, loans and
- * aircraft events; versions 1 and 2 are still accepted.
+ * aircraft events; versions 1–3 are still accepted.
  */
-export const CAREER_VERSION = 3;
+export const CAREER_VERSION = 4;
 
 export const careerExportSchema = z.object({
   format: z.literal(CAREER_FORMAT),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
   exportedAt: z.string(),
   database: z.enum(["live", "demo"]),
   company: companyRecordSchema.nullable(),
@@ -200,6 +205,10 @@ export const careerExportSchema = z.object({
   loans: z.array(loanRecordSchema).default([]),
   aircraftEvents: z.array(aircraftEventRowSchema).default([]),
   market: z.array(listingRecordSchema).default([]),
+  // P5 part 2 (absent in versions 1–3).
+  fbos: z.array(fboRecordSchema).default([]),
+  fboTransactions: z.array(fboTransactionSchema).default([]),
+  demandEvents: z.array(demandEventRecordSchema).default([]),
 });
 export type CareerExport = z.infer<typeof careerExportSchema>;
 export type CareerExportInput = z.input<typeof careerExportSchema>;
@@ -271,6 +280,9 @@ export function exportCareer(
     loans: repo.listLoans(),
     aircraftEvents: repo.listAircraftEvents().map(({ id: _id, ...e }) => e),
     market: repo.listListings(),
+    fbos: repo.listFbos(),
+    fboTransactions: repo.listFboTransactions().map(({ id: _id, ...t }) => t),
+    demandEvents: repo.listDemandEvents(0),
   };
 }
 
@@ -285,8 +297,9 @@ export type ImportResult =
         fleet: number;
         loans: number;
         market: number;
+        fbos: number;
       };
-      version: 1 | 2 | 3;
+      version: 1 | 2 | 3 | 4;
     }
   | { ok: false; status: number; code: string; message: string };
 
@@ -322,7 +335,7 @@ export function importCareer(
   const db = repo.db;
   repo.transaction(() => {
     db.exec(
-      "DELETE FROM mission_jobs; DELETE FROM missions; DELETE FROM jobs; DELETE FROM ledger; DELETE FROM company; DELETE FROM fleet; DELETE FROM loans; DELETE FROM aircraft_events; DELETE FROM market_listings;",
+      "DELETE FROM mission_jobs; DELETE FROM missions; DELETE FROM jobs; DELETE FROM ledger; DELETE FROM company; DELETE FROM fleet; DELETE FROM loans; DELETE FROM aircraft_events; DELETE FROM market_listings; DELETE FROM fbos; DELETE FROM fbo_modules; DELETE FROM fbo_transactions; DELETE FROM demand_events; DELETE FROM demand_index; DELETE FROM insurance_policies; DELETE FROM milestones;",
     );
     if (data.company) {
       // Version 1 companies get the P4 defaults from the schema; the counter and P&L are
@@ -337,7 +350,17 @@ export function importCareer(
       running += Math.round(e.amount * 100);
       repo.addLedger({ ...e, balance: e.balance ?? running / 100, gameMs: e.gameMs ?? 0 });
     }
-    for (const a of data.fleet) repo.saveAircraft(a);
+    for (const a of data.fleet) {
+      repo.saveAircraft(a);
+      repo.saveInsurance(a);
+    }
+    for (const f of data.fbos) repo.saveFbo(f);
+    for (const t of data.fboTransactions) repo.addFboTransaction(t);
+    for (const e of data.demandEvents) repo.saveDemandEvent(e);
+    if (data.company) {
+      repo.saveDemandActivity(data.company.activity);
+      for (const m of data.company.milestones) repo.saveMilestone(m);
+    }
     for (const l of data.loans) repo.saveLoan(l);
     for (const e of data.aircraftEvents) repo.addAircraftEvent(e);
     for (const l of data.market) repo.saveListing(l);
@@ -365,6 +388,7 @@ export function importCareer(
       fleet: data.fleet.length,
       loans: data.loans.length,
       market: data.market.length,
+      fbos: data.fbos.length,
     },
     version: data.version,
   };

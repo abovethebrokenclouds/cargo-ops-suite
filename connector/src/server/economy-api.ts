@@ -8,6 +8,9 @@
 //   GET  /api/fleet                → fleet domain + new-aircraft catalogue + aircraft events
 //   GET  /api/loans                → loans domain (credit score, offers) + lenders
 //   GET  /api/market               → used market domain (listings without hidden defects)
+//   GET  /api/fbos?fbo&limit       → fbos domain + recent FBO transactions (own | modelled | sim_ai)
+//   GET  /api/fbos/quote?icao=XXXX → buy/build quote for an airport
+//   GET  /api/demand               → demand domain (indices ≠ 1 and active events)
 //   GET  /api/logbook              → { flights } joined with their mission and payout
 //   GET  /api/export/csv           → logbook CSV (text/csv)
 //   GET  /api/export/gpx?flight=ID → one flight's track (application/gpx+xml)
@@ -111,6 +114,40 @@ export function economyApi(options: EconomyApiOptions) {
         if (method !== "GET") return methodNotAllowed;
         if (!session.economy) return { status: 404, body: { error: "not_found" } };
         return { status: 200, body: session.economy.marketDomain() };
+      case "/api/fbos": {
+        if (method !== "GET") return methodNotAllowed;
+        if (!session.economy) return { status: 404, body: { error: "not_found" } };
+        const fbo = query.get("fbo") ?? undefined;
+        if (fbo !== undefined && !/^[A-Za-z0-9_-]{1,32}$/.test(fbo)) {
+          return { status: 400, body: { error: "bad_request", message: "bad fbo id" } };
+        }
+        const limit = Math.max(1, Math.min(5_000, Number(query.get("limit")) || 200));
+        return {
+          status: 200,
+          body: {
+            ...session.economy.fbosDomain(),
+            transactions: repo
+              .listFboTransactions({ ...(fbo ? { fboId: fbo } : {}), limit })
+              .map((t) => ({ ...t, at: new Date(t.at).toISOString() })),
+          },
+        };
+      }
+      case "/api/fbos/quote": {
+        if (method !== "GET") return methodNotAllowed;
+        if (!session.economy) return { status: 404, body: { error: "not_found" } };
+        const icao = (query.get("icao") ?? "").toUpperCase();
+        if (!/^[A-Z0-9]{2,8}$/.test(icao)) {
+          return { status: 400, body: { error: "bad_request", message: "?icao= is required" } };
+        }
+        const r = session.economy.companyBook.quoteFbo(icao);
+        return r.ok
+          ? { status: 200, body: r.data }
+          : { status: 404, body: { error: r.code, message: r.message } };
+      }
+      case "/api/demand":
+        if (method !== "GET") return methodNotAllowed;
+        if (!session.economy) return { status: 404, body: { error: "not_found" } };
+        return { status: 200, body: session.economy.demandDomain() };
       case "/api/loans":
         if (method !== "GET") return methodNotAllowed;
         if (!session.economy) return { status: 404, body: { error: "not_found" } };

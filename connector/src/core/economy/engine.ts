@@ -36,6 +36,16 @@ import {
   marketBuyArgsSchema,
   marketInspectArgsSchema,
   marketRefreshArgsSchema,
+  fboBuildArgsSchema,
+  fboBuyArgsSchema,
+  fboModuleBuyArgsSchema,
+  fboModuleUpgradeArgsSchema,
+  fboPricingArgsSchema,
+  fboSellArgsSchema,
+  insuranceBuyArgsSchema,
+  insuranceCancelArgsSchema,
+  type DemandState,
+  type FbosState,
   type MarketState,
   loanPayoffArgsSchema,
   loanQuoteArgsSchema,
@@ -101,6 +111,7 @@ import {
   type AirportLookup,
   type EconomyAirport,
 } from "../../economy";
+import { AiArrivalDetector, type AiObjectSample } from "../../sim/ai-traffic";
 import type { LogFn } from "../../sim/source";
 import type { CompanyRecord, EconomyRepo } from "../../storage/economy";
 import type { FlightHooks } from "../flight-core";
@@ -167,6 +178,8 @@ export class EconomyEngine {
   /** P5: fuel at block-out and whether the tanks ran dry on the current tracked flight. */
   private fuelAtStartLb: number | null = null;
   private tanksDry = false;
+  /** P5 part 2: AI arrivals observed in the connected simulator near own FBO airports. */
+  private readonly aiDetector = new AiArrivalDetector();
 
   constructor(options: EconomyOptions) {
     this.store = options.store;
@@ -231,6 +244,11 @@ export class EconomyEngine {
       now: this.now,
       market: this.persistRead(() => this.repo?.listListings() ?? []) ?? [],
       ...(this.maintenance ? { maintenance: this.maintenance } : {}),
+      fbos: this.persistRead(() => this.repo?.listFbos() ?? []) ?? [],
+      demandEvents:
+        this.persistRead(
+          () => this.repo?.listDemandEvents(Math.max(0, company.gameMs - 30 * 86_400_000)) ?? [],
+        ) ?? [],
     });
     if (book.ensureStarter()) this.log("info", "New company: starter Cessna 208B at the base");
     book.ensureMarket();
@@ -329,6 +347,34 @@ export class EconomyEngine {
     return this.book.marketDomain();
   }
 
+  fbosDomain(): FbosState {
+    return this.book.fbosDomain();
+  }
+
+  demandDomain(): DemandState {
+    return this.book.demandDomain();
+  }
+
+  /**
+   * P5 part 2: a batch of AI aircraft from the connected simulator. New arrivals at an
+   * own FBO airport are credited as a labelled bonus (source sim_ai).
+   */
+  onAiTraffic(samples: readonly AiObjectSample[], at: number): void {
+    const targets = this.book.aiTargets();
+    if (targets.length === 0) return;
+    const arrivals = this.aiDetector.update(samples, targets, at);
+    for (const a of arrivals) {
+      const r = this.book.creditAiArrival(a.icao, a.atcId ?? a.objectId);
+      if (r.ok) {
+        this.log(
+          "info",
+          `AI arrival at ${a.icao} (${a.atcId ?? `object ${a.objectId}`}): +$${r.data.amount} sim_ai bonus`,
+        );
+      }
+    }
+    if (arrivals.length > 0) this.publish();
+  }
+
   jobsDomain(): JobsState {
     const { type, source } = this.activeType();
     const all = [...this.jobs.values()];
@@ -358,6 +404,8 @@ export class EconomyEngine {
     loans: LoansState;
     ledger: LedgerState;
     market: MarketState;
+    fbos: FbosState;
+    demand: DemandState;
     mission?: Mission;
   } {
     return {
@@ -367,6 +415,8 @@ export class EconomyEngine {
       loans: this.loansDomain(),
       ledger: this.ledgerDomain(),
       market: this.marketDomain(),
+      fbos: this.fbosDomain(),
+      demand: this.demandDomain(),
       ...(this.mission ? { mission: this.mission } : {}),
     };
   }
@@ -385,6 +435,8 @@ export class EconomyEngine {
       loans: this.loansDomain(),
       ledger: this.ledgerDomain(),
       market: this.marketDomain(),
+      fbos: this.fbosDomain(),
+      demand: this.demandDomain(),
       ...(this.mission ? { mission: this.mission } : {}),
     });
   }
@@ -791,6 +843,8 @@ export class EconomyEngine {
         lateMin: record.blockMin - job.timeLimitMin,
         peakG: landing?.peakG ?? null,
         noBonus: record.flags.noBonus,
+        // P5 part 2: the demand factor promised on the board.
+        ...(job.demandFactor !== undefined ? { demand: job.demandFactor } : {}),
       }),
     );
     const total = breakdowns.reduce((s, b) => s + b.total, 0);
@@ -808,6 +862,8 @@ export class EconomyEngine {
     // Fuel at the destination's price, its landing fee, lease hours and wear.
     const settled = this.settle(m, record, dest, dest, false);
     this.book.adjustReputation(delta);
+    // P5 part 2: demand activity, delivery count and landing streak (milestones).
+    this.book.recordDelivery({ origin: m.origin, destination: m.destination, grade });
     const costTotal = round2(settled.costs.reduce((s, c) => s + c.amount, 0));
     const payout = {
       total,
@@ -920,6 +976,8 @@ export class EconomyEngine {
       name.startsWith("fleet.") ||
       name.startsWith("loan.") ||
       name.startsWith("market.") ||
+      name.startsWith("fbo.") ||
+      name.startsWith("insurance.") ||
       name === "settings.update"
     );
   }
@@ -928,7 +986,9 @@ export class EconomyEngine {
     const r =
       cmd.name.startsWith("fleet.") ||
       cmd.name.startsWith("loan.") ||
-      cmd.name.startsWith("market.")
+      cmd.name.startsWith("market.") ||
+      cmd.name.startsWith("fbo.") ||
+      cmd.name.startsWith("insurance.")
         ? this.runCompany(cmd)
         : this.run(cmd);
     if (!r.ok) {
@@ -1219,6 +1279,52 @@ export class EconomyEngine {
         if (!p.success) return bad(p.error);
         return done(this.book.defer(p.data.aircraftId, p.data.defectId));
       }
+      // ---- P5 part 2: FBOs and insurance ----
+      case "fbo.buy":
+      case "fbo.build": {
+        const p = (cmd.name === "fbo.buy" ? fboBuyArgsSchema : fboBuildArgsSchema).safeParse(args);
+        if (!p.success) return bad(p.error);
+        const a = {
+          icao: p.data.icao.toUpperCase(),
+          ...(p.data.financing ? { financing: p.data.financing } : {}),
+        };
+        return done(cmd.name === "fbo.buy" ? this.book.buyFbo(a) : this.book.buildFbo(a));
+      }
+      case "fbo.sell": {
+        const p = fboSellArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.sellFbo(p.data.fboId));
+      }
+      case "fbo.module.buy": {
+        const p = fboModuleBuyArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.buyModule(p.data.fboId, p.data.module));
+      }
+      case "fbo.module.upgrade": {
+        const p = fboModuleUpgradeArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.upgradeModule(p.data.fboId, p.data.module));
+      }
+      case "fbo.pricing": {
+        const p = fboPricingArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(
+          this.book.setFboPricing(p.data.fboId, {
+            fuelPriceRatio: p.data.fuelPriceRatio,
+            handlingFeeUsd: p.data.handlingFeeUsd,
+          }),
+        );
+      }
+      case "insurance.buy": {
+        const p = insuranceBuyArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.buyInsurance(p.data.aircraftId));
+      }
+      case "insurance.cancel": {
+        const p = insuranceCancelArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.cancelInsurance(p.data.aircraftId));
+      }
       default:
         return fail(
           "not_implemented",
@@ -1367,7 +1473,11 @@ export class EconomyEngine {
     const counter = this.company.boardCounter + 1;
     const seed = boardSeed(this.company.seed, origin.ident, type.key, counter);
     const focusAirport = focus ? this.airports.get(focus) : null;
+    // P5 part 2: local demand and an own cargo terminal shape the board.
+    const market = this.book.jobDemand(origin.ident);
     const jobs = generateJobs({
+      demand: market.demand,
+      extraJobs: market.extraJobs,
       origin,
       airports: this.airports.list,
       aircraft: type,
@@ -1491,6 +1601,7 @@ export class EconomyEngine {
   /** Reload everything from the database (after an import). */
   reload(): void {
     this.ferry = null;
+    this.aiDetector.reset();
     this.book = this.loadBook();
     this.jobs.clear();
     for (const job of this.persistRead(

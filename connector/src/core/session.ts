@@ -103,8 +103,15 @@ export class ConnectorSession {
           this.store.event(update.name, update.data);
           this.flight.onEvent(update.name);
           break;
+        case "aiTraffic":
+          this.economy?.onAiTraffic(update.samples, update.at);
+          break;
       }
     });
+    if (this.economy && this.source.setAiTargetsProvider) {
+      const economy = this.economy;
+      this.source.setAiTargetsProvider(() => economy.companyBook.aiTargets());
+    }
     this.source.start();
   }
 

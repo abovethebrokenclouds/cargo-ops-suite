@@ -19,6 +19,7 @@ import {
   type SimConnectConnection,
 } from "node-simconnect";
 import type { SimStatePatch } from "../protocol";
+import { AI_SAMPLE_INTERVAL_MS, SimConnectAiSampler, type AiTarget } from "./ai-traffic";
 import { fastIntervalMs, mapFast, mapSlow, pausedFromEx1, simNameFor } from "./mapping";
 import {
   MAX_ENGINES,
@@ -136,6 +137,11 @@ export class SimConnectSource implements SimSource {
   private lastFastEmit = 0;
   private lastAgl: number | undefined;
   private rebuildTimer: NodeJS.Timeout | null = null;
+  /** P5 part 2: AI traffic near the player's FBO airports (bonus income). */
+  private aiSampler: SimConnectAiSampler | null = null;
+  private aiTimer: NodeJS.Timeout | null = null;
+  private aiTargets: () => AiTarget[] = () => [];
+  private userPosition: { lat: number; lon: number } | null = null;
   /** Latest values the sim reported but the protocol has no domain for (diagnostics). */
   zulu: string | undefined;
   simRunning: boolean | undefined;
@@ -150,6 +156,10 @@ export class SimConnectSource implements SimSource {
 
   subscribe(listener: SimListener): () => void {
     return this.emitter.subscribe(listener);
+  }
+
+  setAiTargetsProvider(provider: () => AiTarget[]): void {
+    this.aiTargets = provider;
   }
 
   start(): void {
@@ -245,6 +255,36 @@ export class SimConnectSource implements SimSource {
     handle.requestSystemState(SYSTEM_STATE_SIM_REQUEST, "Sim");
     this.defineFast();
     this.requestCounts();
+    this.startAiTraffic(handle);
+  }
+
+  /**
+   * AI traffic sampling (UNVERIFIED on a real sim): every 30 s, when an owned FBO airport is
+   * within 190 km of the user aircraft, request every AIRCRAFT object around the user.
+   */
+  private startAiTraffic(handle: SimConnectConnection): void {
+    try {
+      this.aiSampler = new SimConnectAiSampler(
+        handle,
+        { defineId: this.allocId(), requestId: this.allocId() },
+        this.log,
+        (samples, at) => this.emitter.emit({ type: "aiTraffic", samples, at }),
+      );
+    } catch (err) {
+      this.log(
+        "warn",
+        `AI traffic sampling unavailable: ${err instanceof Error ? err.message : err}`,
+      );
+      return;
+    }
+    handle.on("simObjectDataByType", (recv) => {
+      this.aiSampler?.onData(recv, Date.now());
+    });
+    this.aiTimer = setInterval(() => {
+      if (this.handle !== handle) return;
+      this.aiSampler?.sample(this.userPosition, this.aiTargets(), Date.now());
+    }, AI_SAMPLE_INTERVAL_MS);
+    this.aiTimer.unref();
   }
 
   private onLost(handle: SimConnectConnection, reason: string): void {
@@ -269,10 +309,15 @@ export class SimConnectSource implements SimSource {
     this.simRunning = undefined;
     if (this.rebuildTimer) clearTimeout(this.rebuildTimer);
     this.rebuildTimer = null;
+    if (this.aiTimer) clearInterval(this.aiTimer);
+    this.aiTimer = null;
+    this.aiSampler = null;
+    this.userPosition = null;
     if (handle) {
       handle.removeAllListeners("quit");
       handle.removeAllListeners("close");
       handle.removeAllListeners("simObjectData");
+      handle.removeAllListeners("simObjectDataByType");
       safeClose(handle);
     }
     if (this.info.connected) {
@@ -443,6 +488,7 @@ export class SimConnectSource implements SimSource {
     if (mapped.position) {
       patch.position = mapped.position;
       this.lastAgl = mapped.position.aglFt;
+      this.userPosition = { lat: mapped.position.lat, lon: mapped.position.lon };
     }
     if (mapped.motion) patch.motion = mapped.motion;
     if (Object.keys(patch).length === 0) return;

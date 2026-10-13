@@ -194,4 +194,65 @@ export const MIGRATIONS: readonly Migration[] = [
       INSERT OR REPLACE INTO settings (key, json) VALUES ('economy.phase', '5');
     `,
   },
+  {
+    // P5 part 2: FBOs (plan §7.3 columns plus a JSON copy), their modules and traffic
+    // transactions (source own | modelled | sim_ai), demand events and the per-airport
+    // activity index, hull insurance policies and milestones. Company and fleet rows gain
+    // JSON fields with defaults (no change needed). Idempotent: every statement is
+    // IF NOT EXISTS / OR REPLACE, so re-running it on a database that has the tables is safe.
+    version: 6,
+    sql: `
+      CREATE TABLE IF NOT EXISTS fbos (
+        id TEXT PRIMARY KEY,
+        icao TEXT NOT NULL,
+        status TEXT NOT NULL,
+        built_at INTEGER,
+        json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS fbos_icao ON fbos (icao, status);
+      CREATE TABLE IF NOT EXISTS fbo_modules (
+        fbo_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        level INTEGER NOT NULL,
+        json TEXT,
+        PRIMARY KEY (fbo_id, kind)
+      );
+      CREATE TABLE IF NOT EXISTS fbo_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fbo_id TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        game_at INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        amount REAL NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('own', 'modelled', 'sim_ai')),
+        memo TEXT
+      );
+      CREATE INDEX IF NOT EXISTS fbo_transactions_fbo ON fbo_transactions (fbo_id, id);
+      CREATE TABLE IF NOT EXISTS demand_events (
+        id TEXT PRIMARY KEY,
+        icao TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        start_at INTEGER NOT NULL,
+        end_at INTEGER NOT NULL,
+        json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS demand_events_end ON demand_events (end_at);
+      CREATE TABLE IF NOT EXISTS demand_index (
+        icao TEXT PRIMARY KEY,
+        activity REAL NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS insurance_policies (
+        aircraft_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        premium REAL NOT NULL,
+        json TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS milestones (
+        id TEXT PRIMARY KEY,
+        game_at INTEGER NOT NULL,
+        at INTEGER NOT NULL
+      );
+      INSERT OR REPLACE INTO settings (key, json) VALUES ('economy.phase', '6');
+    `,
+  },
 ];
