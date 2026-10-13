@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-import { FLIGHT_PHASES, type FlightPhase } from "./phases";
+import { FLIGHT_PHASES, PHASE_LABELS, type FlightPhase } from "./phases";
 
 /** Horizontal phase rail. With `current` null every phase is pending (no fabricated state). */
 export function PhaseTimeline({ current }: { current: FlightPhase | null }) {
@@ -13,10 +13,15 @@ export function PhaseTimeline({ current }: { current: FlightPhase | null }) {
       {FLIGHT_PHASES.map((phase, i) => {
         const state = i < index ? "done" : i === index ? "current" : "pending";
         return (
-          <li key={phase} data-state={state} className="flex min-w-0 flex-col gap-2">
+          <li
+            key={phase}
+            data-state={state}
+            aria-current={state === "current" ? "step" : undefined}
+            className="flex min-w-0 flex-col gap-2"
+          >
             <span
               className={cn(
-                "h-1 rounded-full",
+                "h-1 rounded-full transition-colors duration-500",
                 state === "done" && "bg-primary",
                 state === "current" && "bg-gradient-brand shadow-glow",
                 state === "pending" && "bg-secondary",
@@ -34,10 +39,12 @@ export function PhaseTimeline({ current }: { current: FlightPhase | null }) {
               <span
                 className={cn(
                   "truncate font-mono text-[0.625rem] uppercase tracking-[0.12em]",
-                  state === "pending" ? "text-muted-foreground" : "text-foreground",
+                  state === "pending" && "text-muted-foreground",
+                  state === "done" && "text-foreground/80",
+                  state === "current" && "font-semibold text-accent",
                 )}
               >
-                {phase}
+                {PHASE_LABELS[phase]}
               </span>
             </span>
           </li>
