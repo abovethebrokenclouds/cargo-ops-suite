@@ -9,6 +9,8 @@ export type SimStatusChipProps = {
   simName?: string;
   protocol?: string;
   detail?: string;
+  /** Overrides the default label for the status (e.g. "CONNECTOR OFFLINE"). */
+  label?: string;
   className?: string;
 };
 
@@ -53,10 +55,11 @@ export function SimStatusChip({
   simName,
   protocol,
   detail,
+  label: labelOverride,
   className,
 }: SimStatusChipProps) {
   const look = looks[status];
-  const label = simStatusLabel(status, simName, protocol);
+  const label = labelOverride ?? simStatusLabel(status, simName, protocol);
   return (
     <span
       role="status"

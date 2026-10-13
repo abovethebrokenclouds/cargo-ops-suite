@@ -11,6 +11,8 @@ import {
 import { useEffect, type ReactNode } from "react";
 
 import { AppNav } from "../components/AppNav";
+import { ConnectedStatusChip } from "../components/status/ConnectedStatusChip";
+import { SimConnectionProvider } from "../lib/transport/useSimConnection";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
@@ -122,10 +124,12 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <AppNav />
-      <main className="mx-auto max-w-7xl px-4 pb-24 md:px-6">
-        <Outlet />
-      </main>
+      <SimConnectionProvider>
+        <AppNav statusSlot={<ConnectedStatusChip />} />
+        <main className="mx-auto max-w-7xl px-4 pb-24 md:px-6">
+          <Outlet />
+        </main>
+      </SimConnectionProvider>
     </QueryClientProvider>
   );
 }

@@ -10,8 +10,12 @@ Status legend: ✅ passed · ⏳ not yet run · ❌ failed · — not applicable
 
 ## Verified in cloud CI
 
-| Date | Commit / PR | Check | Result | Notes |
-| ---- | ----------- | ----- | ------ | ----- |
+| Date       | Commit / PR            | Check                                                                                                                          | Result | Notes                                                 |
+| ---------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------ | ----------------------------------------------------- |
+| 2026-10-13 | `85576d5` (PR #2)      | GitHub Actions `web` job: lint, typecheck, inventory, vitest, default build, local build, no-CDN-font guard                    | ✅     | first green CI run                                    |
+| 2026-10-13 | P0 integration (PR #2) | lint, typecheck, inventory, vitest (137 tests), `build`, `build:local`                                                         | ✅     | cloud container                                       |
+| 2026-10-13 | P0 integration (PR #2) | Chromium (dev server): all 9 routes render, chip reads `DEMO DATA` from DemoTransport, no external requests, no console errors | ✅     | Playwright script, not yet a committed E2E spec       |
+| 2026-10-13 | P0 integration (PR #2) | Chromium with `VITE_CARGO_OPS_CONNECTOR=1` and no connector: chip reads `CONNECTOR OFFLINE`, no fallback to demo data          | ✅     | only console error is the failed `/api/session` fetch |
 
 ## Requires Windows PC with MSFS
 
