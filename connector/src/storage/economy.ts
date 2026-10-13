@@ -3,6 +3,9 @@
 
 import { z } from "zod";
 import {
+  DEMAND_EVENT_KINDS,
+  FBO_MODULE_KINDS,
+  MILESTONE_IDS,
   AIRCRAFT_STATUSES,
   LEDGER_CATEGORIES,
   LOAN_STATUSES,
@@ -25,17 +28,20 @@ import {
   type Touchdown,
 } from "../protocol";
 import {
+  CAPITAL_CATEGORIES,
   STARTING_CASH,
   gameMonthIndex,
   type AircraftEventRecord,
   type BookAircraftInput,
   type BookChanges,
   type BookLoan,
+  type DemandEventRecord,
+  type FboRecord,
+  type FboTransactionRecord,
   type ListingRecord,
+  type MilestoneRecord,
 } from "../economy";
 import type { Storage } from "./db";
-
-const CAPITAL_CATEGORIES = new Set(["loan_disbursement", "loan_payment", "purchase", "sale"]);
 
 /** Persisted company record (the `company` domain plus generator state). */
 export const companyRecordSchema = z.object({
@@ -76,6 +82,24 @@ export const companyRecordSchema = z.object({
   marketGeneration: z.number().int().nonnegative().default(0),
   marketRefreshedGameMs: z.number().finite().nonnegative().default(0),
   orderCounter: z.number().int().nonnegative().default(0),
+  // ---- P5 part 2 (defaults make a P5-part-1 record valid) ----
+  fboCounter: z.number().int().nonnegative().default(0),
+  /** Absent in older records: the book starts counting days from the company clock. */
+  dayProcessed: z.number().int().nonnegative().optional(),
+  activity: z.record(z.number().finite()).default({}),
+  flightHours: z.number().finite().nonnegative().default(0),
+  deliveries: z.number().int().nonnegative().default(0),
+  landingStreak: z.number().int().nonnegative().default(0),
+  restorations: z.number().int().nonnegative().default(0),
+  milestones: z
+    .array(
+      z.object({
+        id: z.enum(MILESTONE_IDS),
+        gameMs: z.number().finite().nonnegative(),
+        at: z.number().finite(),
+      }),
+    )
+    .default([]),
 });
 export type CompanyRecord = z.infer<typeof companyRecordSchema>;
 
@@ -131,6 +155,24 @@ const bookAircraftSchema = z.object({
   ferryPermit: ferryPermitSchema.nullable().optional(),
   orders: z.array(maintenanceOrderSchema).optional(),
   defectCounter: z.number().int().nonnegative().optional(),
+  // ---- P5 part 2 (absent in older rows) ----
+  insurance: z
+    .object({
+      sinceGameMs: z.number().finite().nonnegative(),
+      premium: z.number().finite().nonnegative(),
+      claims: z.number().int().nonnegative(),
+      claimsPaid: z.number().finite().nonnegative(),
+    })
+    .nullable()
+    .optional(),
+  incidents: z
+    .array(
+      z.object({
+        gameMs: z.number().finite().nonnegative(),
+        kind: z.enum(["hard_landing", "crash"]),
+      }),
+    )
+    .optional(),
 });
 export const fleetRecordSchema: z.ZodType<BookAircraftInput, z.ZodTypeDef, unknown> =
   bookAircraftSchema;
@@ -157,6 +199,101 @@ export const listingRecordSchema: z.ZodType<ListingRecord, z.ZodTypeDef, unknown
   }),
   status: z.enum(["listed", "sold", "expired"]),
 });
+
+const moneyByKind = z.object({
+  ramp: z.number().finite(),
+  handling: z.number().finite(),
+  fuel: z.number().finite(),
+  cargo: z.number().finite(),
+  maintenance: z.number().finite(),
+  hangar: z.number().finite(),
+});
+
+const moduleRecordSchema = z.object({
+  level: z.number().int().min(0).max(3),
+  pending: z
+    .object({
+      toLevel: z.number().int().min(1).max(3),
+      cost: z.number().finite().nonnegative(),
+      readyAtGameMs: z.number().finite().nonnegative(),
+    })
+    .nullable(),
+});
+
+/** An FBO as stored (P5 part 2). */
+export const fboRecordSchema: z.ZodType<FboRecord, z.ZodTypeDef, unknown> = z.object({
+  id: z.string().min(1),
+  icao: z.string().min(2).max(8),
+  status: z.enum(["building", "active", "sold", "repossessed"]),
+  origin: z.enum(["bought", "built"]),
+  acquiredGameMs: z.number().finite().nonnegative(),
+  acquiredAt: z.number().finite(),
+  readyAtGameMs: z.number().finite().nonnegative().nullable(),
+  builtAt: z.number().finite().nullable(),
+  price: z.number().finite().nonnegative(),
+  invested: z.number().finite().nonnegative(),
+  landLeaseMonthly: z.number().finite().nonnegative(),
+  modules: z.object(
+    Object.fromEntries(FBO_MODULE_KINDS.map((k) => [k, moduleRecordSchema])) as Record<
+      (typeof FBO_MODULE_KINDS)[number],
+      typeof moduleRecordSchema
+    >,
+  ),
+  fuelPriceRatio: z.number().finite().positive(),
+  handlingFeeUsd: z.number().finite().nonnegative(),
+  loanId: z.string().nullable(),
+  nextHour: z.number().int().nonnegative(),
+  today: z.object({
+    day: z.number().int().nonnegative(),
+    own: z.number().finite(),
+    modelled: z.number().finite(),
+    simAi: z.number().finite(),
+    movements: z.number().int().nonnegative(),
+    fuelKg: z.number().finite().nonnegative(),
+    byKind: moneyByKind,
+  }),
+  daily: z.array(
+    z.object({
+      day: z.number().int().nonnegative(),
+      own: z.number().finite(),
+      modelled: z.number().finite(),
+      simAi: z.number().finite(),
+      movements: z.number().int().nonnegative(),
+    }),
+  ),
+  pnl: z.array(
+    z.object({
+      month: z.number().int().nonnegative(),
+      income: z.number().finite(),
+      upkeep: z.number().finite().nonnegative(),
+      savings: z.number().finite().nonnegative(),
+      net: z.number().finite(),
+    }),
+  ),
+  rented: z.number().int().nonnegative(),
+  aiArrivals: z.number().int().nonnegative(),
+  loungeDay: z.number().int(),
+});
+
+export const fboTransactionSchema: z.ZodType<FboTransactionRecord, z.ZodTypeDef, unknown> =
+  z.object({
+    fboId: z.string().min(1),
+    at: z.number().finite(),
+    gameMs: z.number().finite().nonnegative(),
+    kind: z.string().min(1),
+    amount: z.number().finite(),
+    source: z.enum(["own", "modelled", "sim_ai"]),
+    memo: z.string().nullable(),
+  });
+
+export const demandEventRecordSchema: z.ZodType<DemandEventRecord, z.ZodTypeDef, unknown> =
+  z.object({
+    id: z.string().min(1),
+    icao: z.string().min(2).max(8),
+    kind: z.enum(DEMAND_EVENT_KINDS),
+    startGameMs: z.number().finite().nonnegative(),
+    endGameMs: z.number().finite().nonnegative(),
+  });
 
 export const loanRecordSchema: z.ZodType<BookLoan, z.ZodTypeDef, unknown> = z.object({
   id: z.string().min(1),
@@ -432,7 +569,7 @@ export class EconomyRepo {
       .all() as Array<{ game_at: number | null; category: string; amount: number }>;
     const months = new Map<number, PnlMonth>();
     for (const r of rows) {
-      if (CAPITAL_CATEGORIES.has(r.category) || r.amount === 0) continue;
+      if (CAPITAL_CATEGORIES.has(r.category as LedgerCategory) || r.amount === 0) continue;
       const month = gameMonthIndex(r.game_at ?? 0);
       const m = months.get(month) ?? { month, revenue: 0, expense: 0, net: 0 };
       if (r.amount > 0) m.revenue = Math.round((m.revenue + r.amount) * 100) / 100;
@@ -549,6 +686,147 @@ export class EconomyRepo {
     });
   }
 
+  // ---- FBOs, demand, insurance, milestones (P5 part 2) ----
+
+  saveFbo(f: FboRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO fbos (id, icao, status, built_at, json) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status, built_at = excluded.built_at,
+           json = excluded.json`,
+      )
+      .run(
+        f.id,
+        f.icao,
+        f.status,
+        f.builtAt === null ? null : Math.floor(f.builtAt),
+        JSON.stringify(f),
+      );
+    const mod = this.db.prepare(
+      `INSERT INTO fbo_modules (fbo_id, kind, level, json) VALUES (?, ?, ?, ?)
+       ON CONFLICT(fbo_id, kind) DO UPDATE SET level = excluded.level, json = excluded.json`,
+    );
+    for (const k of FBO_MODULE_KINDS) {
+      const m = f.modules[k];
+      mod.run(f.id, k, m.level, JSON.stringify(m));
+    }
+  }
+
+  listFbos(): FboRecord[] {
+    const rows = this.db.prepare("SELECT json FROM fbos ORDER BY id").all() as Array<{
+      json: string;
+    }>;
+    return rows.flatMap((r) => {
+      const f = parse(fboRecordSchema, r.json);
+      return f ? [f] : [];
+    });
+  }
+
+  addFboTransaction(t: FboTransactionRecord): void {
+    this.db
+      .prepare(
+        "INSERT INTO fbo_transactions (fbo_id, at, game_at, kind, amount, source, memo) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(t.fboId, Math.floor(t.at), Math.floor(t.gameMs), t.kind, t.amount, t.source, t.memo);
+  }
+
+  /** FBO transactions, oldest first (optionally one FBO, the last `limit`). */
+  listFboTransactions(
+    options: { fboId?: string; limit?: number } = {},
+  ): Array<FboTransactionRecord & { id: number }> {
+    const limit = Math.max(1, Math.min(1_000_000, Math.floor(options.limit ?? 1_000_000)));
+    const rows = (
+      options.fboId
+        ? this.db
+            .prepare(
+              "SELECT id, fbo_id, at, game_at, kind, amount, source, memo FROM fbo_transactions WHERE fbo_id = ? ORDER BY id DESC LIMIT ?",
+            )
+            .all(options.fboId, limit)
+        : this.db
+            .prepare(
+              "SELECT id, fbo_id, at, game_at, kind, amount, source, memo FROM fbo_transactions ORDER BY id DESC LIMIT ?",
+            )
+            .all(limit)
+    ) as Array<{
+      id: number;
+      fbo_id: string;
+      at: number;
+      game_at: number;
+      kind: string;
+      amount: number;
+      source: "own" | "modelled" | "sim_ai";
+      memo: string | null;
+    }>;
+    return rows.reverse().map((r) => ({
+      id: r.id,
+      fboId: r.fbo_id,
+      at: r.at,
+      gameMs: r.game_at,
+      kind: r.kind,
+      amount: r.amount,
+      source: r.source,
+      memo: r.memo,
+    }));
+  }
+
+  saveDemandEvent(e: DemandEventRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO demand_events (id, icao, kind, start_at, end_at, json) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET end_at = excluded.end_at, json = excluded.json`,
+      )
+      .run(
+        e.id,
+        e.icao,
+        e.kind,
+        Math.floor(e.startGameMs),
+        Math.floor(e.endGameMs),
+        JSON.stringify(e),
+      );
+  }
+
+  /** Demand events that ended after `sinceGameMs` (the book keeps the last 30 days). */
+  listDemandEvents(sinceGameMs = 0): DemandEventRecord[] {
+    const rows = this.db
+      .prepare("SELECT json FROM demand_events WHERE end_at > ? ORDER BY start_at, id")
+      .all(Math.floor(sinceGameMs)) as Array<{ json: string }>;
+    return rows.flatMap((r) => {
+      const e = parse(demandEventRecordSchema, r.json);
+      return e ? [e] : [];
+    });
+  }
+
+  saveDemandActivity(activity: Record<string, number>): void {
+    this.db.exec("DELETE FROM demand_index");
+    const ins = this.db.prepare("INSERT INTO demand_index (icao, activity) VALUES (?, ?)");
+    for (const [icao, v] of Object.entries(activity)) ins.run(icao, v);
+  }
+
+  saveInsurance(a: BookAircraftInput): void {
+    if (!a.insurance || a.status === "sold" || a.status === "returned") {
+      this.db.prepare("DELETE FROM insurance_policies WHERE aircraft_id = ?").run(a.id);
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO insurance_policies (aircraft_id, status, premium, json) VALUES (?, ?, ?, ?)
+         ON CONFLICT(aircraft_id) DO UPDATE SET status = excluded.status, premium = excluded.premium,
+           json = excluded.json`,
+      )
+      .run(
+        a.id,
+        a.status === "written_off" ? "claimed" : "active",
+        a.insurance.premium,
+        JSON.stringify(a.insurance),
+      );
+  }
+
+  saveMilestone(m: MilestoneRecord): void {
+    this.db
+      .prepare("INSERT OR IGNORE INTO milestones (id, game_at, at) VALUES (?, ?, ?)")
+      .run(m.id, Math.floor(m.gameMs), Math.floor(m.at));
+  }
+
   addAircraftEvent(e: AircraftEventRecord): void {
     this.db
       .prepare(
@@ -585,10 +863,18 @@ export class EconomyRepo {
     this.transaction(() => {
       if (changes.company || changes.ledger.length > 0) this.saveCompany(company);
       for (const e of changes.ledger) this.addLedger(e);
-      for (const a of changes.aircraft) this.saveAircraft(a);
+      for (const a of changes.aircraft) {
+        this.saveAircraft(a);
+        this.saveInsurance(a);
+      }
       for (const l of changes.loans) this.saveLoan(l);
       for (const e of changes.events) this.addAircraftEvent(e);
       for (const l of changes.listings) this.saveListing(l);
+      for (const f of changes.fbos) this.saveFbo(f);
+      for (const t of changes.fboTransactions) this.addFboTransaction(t);
+      for (const e of changes.demandEvents) this.saveDemandEvent(e);
+      if (changes.activity) this.saveDemandActivity(company.activity);
+      for (const m of changes.milestones) this.saveMilestone(m);
     });
   }
 

@@ -6,6 +6,7 @@ import { CARGO_KINDS, type CargoKind, type Job } from "@cargo-ops/protocol";
 import { KIND_LABELS } from "@cargo-ops/economy";
 import { PageHero } from "@/components/AppNav";
 import { EmptyState } from "@/components/EmptyState";
+import { DemandEvents } from "@/components/cargo/DemandEvents";
 import { KindBadge, MissionCard } from "@/components/cargo/MissionCard";
 import { MissionStrip } from "@/components/cargo/MissionStrip";
 import { PayoutBreakdown } from "@/components/cargo/PayoutBreakdown";
@@ -20,6 +21,7 @@ import {
   useAirportLookup,
   useJobBoard,
 } from "@/lib/economy/board";
+import { useCompanyView } from "@/lib/economy/company";
 import { formatInt, formatUsd } from "@/lib/format";
 import { useCommand, useSimConnection } from "@/lib/transport/useSimConnection";
 import { cn } from "@/lib/utils";
@@ -88,6 +90,8 @@ function Jobs() {
   const [demoType, setDemoType] = useState<string | null>(null);
   const board = useJobBoard(state, { demoTypeKey: demoType, lookup });
   const { jobs, company, mission, source, connector } = board;
+  // P5 part 2: active local demand events (the demo company's in demo mode).
+  const { demand, source: demandSource } = useCompanyView(state, lookup);
   const type = activeType(jobs);
   const [filters, setFilters] = useState<Filters>({
     origin: "current",
@@ -216,6 +220,13 @@ function Jobs() {
         {mission && !demo ? (
           <MissionStrip mission={mission} source={source} className="col-span-12" />
         ) : null}
+
+        <DemandEvents
+          className="col-span-12"
+          demand={demand}
+          source={demandSource}
+          lookup={lookup}
+        />
 
         <Panel
           className="col-span-12"

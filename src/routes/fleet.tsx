@@ -108,6 +108,33 @@ function Fleet() {
       >
         Repair {a.repairCost > 0 ? formatUsd(a.repairCost) : ""}
       </button>
+      {a.ownership === "owned" && a.insurance ? (
+        <button
+          type="button"
+          className={ghostButton}
+          disabled={!connector || busy}
+          title={
+            disabledNote ??
+            (a.insurance.insured
+              ? `Covers ${Math.round(a.insurance.coverageShare * 100)} % of a write-off and of incident repairs above ${formatUsd(a.insurance.deductible)}; risk × ${a.insurance.riskFactor}`
+              : `Hull policy: ${formatUsd(a.insurance.premiumMonthly)} a month (risk × ${a.insurance.riskFactor})`)
+          }
+          onClick={() =>
+            void run(
+              a.insurance?.insured ? "insurance.cancel" : "insurance.buy",
+              { aircraftId: a.id },
+              a.insurance?.insured
+                ? `${a.registration} insurance cancelled`
+                : `${a.registration} insured`,
+            )
+          }
+          data-testid="insurance-toggle"
+        >
+          {a.insurance.insured
+            ? `Insured · ${formatUsd(a.insurance.premiumMonthly)}/mo`
+            : `Insure ${formatUsd(a.insurance.premiumMonthly)}/mo`}
+        </button>
+      ) : null}
       {a.ownership === "owned" ? (
         <button
           type="button"

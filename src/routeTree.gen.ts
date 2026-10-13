@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CompanyRouteImport } from './routes/company'
 import { Route as DiagnosticsRouteImport } from './routes/diagnostics'
+import { Route as FboRouteImport } from './routes/fbo'
 import { Route as FleetRouteImport } from './routes/fleet'
 import { Route as FlightRouteImport } from './routes/flight'
 import { Route as JobsRouteImport } from './routes/jobs'
@@ -32,6 +33,11 @@ const CompanyRoute = CompanyRouteImport.update({
 const DiagnosticsRoute = DiagnosticsRouteImport.update({
   id: '/diagnostics',
   path: '/diagnostics',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FboRoute = FboRouteImport.update({
+  id: '/fbo',
+  path: '/fbo',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FleetRoute = FleetRouteImport.update({
@@ -69,6 +75,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/company': typeof CompanyRoute
   '/diagnostics': typeof DiagnosticsRoute
+  '/fbo': typeof FboRoute
   '/fleet': typeof FleetRoute
   '/flight': typeof FlightRoute
   '/jobs': typeof JobsRoute
@@ -80,6 +87,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/company': typeof CompanyRoute
   '/diagnostics': typeof DiagnosticsRoute
+  '/fbo': typeof FboRoute
   '/fleet': typeof FleetRoute
   '/flight': typeof FlightRoute
   '/jobs': typeof JobsRoute
@@ -92,6 +100,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/company': typeof CompanyRoute
   '/diagnostics': typeof DiagnosticsRoute
+  '/fbo': typeof FboRoute
   '/fleet': typeof FleetRoute
   '/flight': typeof FlightRoute
   '/jobs': typeof JobsRoute
@@ -105,6 +114,7 @@ export interface FileRouteTypes {
     | '/'
     | '/company'
     | '/diagnostics'
+    | '/fbo'
     | '/fleet'
     | '/flight'
     | '/jobs'
@@ -116,6 +126,7 @@ export interface FileRouteTypes {
     | '/'
     | '/company'
     | '/diagnostics'
+    | '/fbo'
     | '/fleet'
     | '/flight'
     | '/jobs'
@@ -127,6 +138,7 @@ export interface FileRouteTypes {
     | '/'
     | '/company'
     | '/diagnostics'
+    | '/fbo'
     | '/fleet'
     | '/flight'
     | '/jobs'
@@ -139,6 +151,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CompanyRoute: typeof CompanyRoute
   DiagnosticsRoute: typeof DiagnosticsRoute
+  FboRoute: typeof FboRoute
   FleetRoute: typeof FleetRoute
   FlightRoute: typeof FlightRoute
   JobsRoute: typeof JobsRoute
@@ -168,6 +181,13 @@ declare module '@tanstack/react-router' {
       path: '/diagnostics'
       fullPath: '/diagnostics'
       preLoaderRoute: typeof DiagnosticsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/fbo': {
+      id: '/fbo'
+      path: '/fbo'
+      fullPath: '/fbo'
+      preLoaderRoute: typeof FboRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/fleet': {
@@ -219,6 +239,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CompanyRoute: CompanyRoute,
   DiagnosticsRoute: DiagnosticsRoute,
+  FboRoute: FboRoute,
   FleetRoute: FleetRoute,
   FlightRoute: FlightRoute,
   JobsRoute: JobsRoute,

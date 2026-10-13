@@ -394,10 +394,8 @@ tagged DEMO with all actions disabled.
 
 ## Deferred
 
-- P5 part 2 (next lane): FBOs (own maintenance shops extend `isMaintenanceCapable`, FBO
-  collateral), insurance premiums (category exists), dynamic demand and fuel prices,
-  milestones (placeholder on the Company page), IFR/night/weather condition bonuses,
-  small/GA airports, transit cargo.
+- Done in P5 part 2 (below): FBOs, insurance, dynamic demand and fuel prices, milestones.
+  Still open: IFR/night/weather condition bonuses, small/GA airports, transit cargo.
 - Leases are never cancelled for non-payment: their monthly fee is booked even when it
   drives cash negative (only loans have a missed-payment path).
 
@@ -638,3 +636,261 @@ cheapest affordable listing within 600 nm on day 52, buys it financed on day 53.
 its minor defects and queues the rest near the end, so the demo shows DEMO-tagged
 listings, a used aircraft with defects in the systems panel and a maintenance board ETA,
 with every action disabled.
+
+---
+
+# P5 — FBOs, demand, insurance, milestones
+
+Code: `packages/economy/src/{fbo-constants,fbo,demand,insurance,milestones}.ts` and the P5
+part 2 section of `book.ts` (pure, seeded, shared by the connector and the browser demo);
+the connector's `core/economy/engine.ts` (commands, board hooks, AI traffic) and
+`sim/ai-traffic.ts`; protocol `packages/protocol/src/fbo.ts`. Every constant lives in
+`fbo-constants.ts`. Worked examples are unit tests in `packages/economy/test/fbo.test.ts`
+and `connector/test/fbo.test.ts`.
+
+## Airport size, buy and build (plan §7.3)
+
+The bundled OurAirports subset has no `scheduled_service` column and no runway count: the
+**longest runway** stands in for runway capacity and an **IATA code** for scheduled service.
+
+```
+s           = type base × runway factor × service factor                 (4 decimals)
+type base   = large 1, medium 0.35, small 0.15
+runway      = clamp(longest runway / 8,000 ft, 0.4, 1.6)   (unknown → 0.4)
+service     = 1 with an IATA code, else 0.6
+buy price   = $500,000 × s, rounded to $1,000   (comes with ramp & services 1 + fuel farm 1)
+build       = 55 % of the buy price now + land lease 0.4 % of it per in-game month,
+              ready after round(3 + 11 × clamp((s − 0.15) / 1.45, 0, 1)) in-game days
+              (comes with ramp & services 1)
+book value  = 85 % of the money invested (price + modules);  sale = 75 % of it
+```
+
+One FBO per airport (`fbo_exists`), any number of airports. Loans may finance a purchase
+or a construction (collateral `{type: "fbo"}`, value = the price; later loans use the book
+value); a repossessed FBO leaves the portfolio. Selling pays off a loan on it first
+(`underwater` otherwise) and books the day's accrued traffic.
+
+| Airport | Type, runway, IATA    | s      | Buy      | Build (+ lease/mo)  | Days | Movements/day |
+| ------- | --------------------- | ------ | -------- | ------------------- | ---- | ------------- |
+| KATL    | large, 12,390 ft, ATL | 1.5488 | $774,000 | $425,700 (+ $3,096) | 14   | 77.1          |
+| KMEM    | large, 11,120 ft, MEM | 1.39   | $695,000 | $382,250 (+ $2,780) | 12   | 65.6          |
+| KLIT    | medium, 8,273 ft, LIT | 0.3619 | $181,000 | $99,550 (+ $724)    | 5    | 8.7           |
+
+KATL: 1 × 12,390 / 8,000 × 1 = 1.5488 → 500,000 × 1.5488 = $774,400 → **$774,000**; build
+774,000 × 0.55 = **$425,700**, lease **$3,096**, 3 + 11 × (1.3988 / 1.45 → 0.9647) = 13.6 →
+**14 days**.
+
+## Modules (levels 1–3)
+
+Cost of each level and monthly upkeep × the size scale **clamp(s, 0.4, 1.2)**; installing or
+upgrading takes in-game days (shown on the queue with an ETA) and the new level works when it
+completes. Upkeep (and a built FBO's land lease) is billed at every month boundary for the
+coming month (`fbo_upkeep`); the month of acquisition is free.
+
+| Module           | Cost L1 / L2 / L3  | Upkeep/mo L1 / L2 / L3 | Days  | Effect by level                                                                                                                               |
+| ---------------- | ------------------ | ---------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fuel farm        | 120k / 180k / 300k | 3,000 / 5,000 / 8,000  | 1/2/4 | cost = regional price × (1 − 6/9/12 %); sells ≤ 20,000 / 60,000 / 150,000 kg a day; buy chance 45/55/65 %; own aircraft fuel at cost          |
+| Hangar           | 150k / 200k / 300k | 2,500 / 4,000 / 6,000  | 2/3/5 | 2 / 4 / 8 bays; own aircraft inside lose 60 / 80 / 100 % less storm wear; spare bays rented nightly with 45 / 60 / 75 % chance at $90 × scale |
+| Maintenance shop | 200k / 250k / 400k | 5,000 / 8,000 / 12,000 | 2/3/5 | own repairs × 0.75 cost, × 0.7 time up to minor / major / grounding defects; services traffic (2.5 / 5 / 7.5 %, $600 × class margin)          |
+| Cargo terminal   | 180k / 220k / 350k | 4,000 / 6,000 / 9,000  | 2/3/4 | +4 / 8 / 12 jobs and +5 / 10 / 15 % payouts on boards at the airport; cargo handling of traffic (8 / 16 / 24 %, 1.2 × handling fee)           |
+| Ramp & services  | 60k / 100k / 160k  | 1,500 / 2,500 / 4,000  | 1/1/2 | captures 30 / 38 / 46 % of the airport's movements; landing/parking $15 × class × 1 / 1.15 / 1.3; handling 25 / 32 / 40 %; L2+ crew lounge    |
+
+At KATL (scale 1.2): fuel farm L1 **$144,000**, upkeep **$3,600**/mo; a bought KATL FBO pays
+ramp $1,800 + fuel farm $3,600 = **$5,400** a month. At KLIT (scale 0.4): fuel farm L1 $48,000.
+
+**Own maintenance shop** (`MaintenanceCapability`): an airport with an operating own shop of
+any level is maintenance-capable (ferry permits target it, annuals there use own rates); a
+repair uses `own` rates (× 0.75 cost, × 0.7 time) when the shop's level covers every defect's
+severity, else the airport's normal rates. Example (KLIT, L1): gear minor $4,860 / 8 h →
+**$3,645 / 5.6 h**; a grounding defect there is not covered → field rates $67,500 × 1.35 =
+**$91,125 / 90 h**.
+
+## Income source 1: the player's own arrivals
+
+On a flight that lands and parks at an airport with an own operating FBO (any settled
+mission or ferry leg):
+
+- **fuel at cost** with a fuel farm: billed at the farm's cost price instead of the regional
+  price; the difference is an `fbo_transactions` row (`fuel_at_cost`, source `own`);
+- **landing fee waived** (you own the ramp): the mission cost line shows $0, the fee is an
+  `own` transaction (`landing_fee_waived`);
+- **crew lounge** (ramp ≥ 2): +1 reputation, at most once per in-game day per FBO.
+
+Own-arrival benefits are savings, not cash: they are charted and kept in the FBO P&L
+(`savings`), never in the ledger.
+
+**Acceptance (connector, `connector/test/fbo.test.ts`)**: seed 4242; `fbo.buy KATL` financed
+by Jetwash ($600,000, 60 months): cash 250,000 − 774,000 + 600,000 − 6,000 (fee) = $70,000.
+The replayed KMEM→KATL mission still pays **$7,124** (no demand on day 0, no terminal at
+KMEM); its 623.1 lb = 282.63 kg are billed at the farm's **$1.800/kg** (6 % under KATL's
+$1.915) = **$508.74** instead of $541.24 → `fuel_at_cost` **$32.50**; the **$300** landing fee
+is waived → `landing_fee_waived` $300; today's own savings **$332.50**; cash
+70,000 + 7,124 − 508.74 = **$76,615.26**; the ledger balances.
+
+## Income source 2: the modelled traffic stream
+
+A deterministic stream per FBO airport on the company clock, one in-game hour at a time:
+
+```
+movements/day M = 40 × s^1.5              hour weights w_h (night 0.1–0.25, peaks 1.8; Σ = 24)
+λ_h             = M × w_h / 24             n = ⌊λ⌋ + (rng < λ − ⌊λ⌋)
+seed            = FNV-1a(company seed, "traffic", ICAO, absolute hour)
+class mix       = large: piston 20 / turboprop 40 / jet 40 %; medium 50 / 40 / 10 %
+class factor    = piston 0.5, turboprop 1, jet 3;  fuel uplift 120 / 500 / 2,000 kg
+per movement    captured with the ramp share, then (independent draws, every draw made
+                for every movement so a module change never shifts the stream):
+  ramp fee      $15 × class × ramp level factor                         (always)
+  handling      chance × e(H / $80) → H × class                         (H = player fee)
+  fuel          chance × e(r)       → uplift × (P − farm cost), ≤ daily capacity
+  cargo         chance × e(H / $80) → 1.2 × H × class                   (terminal)
+  maintenance   chance              → $600 × class                       (shop)
+night           spare hangar bays rented (seed FNV-1a(seed, "hangar", ICAO, day))
+```
+
+**Price elasticity** (too-high prices lose customers):
+
+```
+e(r) = clamp(1 − 3 × (r − 1), 0, 1.3)        r = player price ÷ reference
+r:   0.9 → 1.30   1.0 → 1.00   1.05 → 0.85   1.1 → 0.70   1.2 → 0.40   1.3 → 0.10   ≥ 1.34 → 0
+```
+
+The fuel price is set as a ratio of the airport's regional price (0.7–1.5, so it follows
+demand events); the handling fee in dollars ($20–$300, reference $80 per turboprop). With a
+farm cost c = 0.94 (L1) the fuel margin per customer (r − c) × e(r) peaks at
+r = (4 + 3c) / 6 = **1.137**.
+
+The day's modelled income is posted at the in-game midnight as **one `fbo_income` ledger
+entry** per FBO, with one `fbo_transactions` row per kind (source `modelled`), and charted.
+
+Worked example (KATL, ramp 1 + fuel farm 1, reference prices, regional $1.915, farm cost
+$1.800, margin $0.115):
+
+```
+average class factor   0.2 × 0.5 + 0.4 × 1 + 0.4 × 3 = 1.7
+average uplift         0.2 × 120 + 0.4 × 500 + 0.4 × 2,000 = 1,024 kg
+per captured movement  ramp 15 × 1.7 = 25.50 + handling 0.25 × 80 × 1.7 = 34.00
+                       + fuel 0.45 × 1,024 × 0.115 = 52.99  → $112.49
+expected per day       77.1 × 0.30 × 112.49 = $2,601.94   (≈ $78,000 a month vs $5,400 upkeep)
+```
+
+Seeded day 1 at KATL (seed 4242, hours 24–47): 77 movements, 20 captured, ramp $540,
+handling $160, fuel $1,035 (9,000 kg) → **$1,735.00**. Over 30 days the seeded mean stays
+within ±15 % of the expected value (unit test). KLIT (medium) with the same modules expects
+$151.61 a day: small FBOs mostly pay off through your own operations (fuel at cost, fees,
+the shop and the terminal).
+
+## Income source 3: real AI traffic in the simulator (bonus)
+
+`connector/src/sim/ai-traffic.ts` (unverified on a real sim; type-checked against
+node-simconnect 4.2.1):
+
+- Every **30 s**, while an own FBO airport lies within reach, `requestDataOnSimObjectType`
+  asks for every `AIRCRAFT` object around the **user aircraft** (SimConnect centres the radius
+  on the user; maximum 200 km): radius = distance to the farthest FBO in reach + 10 km. The
+  definition reads `PLANE LATITUDE`, `PLANE LONGITUDE`, `SIM ON GROUND`, `GROUND VELOCITY` and
+  `ATC ID`; `simObjectDataByType` replies are collected until entry `outOf`.
+- **Arrival** = an object within **10 km** of the FBO airport, on the ground and slower than
+  **30 kt**, that the detector saw moving (airborne or faster than 40 kt) inside that radius,
+  and whose object id was not credited there in the last 6 hours. Aircraft first seen parked
+  (gate spawns) never count.
+- **Bonus** (`fbo_income` at once, transaction source `sim_ai`, memo "AI arrival observed in
+  the simulator (bonus …)"): ramp fee $15 × ramp factor + handling H × e(H/80) (+ 400 kg ×
+  fuel margin × e(r) with a farm), turboprop class. KATL ramp 1 + fuel farm 1 at reference
+  prices: 15 + 80 + 400 × 0.115 = **$141**.
+
+The economy works fully offline; this is a labelled bonus only. Replays never emit it
+(`FakeAiTraffic` scripts batches for tests).
+
+## Dynamic demand (plan §7.4)
+
+```
+index(airport) = max(0.5, 1 + activity + active event payout uplift)
+job factor     = clamp((index(origin) + index(destination)) / 2, 0.8, 1.5)   (2 decimals)
+                 × (1 + own cargo terminal bonus at the origin)
+fuel price     = regional price × (1 + active event fuel uplift)
+activity       delivery into an airport −0.03, departure with cargo +0.01, clamped to
+               −0.15…+0.10, decays × 0.85 per in-game day
+```
+
+The factor is fixed on the board (`job.demandFactor`, a "Local demand" line in the
+breakdown) and the delivered payout uses the same factor; a factor of 1 adds no line, so
+P3–P5 payouts are unchanged.
+
+**Events**: at the start of every in-game day ≥ 1, seed FNV-1a(company seed, "demand", day):
+50 % chance of one new event at an airport without an active one, among large airports
+within 600 nm of the base plus the FBO airports (weight large 3, medium 1):
+
+| Event    | Weight | Days | Payouts | Fuel  | Other                                            |
+| -------- | ------ | ---- | ------- | ----- | ------------------------------------------------ |
+| Storm    | 45     | 1–3  | +20 %   | +8 %  | aircraft parked outside lose 0.4 condition a day |
+| Festival | 30     | 2–4  | +12 %   | +4 %  | —                                                |
+| Strike   | 25     | 2–5  | +30 %   | +15 % | —                                                |
+
+Examples: two deliveries into KATL → activity −0.06 → index **0.94**; a storm there →
+**1.14**; a KMEM→KATL job then gets (1 + 1.14) / 2 = **1.07**. Seed 4242 with base KMEM (43
+candidates): the first event is a **storm at KIND on day 3**, one day long (`EV-3-KIND`); a
+C208B parked there loses 0.4 → **99.6 %**, inside an own hangar L1 0.16 → **99.84 %**. Events
+show on `/jobs` and as map pins (`demand.event`).
+
+## Hull insurance (plan §7.4)
+
+```
+premium/month = 0.3 % × hull value × risk                   (first month at purchase)
+risk          = min(3, 1 + 0.25 × hard landings (peak G > 1.6) in 180 days
+                       + 1 × crashes in 360 days)
+repair claim  = 80 % × max(0, incident repair cost − $2,000)   (defects caused by a hard
+                landing or a crash, at the shop's rates; claimed when the repair is ordered)
+write-off     = 80 % × the hull value just before the crash
+```
+
+A new C208B ($2.7M value): **$8,100**/month; after one hard landing × 1.25. A $19,440 hard
+landing gear repair at KMEM pays **$13,952**. **An insured write-off settles its loan from
+the payout** (`loan_payment` up to the balance; the loan is `paid_off` when covered, else the
+rest stays active); an uninsured write-off keeps the loan active, as in P5 part 1. Ledger:
+`insurance` (premiums), `insurance_claim`; event `insurance.claim`. Owned aircraft only
+(`not_owned`); `insurance.cancel` stops the next premiums (no refund).
+
+## Milestones
+
+Reached once, persisted with the company-clock time and the wall clock (`milestones` table and
+the company record), announced with `milestone.reached`, listed on `/company`:
+
+| Milestone              | Reached when                                                                     |
+| ---------------------- | -------------------------------------------------------------------------------- |
+| First delivery         | a mission is delivered and paid                                                  |
+| 100 flight hours       | the company's aircraft have flown 100 airborne hours (counted from P5 part 2 on) |
+| First FBO              | an FBO is bought or built                                                        |
+| Debt-free              | every loan ever taken is paid off                                                |
+| Perfect landing streak | 5 deliveries in a row landed A or A+                                             |
+| First restoration      | a used aircraft's last known defect is repaired                                  |
+| Growing fleet          | 3 aircraft in the fleet at once                                                  |
+| FBO network            | FBOs at 3 airports                                                               |
+
+## Ledger categories (P5 part 2)
+
+`fbo_income` (daily modelled traffic, AI bonuses), `fbo_upkeep` (modules + land lease),
+`fbo_purchase` and `fbo_construction` (purchase, construction, module installs and upgrades:
+**capital**, excluded from the operating P&L like aircraft purchases), `insurance`,
+`insurance_claim`. The Company page shows a monthly P&L line per FBO (income, upkeep, net,
+own-fleet savings).
+
+## Storage, export, API (P5 part 2)
+
+Migration 6 (idempotent, `IF NOT EXISTS` / `OR REPLACE`): `fbos(id, icao, status, built_at,
+json)`, `fbo_modules(fbo_id, kind, level, json)`, `fbo_transactions(id, fbo_id, at, game_at,
+kind, amount, source CHECK own|modelled|sim_ai, memo)`, `demand_events(id, icao, kind,
+start_at, end_at, json)`, `demand_index(icao, activity)`, `insurance_policies(aircraft_id,
+status, premium, json)`, `milestones(id, game_at, at)`, settings `economy.phase = 6`. Company
+and fleet rows gain JSON fields with defaults; a P5-part-1 company starts the day clock from
+its current in-game day (no retroactive events). Career export **version 4** adds `fbos`,
+`fboTransactions` and `demandEvents` (company: activity, counters, milestones; fleet:
+insurance, incidents); versions 1–3 import. API: `GET /api/fbos?fbo&limit`,
+`/api/fbos/quote?icao=`, `/api/demand`.
+
+## Demo (P5 part 2)
+
+`buildDemoCompany` also insures the financed starter (day 20.6), buys the FBO at **KLIT** on
+day 57 (fuel farm and ramp included), adds a hangar, upgrades the ramp to level 2 and prices
+fuel at 104 % / handling at $85 on day 60, flies three legs through KLIT (own-arrival savings)
+and records deliveries for demand activity; milestones carry the in-game date they were
+reached. Everything is tagged DEMO with every action disabled.

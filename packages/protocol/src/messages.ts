@@ -43,6 +43,12 @@ export const EVENT_NAMES = [
   "defect.found",
   "inspection.completed",
   "aircraft.grounded",
+  // P5 part 2: FBOs, demand, milestones, insurance (additive).
+  "fbo.income",
+  "fbo.built",
+  "demand.event",
+  "milestone.reached",
+  "insurance.claim",
 ] as const;
 export const eventNameSchema = z.enum(EVENT_NAMES);
 export type EventName = z.infer<typeof eventNameSchema>;
@@ -80,6 +86,15 @@ export const KNOWN_COMMANDS = [
   "fleet.annual",
   "fleet.ferryPermit",
   "fleet.defer",
+  // P5 part 2: FBOs and insurance.
+  "fbo.buy",
+  "fbo.build",
+  "fbo.sell",
+  "fbo.module.buy",
+  "fbo.module.upgrade",
+  "fbo.pricing",
+  "insurance.buy",
+  "insurance.cancel",
 ] as const;
 export type KnownCommandName = (typeof KNOWN_COMMANDS)[number];
 

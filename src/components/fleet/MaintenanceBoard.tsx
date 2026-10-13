@@ -69,8 +69,13 @@ export function MaintenanceBoard({
                 ETA {formatGameTime(o.readyAtGameMs)}
               </p>
               <p>
-                {o.airport} · {o.shop === "field" ? "field repair" : "maintenance base"} ·{" "}
-                {o.hours.toFixed(0)} h · {formatUsd(o.cost)}
+                {o.airport} ·{" "}
+                {o.shop === "field"
+                  ? "field repair"
+                  : o.shop === "own"
+                    ? "own FBO shop"
+                    : "maintenance base"}{" "}
+                · {o.hours.toFixed(0)} h · {formatUsd(o.cost)}
               </p>
             </div>
           </li>

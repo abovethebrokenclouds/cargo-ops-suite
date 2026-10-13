@@ -96,6 +96,13 @@ export interface GenerateOptions {
   count?: number;
   /** Put the first few jobs on this destination when the aircraft can serve it. */
   focus?: EconomyAirport | null;
+  /**
+   * P5 part 2: payout factor for a destination (local demand of origin and destination ×
+   * own cargo terminal bonus), 2 decimals; absent = 1.
+   */
+  demand?: (destination: EconomyAirport) => number;
+  /** P5 part 2: extra jobs from an own cargo terminal at the origin (drawn after the rest). */
+  extraJobs?: number;
 }
 
 function iso(ms: number): string {
@@ -109,7 +116,7 @@ export function jobId(seed: number, index: number): string {
 
 export function generateJobs(options: GenerateOptions): Job[] {
   const { origin, aircraft, nowMs } = options;
-  const count = options.count ?? BOARD_SIZE;
+  const count = (options.count ?? BOARD_SIZE) + Math.max(0, options.extraJobs ?? 0);
   const rng = new Rng(options.seed);
   const candidates = destinationCandidates(origin, options.airports, aircraft);
   if (candidates.length === 0) return [];
@@ -153,7 +160,9 @@ export function generateJobs(options: GenerateOptions): Job[] {
     const raw = limit * rng.range(sMin, sMax);
     const weightKg = Math.max(MIN_JOB_KG, Math.min(limit, Math.round(raw / 5) * 5));
     const id = jobId(options.seed, i);
+    const demand = options.demand ? options.demand(dest.airport) : 1;
     const breakdown = computePayout({
+      ...(demand !== 1 ? { demand } : {}),
       jobId: id,
       kind,
       weightKg,
@@ -179,6 +188,7 @@ export function generateJobs(options: GenerateOptions): Job[] {
       expiresAt: iso(nowMs + BOARD_LIFETIME_MIN * 60_000),
       payoutEstimate: breakdown.total,
       breakdown,
+      ...(demand !== 1 ? { demandFactor: demand } : {}),
     });
   }
   return jobs;

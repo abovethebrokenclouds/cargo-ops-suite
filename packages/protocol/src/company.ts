@@ -6,6 +6,7 @@ import {
   maintenanceOrderSchema,
   systemStateSchema,
 } from "./maintenance";
+import { insuranceStateSchema } from "./fbo";
 
 // Company, fleet, finance and ledger (plan §5 P4, §7, §7.2). Every domain here is
 // produced by the connector's company book (or, in the browser-only demo, by the same
@@ -48,6 +49,12 @@ export const LEDGER_CATEGORIES = [
   // P5: pre-purchase and annual inspections, ferry permits.
   "inspection",
   "permit",
+  // P5 part 2: FBO income, upkeep and capital; hull insurance claims.
+  "fbo_income",
+  "fbo_upkeep",
+  "fbo_purchase",
+  "fbo_construction",
+  "insurance_claim",
 ] as const;
 export const ledgerCategorySchema = z.enum(LEDGER_CATEGORIES);
 export type LedgerCategory = z.infer<typeof ledgerCategorySchema>;
@@ -156,6 +163,9 @@ export const fleetAircraftSchema = z.object({
   /** Cost and in-game hours to repair every known defect where it is parked. */
   repairAllCost: finite().nonnegative().optional(),
   repairAllHours: finite().nonnegative().optional(),
+  // ---- P5 part 2 (optional) ----
+  /** Hull insurance: the policy, or the quote when uninsured (owned aircraft only). */
+  insurance: insuranceStateSchema.optional(),
 });
 export type FleetAircraft = z.infer<typeof fleetAircraftSchema>;
 

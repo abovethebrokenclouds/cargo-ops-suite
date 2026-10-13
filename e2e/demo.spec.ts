@@ -6,6 +6,7 @@ const ROUTES = [
   "/map",
   "/jobs",
   "/fleet",
+  "/fbo",
   "/company",
   "/logbook",
   "/settings",
@@ -67,6 +68,11 @@ test.describe("demo mode (no connector)", () => {
     await expect(page.getByTestId("basemap-badge")).toHaveText("Offline outline");
     await expect(page.getByTestId("aircraft-marker")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId("map-destination")).toContainText("KATL");
+    // P5 part 2: the demo FBO pin (and the pins toggle hides it).
+    await expect(page.getByTestId("map-fbo-pin")).toHaveCount(1, { timeout: 30_000 });
+    await expect(page.getByTestId("map-fbo-pin")).toContainText("KLIT");
+    await page.getByTestId("pins-toggle").click();
+    await expect(page.getByTestId("map-fbo-pin")).toHaveCount(0);
     await expect(page.getByTestId("map-flight-panel").getByText("DEMO")).toBeVisible();
     const attribution = page.locator(".maplibregl-ctrl-attrib");
     await expect(attribution).toContainText("Natural Earth");
@@ -163,6 +169,35 @@ test.describe("demo mode (no connector)", () => {
     await expect(listings.first().getByTestId("buy-listing")).toBeDisabled();
     await expect(page.getByTestId("inspect-listing").first()).toBeDisabled();
     await expect(page.getByTestId("market-refresh")).toBeDisabled();
+  });
+
+  test("/fbo shows the DEMO FBO with modules, chart and P&L; every action disabled", async ({
+    page,
+  }) => {
+    await page.goto("/fbo");
+    await expect(page.getByTestId("demo-fbo-note")).toBeVisible();
+    const card = page.getByTestId("fbo-card");
+    await expect(card).toHaveCount(1, { timeout: 30_000 });
+    await expect(card).toContainText("KLIT");
+    await expect(page.getByTestId("fbo-list").getByText("DEMO").first()).toBeVisible();
+    await expect(page.getByTestId("fbo-module")).toHaveCount(5);
+    await expect(page.getByTestId("fbo-income-chart")).toBeVisible();
+    await expect(page.getByTestId("fbo-pnl")).toBeVisible();
+    await expect(page.getByTestId("fbo-occupancy")).toContainText("bays");
+    for (const b of await page.getByTestId("fbo-module-action").all())
+      await expect(b).toBeDisabled();
+    await expect(page.getByTestId("fbo-pricing-apply")).toBeDisabled();
+    await page.getByTestId("fbo-search").fill("KATL");
+    await page.getByTestId("fbo-search-results").getByRole("button").first().click();
+    await expect(page.getByTestId("fbo-quote")).toContainText("$774,000");
+    await expect(page.getByTestId("fbo-buy")).toBeDisabled();
+    await expect(page.getByTestId("fbo-build")).toBeDisabled();
+    // Milestones with dates on /company; active events on /jobs.
+    await page.goto("/company");
+    await expect(page.locator('[data-testid="milestone"][data-reached="true"]')).toHaveCount(3, {
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId("fbo-pnl-lines")).toContainText("KLIT");
   });
 
   test("/logbook in demo mode has no flights and exports are disabled", async ({ page }) => {

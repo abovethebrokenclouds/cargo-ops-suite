@@ -146,7 +146,7 @@ describe("cargo /api routes and career export/import", () => {
       assert.equal(careerExportSchema.safeParse(exported).success, true);
       assert.equal(exported.missions.length, 1);
       // P4: payout, fuel and landing fee; the starter aircraft and its events travel too.
-      assert.equal(exported.version, 3);
+      assert.equal(exported.version, 4);
       assert.deepEqual(
         exported.ledger.map((e) => e.category),
         ["mission_payout", "fuel", "landing_fee"],

@@ -1,4 +1,5 @@
 import type { EventName, Mode, SimState, SimStatePatch, Source } from "../protocol";
+import type { AiObjectSample, AiTarget } from "./ai-traffic";
 
 /** What the sim layer tells the core. Never synthesised: every update has a real origin. */
 export type SimUpdate =
@@ -19,7 +20,12 @@ export type SimUpdate =
   | { type: "reset"; state: SimState; at?: number }
   /** Shallow per-domain patch; full domain objects or partial fields. */
   | { type: "data"; patch: SimStatePatch; at?: number }
-  | { type: "event"; name: EventName; data: unknown };
+  | { type: "event"; name: EventName; data: unknown }
+  /**
+   * P5 part 2: one batch of AI aircraft the connected simulator reported around the user
+   * aircraft (only SimConnectSource emits it; replays never do).
+   */
+  | { type: "aiTraffic"; samples: AiObjectSample[]; at: number };
 
 export type SimListener = (update: SimUpdate) => void;
 
@@ -43,6 +49,8 @@ export interface SimSource {
   subscribe(listener: SimListener): () => void;
   start(): void;
   stop(): Promise<void>;
+  /** P5 part 2: where to watch AI traffic (the player's FBO airports); live sources only. */
+  setAiTargetsProvider?(provider: () => AiTarget[]): void;
 }
 
 /** Tiny listener set shared by sources. */

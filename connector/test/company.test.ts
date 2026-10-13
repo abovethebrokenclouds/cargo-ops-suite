@@ -206,7 +206,7 @@ describe("P4 company, fleet and loans through the connector", () => {
           termMonths: 36,
           collateral: { type: "fbo", id: "KMEM" },
         }),
-        "unsupported_collateral",
+        "unknown_fbo",
       );
       assert.equal(r.err("loan.payoff", { loanId: "LN-9" }), "unknown_loan");
       const quotes = r.ok<{ quotes: Array<{ lenderId: string; ok: boolean; payment: number }> }>(
@@ -446,7 +446,7 @@ describe("P4 storage: migration and P3 career import", () => {
       db.prepare(
         "INSERT INTO ledger (at, category, amount, ref_type, ref_id, memo) VALUES (?, 'job_payout', 7124, 'job', 'J-1', 'p3')",
       ).run(T0);
-      assert.deepEqual(migrate(db), [4, 5]);
+      assert.deepEqual(migrate(db), [4, 5, 6]);
       assert.deepEqual(migrate(db), []);
       const row = db.prepare("SELECT category, balance, game_at FROM ledger").get() as {
         category: string;
@@ -462,7 +462,7 @@ describe("P4 storage: migration and P3 career import", () => {
       assert.equal(r.fleet().aircraft.length, 1); // starter granted to the P3 company
       assert.equal(r.ledger().entries, 1);
       assert.deepEqual(r.ledger().months[0], { month: 0, revenue: 7124, expense: 0, net: 7124 });
-      assert.equal(r.storage.schemaVersion(), 5);
+      assert.equal(r.storage.schemaVersion(), 6);
       r.close();
     } finally {
       tmp.cleanup();
