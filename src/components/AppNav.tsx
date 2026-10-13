@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { useHydrated } from "@/hooks/use-hydrated";
+
 import { SimStatusChip } from "./status/SimStatusChip";
 
 type NavItem = {
@@ -61,9 +63,13 @@ function Wordmark() {
 }
 
 function NavLinks({ className }: { className?: string }) {
+  // The local SPA build hydrates every route from the prerendered "/" shell, and React keeps
+  // the shell's active-link attributes. Remounting the list once after hydration renders it
+  // fresh from the real location (a no-op in the SSR build, where both renders match).
+  const hydrated = useHydrated();
   return (
     <nav aria-label="Primary" className={className}>
-      <ul className="flex items-center gap-1">
+      <ul key={hydrated ? "client" : "server"} className="flex items-center gap-1">
         {navItems.map(({ to, label, icon: Icon }) => (
           <li key={to} className="shrink-0">
             <Link

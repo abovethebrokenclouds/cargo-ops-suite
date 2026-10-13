@@ -46,6 +46,19 @@ test.describe("replay mode against the local connector (--sim fake)", () => {
     await expect(page.getByTestId("diagnostics")).toContainText(/replay/i);
   });
 
+  test("nav marks the current route active in the local SPA build", async ({ page }) => {
+    for (const [route, label] of [
+      ["/flight", "Live Flight"],
+      ["/logbook", "Logbook"],
+      ["/", "Ops"],
+    ] as const) {
+      await page.goto(route);
+      const active = page.locator('nav[aria-label="Primary"] a[data-status="active"]');
+      await expect(active.first()).toHaveText(label);
+      await expect(active).toHaveText([label, label]);
+    }
+  });
+
   test("deep link to a client route is served by the SPA shell", async ({ request }) => {
     const res = await request.get("/logbook");
     expect(res.status()).toBe(200);
