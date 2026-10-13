@@ -1,6 +1,6 @@
 # Cargo Ops — Build Plan
 
-Status: **PLAN ONLY — awaiting approval. No application code has been written.**
+Status: **APPROVED 2026-10-13 by the owner.** Implementation is orchestrated from this document; no application code is in this PR.
 Date: 2026-10-13. Branch: `claude/bold-wozniak-w71opj`.
 
 This document is the single source of truth for building Cargo Ops, a private,
@@ -235,11 +235,18 @@ Motion: `tw-animate-css` for enter/exit, `motion` for number counters, page tran
 - Logbook with exports (CSV, GPX, JSON career export/import).
 - Acceptance: a full replayed mission completes end-to-end in E2E with the expected payout.
 
-### P4 — Company, fleet, economy
-- Cash, reputation 0–100 with gates, revenue/expense ledger, fuel billed at landing airport price, dry/wet lease, loans, wear/condition and repair, fleet buy/sell with reputation gates, aircraft type catalogue (payload/range/speed) with auto-match from `TITLE`.
-- Acceptance: economy formulas unit-tested against documented examples; ledger balances.
+### P4 — Company, fleet, economy core
+- Cash, reputation 0–100 with gates, revenue/expense ledger, fuel billed at landing airport price, dry/wet lease, wear/condition and repair, fleet buy/sell with reputation gates, aircraft type catalogue (payload/range/speed) with auto-match from `TITLE`.
+- **Bank loans** (§7.2): lenders, credit score, offers, auto-debit, collateral, early payoff, default handling.
+- Acceptance: economy formulas unit-tested against documented examples; ledger balances; a loan amortises correctly over a simulated month.
 
-### P5 — Polish and packaging
+### P5 — Economy depth: used aircraft, airworthiness, FBOs
+- **Used aircraft market** with per-system defects of variable severity, pre-purchase inspection, repair queue with downtime, airworthiness gate, ferry permits (§7.1).
+- **FBO ownership**: buy or build at an airport, upgrade modules, earn from the player's own arrivals and from a modelled traffic stream, plus real AI traffic detected through SimConnect when the sim is running (§7.3).
+- Dynamic per-airport demand and fuel pricing, insurance, milestones (§7.4).
+- Acceptance: a used aircraft with a grounding defect cannot be dispatched until repaired; FBO income accrues from a replayed arrival; all new tables migrate from an existing database.
+
+### P6 — Polish and packaging
 - Animations, empty states, keyboard shortcuts, PWA manifest for an installable window, backups/export UI, optional `@yao-pkg/pkg` connector exe (node-simconnect kept unbundled for LGPL), auto-start instructions, SimBrief OFP import (free fetch API, optional), in-sim toolbar panel (optional).
 - Acceptance: final `VERIFICATION.md` with cloud-verified vs PC-verified matrix; inventory complete.
 
@@ -299,6 +306,48 @@ Start requires on-ground + brake + within 3 nm of origin. Distance integrated by
 
 ---
 
+### 7.1 Used aircraft market and airworthiness
+
+- **Listings** are generated per aircraft type with age (years), airframe hours, cycles, location (an OurAirports airport, so a ferry flight may be needed), asking price and a seller note. Price = catalogue price × age/hours depreciation × (1 − defect discount) ± market noise.
+- **Systems** tracked per airframe: engine(s), propeller/thrust reversers, airframe/structure, landing gear and brakes, avionics, electrical, fuel system, hydraulics, cargo hold/door, interior/paint. Each system has a condition 0–100 and a list of **defects**.
+- **Defects** have a severity: `cosmetic` (no effect), `minor` (small cost/efficiency penalty, deferred allowed for 30 flight hours), `major` (performance penalty: +5–15 % fuel burn, reduced max payload, higher failure chance), `grounding` (aircraft is not airworthy until fixed). Each defect has a repair cost (∝ catalogue price × severity), a downtime in hours, and a `hidden` flag.
+- **Pre-purchase inspection** (fee ≈ 0.5 % of asking price, one in-game day) reveals hidden defects; buying without one carries the risk that grounding defects surface on the first flight (rolled at purchase, revealed on dispatch).
+- **Airworthiness gate**: dispatch requires zero grounding defects, no deferred minor defect past its limit, condition of every system ≥ 20 %, and a current annual inspection (every 12 months or 100 flight hours, whichever first; cost ∝ catalogue price). A **ferry permit** allows one flight with major defects to the nearest maintenance-capable airport (own FBO maintenance shop or a large airport), with a payload cap and no job revenue.
+- **Repair queue**: repairs run against in-game time (which advances with real time while the connector runs, and with flight time); cheaper and faster at an owned FBO with a maintenance shop; parts for rare types cost more. The player sees a maintenance board with estimated completion.
+- **Wear → new defects**: the P4 wear model now rolls for new defects when wear crosses thresholds, after hard landings (G > 1.6 → gear/airframe), overspeed (airframe), running tanks dry (fuel/engine) and crashes (multiple grounding defects or write-off).
+- **Resale**: selling price uses the same formula, so fixing a bargain and reselling is a viable play; reputation does not change on resale.
+
+### 7.2 Bank loans
+
+- **Lenders** (3 fictional banks with different risk appetite): each offers an APR, maximum loan-to-value (LTV) and term range. Offers depend on a **credit score** derived from reputation, months of positive cash flow, existing debt ratio and defaults.
+- **Loan** = principal, APR, term (6–120 months of in-game time), monthly payment (standard amortisation), collateral (the financed aircraft or FBO), origination fee (1 %), early-payoff allowed at any time without penalty.
+- **Auto-debit** on each in-game month boundary; a missed payment (insufficient cash) adds a late fee and −5 reputation; three consecutive misses → **repossession** of the collateral and a default flag that halves the credit score for 12 months.
+- UI: loan calculator with live monthly payment, ledger entries per debit, debt-to-income gauge on the Company page, "financed" badge on fleet cards.
+- Tables: `loans(id, lender, principal, apr, term_months, payment, balance, collateral_type, collateral_id, next_due_at, missed_count, status)`, `ledger` gains `category` values `loan_disbursement`, `loan_payment`, `late_fee`.
+
+### 7.3 FBOs (fixed-base operations)
+
+- **Acquire**: buy an existing FBO at an airport (price ∝ airport size from OurAirports `type` and `scheduled_service`) or **build** one (land lease + construction cost and a build time of 3–14 in-game days). One FBO per airport; any number of airports.
+- **Modules** (each with purchase cost, upgrade levels 1–3, monthly upkeep):
+  - *Fuel farm*: sells fuel to arriving traffic at a price the player sets around the regional base price; higher levels raise capacity and margin. Also fuels the player's own aircraft at cost.
+  - *Hangar*: parking for owned aircraft (no ramp fees, slower wear from weather), rents spare bays to traffic.
+  - *Maintenance shop*: repairs own aircraft cheaper and faster (§7.1); services traffic for revenue; level gates which defect classes it can fix.
+  - *Cargo terminal*: more and better-paying jobs generated at that airport; handling fees from traffic.
+  - *Ramp and services*: landing/parking fees, ground handling, crew lounge (small reputation bonus for the player's own flights through the airport).
+- **Income sources**:
+  1. **The player's own arrivals**: on every verified arrival at an FBO airport the modules trigger (fuel at cost, free parking, cheaper repairs, faster job turnaround).
+  2. **Modelled traffic**: a deterministic daily traffic stream per airport derived from OurAirports attributes (type, scheduled service, runway count/length) and time of day; each modelled movement buys fuel, parking, handling with probabilities set by module levels and player pricing (too-high prices lose customers). Accrues while the connector runs, in in-game time.
+  3. **Real sim traffic (when connected)**: the connector samples AI aircraft near the FBO airport via `requestDataOnSimObjectType` (AIRCRAFT category) and credits a bonus for each real arrival it observes, so live traffic in the sim visibly matters. Clearly labelled as a bonus so the economy still works offline.
+- **Management UI**: FBO page per airport with module cards, pricing sliders, daily income chart, occupancy, upgrade queue; map pins for owned FBOs; a monthly P&L line per FBO in the Company ledger. Loans may finance FBO purchases (§7.2).
+- Tables: `fbos(id, icao, status, built_at, json)`, `fbo_modules(fbo_id, kind, level, json)`, `fbo_transactions(fbo_id, at, kind, amount, source: own|modelled|sim_ai)`.
+
+### 7.4 Other intelligent features (planned, P5 unless noted)
+
+- **Dynamic demand**: per-airport demand index drifts with the player's activity and random events (storm, festival, strike), raising job payouts and fuel prices locally for a few days.
+- **Insurance**: optional hull policy per aircraft (monthly premium ∝ value) that covers a share of crash write-offs and repossession-free repair loans.
+- **Hired pilots (P6, optional)**: AI pilots fly owned aircraft on fixed routes in in-game time for a wage, generating modest income and wear while the player flies something else.
+- **Milestones and achievements**: first delivery, 100 hours, first FBO, debt-free, perfect landing streak; shown on the Company page.
+
 ## 8. Maps and aviation data
 
 - Basemap: `scripts/fetch-basemap.ps1` downloads a dated Protomaps build and extracts a region (`pmtiles extract --bbox --maxzoom`) into `data/basemap/*.pmtiles` (git-ignored; a z0–7 world extract of roughly 100–200 MB plus an optional regional z0–11). Served by the connector with HTTP range support. Style = `@protomaps/basemaps` `dark` flavor overridden with app tokens. Attribution line: `© OpenStreetMap contributors (ODbL) · Protomaps`.
@@ -357,8 +406,9 @@ The implementing session acts as orchestrator and uses the Workflow tool (or par
 | L5 Map + data ∥ | MapLibre, PMTiles pipeline, OurAirports loader, METAR fetcher | L1, L3 |
 | L6 Flight tracking | phase FSM, landing analyser, verifier, recorder | L3 |
 | L7 Cargo ops | job generator, missions, dispatch checks, route finder, logbook, exports | L5, L6 |
-| L8 Economy + fleet | ledger, reputation, wear, fleet management | L7 |
-| L9 Polish + packaging | motion, PWA, backups UI, optional exe, docs | L8 |
+| L8 Economy + fleet | ledger, reputation, wear, fleet management, bank loans | L7 |
+| L8b Economy depth ∥ | used aircraft market, defects and airworthiness, repair queue, FBOs, dynamic demand, insurance | L8 |
+| L9 Polish + packaging | motion, PWA, backups UI, optional exe, docs | L8b |
 | LQ QA (continuous) | E2E specs, verification record, inventory audits, adversarial review of each PR | all |
 
 Workflow sketch (pipeline per phase, review+verify fan-out per lane):
@@ -379,7 +429,7 @@ return { results }
 
 Guardrails for every lane: token-only styling (no hard-coded colours), no new dependency without an inventory row and verified license, no network calls except the documented ones, no fabricated telemetry, no "connected" state without a real `welcome`, keep Lovable's default build green, small PRs to the working branch, never rewrite pushed history.
 
-Suggested PR sequence: P0 (one PR), P1 (connector PR + flight page PR), P2 (map PR + tracking PR), P3, P4, P5.
+Suggested PR sequence: P0 (one PR), P1 (connector PR + flight page PR), P2 (map PR + tracking PR), P3, P4, P5 (used market PR + FBO PR), P6.
 
 ---
 
@@ -417,11 +467,6 @@ Suggested PR sequence: P0 (one PR), P1 (connector PR + flight page PR), P2 (map 
 
 ---
 
-## 15. Items that need the user's approval
+## 15. Approval record
 
-1. Approve this plan (phases, architecture, design direction).
-2. Confirm it is acceptable that the SimConnect client is LGPL-3.0 (used unmodified, separable, license shipped). No code of ours is affected.
-3. Confirm the optional online fallbacks are acceptable: OpenFreeMap tiles (free, no key, no SLA) and aviationweather.gov (US Government, no key). Both can be disabled in Settings; the app works fully offline without them.
-4. Confirm the basemap download size you are willing to keep locally (default: world z0–7 ≈ 100–200 MB; optional regional extract up to a few GB).
-
-Everything else is decided in this document.
+Approved by the owner on 2026-10-13 with these additions, now folded into §5 and §7: used aircraft with variable defects that must be fixed to be airworthy, bank loans for aircraft, and FBOs that can be bought or built, upgraded, and earn from incoming flights. The LGPL client, the optional online fallbacks and the default basemap size were accepted as proposed; any of these can still be changed by editing this document before the relevant phase starts.
