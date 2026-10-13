@@ -107,6 +107,38 @@ test.describe("demo mode (no connector)", () => {
     await expect(page.getByTestId("route-finder")).toBeVisible();
   });
 
+  test("/company shows the DEMO company with loans disabled", async ({ page }) => {
+    await page.goto("/company");
+    await expect(page.getByTestId("demo-company-note")).toBeVisible();
+    const cash = page.locator('[data-metric="Cash"]');
+    await expect(cash).toHaveAttribute("data-source", "demo", { timeout: 30_000 });
+    await expect(cash.getByText("DEMO")).toBeVisible();
+    await expect(cash.getByTestId("metric-value")).toHaveText(/^\$\d/);
+    await expect(page.getByTestId("ledger-table")).toBeVisible();
+    await expect(page.getByTestId("pnl-chart")).toBeVisible();
+    await expect(page.getByTestId("dti-gauge")).toBeVisible();
+    await expect(page.getByTestId("active-loans")).toContainText("Jetwash Credit");
+    await expect(page.getByTestId("take-loan")).toBeDisabled();
+    await expect(page.getByTestId("loan-disabled-note")).toBeVisible();
+    await expect(page.getByTestId("calc-payment")).toHaveText(/^\$[\d,]+\.\d\d$/);
+  });
+
+  test("/fleet shows the DEMO fleet and market with actions disabled", async ({ page }) => {
+    await page.goto("/fleet");
+    await expect(page.getByTestId("demo-fleet-note")).toBeVisible();
+    const cards = page.getByTestId("fleet-card");
+    await expect(cards).toHaveCount(2, { timeout: 30_000 });
+    await expect(cards.first().getByText("DEMO")).toBeVisible();
+    await expect(cards.first().getByTestId("financed-badge")).toBeVisible();
+    await expect(cards.nth(1).getByTestId("lease-badge")).toHaveText("Dry lease");
+    await expect(cards.first().getByTestId("repair-aircraft")).toBeDisabled();
+    await expect(page.getByTestId("fleet-disabled-note")).toBeVisible();
+    const market = page.getByTestId("market-type");
+    expect(await market.count()).toBeGreaterThan(8);
+    await expect(market.first().getByTestId("buy-aircraft")).toBeDisabled();
+    await expect(market.first().getByTestId("lease-aircraft")).toBeDisabled();
+  });
+
   test("/logbook in demo mode has no flights and exports are disabled", async ({ page }) => {
     await page.goto("/logbook");
     await expect(page.getByTestId("export-disabled-note")).toBeVisible();

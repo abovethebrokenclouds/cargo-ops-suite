@@ -1,6 +1,18 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 
-import { computePayout } from "../packages/economy/src/index";
+import { readFileSync } from "node:fs";
+
+import {
+  airportLookup,
+  computePayout,
+  flightWear,
+  fuelPrice,
+  type EconomyAirport,
+} from "../packages/economy/src/index";
+
+const AIRPORTS = JSON.parse(
+  readFileSync(new URL("../src/assets/data/airports-major.json", import.meta.url), "utf8"),
+) as EconomyAirport[];
 
 // P3 acceptance (plan §5): a full replayed mission completes end to end. The connector
 // replays demo-kmem-katl.jsonl at 20× in a loop; a mission loaded at any point starts
@@ -13,7 +25,8 @@ interface MissionLite {
   id: string;
   status: string;
   jobIds: string[];
-  payout?: { total: number };
+  aircraftId?: string;
+  payout?: { total: number; costs?: Array<{ key: string; amount: number }> };
   landingGrade?: string;
   failure?: { code: string };
 }
@@ -97,9 +110,56 @@ test("accept → load → fly (replay) → deliver: payout in the API and the lo
   expect(mission?.payout?.total).toBe(job.payoutEstimate);
 
   const log = (await (await request.get("/api/logbook", { headers: auth })).json()) as {
-    flights: Array<{ mission: { id: string; payout: number | null } | null }>;
+    flights: Array<{
+      mission: { id: string; payout: number | null } | null;
+      fuelUsedKg: number | null;
+      airborneMin: number | null;
+      landing: { peakG: number } | null;
+    }>;
   };
-  expect(log.flights.find((f) => f.mission?.id === mission?.id)?.mission?.payout).toBe(expected);
+  const flight = log.flights.find((f) => f.mission?.id === mission?.id);
+  expect(flight?.mission?.payout).toBe(expected);
+
+  // P4: fuel at KATL's price and KATL's landing fee are booked; the ledger balances; the
+  // starter C208B moved to KATL and wore by the formula.
+  const katl = airportLookup(AIRPORTS).get("KATL");
+  if (!katl) throw new Error("KATL");
+  const price = fuelPrice(katl, AIRPORTS).usdPerKg;
+  const fuelKg = flight?.fuelUsedKg ?? 0;
+  const fee = mission?.payout?.costs?.find((c) => c.key === "landing_fee")?.amount;
+  const fuel = mission?.payout?.costs?.find((c) => c.key === "fuel")?.amount ?? 0;
+  expect(fee).toBe(300);
+  expect(Math.abs(fuel - fuelKg * price)).toBeLessThan(0.2); // logbook kg is rounded to 0.1
+  const ledger = (await (await request.get("/api/ledger", { headers: auth })).json()) as {
+    entries: Array<{ category: string; amount: number; refId: string | null }>;
+    balanced: boolean;
+    cash: number;
+  };
+  expect(ledger.balanced).toBe(true);
+  const ofMission = ledger.entries.filter((e) => e.refId === mission?.id || e.refId === job.id);
+  expect(ofMission.map((e) => [e.category, e.amount]).sort()).toEqual(
+    [
+      ["fuel", -fuel],
+      ["landing_fee", -300],
+      ["mission_payout", expected],
+    ].sort(),
+  );
+  // Nothing else moved cash in a fresh replay company: cash = start + payout − costs.
+  expect(ledger.cash).toBeCloseTo(250_000 + expected - fuel - 300, 2);
+  const fleet = (await (await request.get("/api/fleet", { headers: auth })).json()) as {
+    aircraft: Array<{ id: string; location: string; condition: number; cycles: number }>;
+  };
+  const aircraft = fleet.aircraft.find((a) => a.id === mission?.aircraftId);
+  const wear = flightWear({
+    airborneMin: flight?.airborneMin ?? 0,
+    peakG: flight?.landing?.peakG ?? null,
+    overspeedEvents: 0,
+    crashed: false,
+  }).total;
+  expect(wear).toBeGreaterThan(0);
+  expect(aircraft?.location).toBe("KATL");
+  expect(aircraft?.cycles).toBe(1);
+  expect(aircraft?.condition).toBeCloseTo(100 - wear, 2);
 
   await page.goto("/logbook");
   const formatted = `$${expected.toLocaleString("en-US")}`;
@@ -111,7 +171,15 @@ test("accept → load → fly (replay) → deliver: payout in the API and the lo
 });
 
 test("cargo /api routes require the bearer token", async ({ request }) => {
-  for (const path of ["/api/jobs", "/api/missions", "/api/logbook", "/api/export/json"]) {
+  for (const path of [
+    "/api/jobs",
+    "/api/missions",
+    "/api/logbook",
+    "/api/export/json",
+    "/api/ledger",
+    "/api/fleet",
+    "/api/loans",
+  ]) {
     expect((await request.get(path)).status()).toBe(401);
   }
 });
