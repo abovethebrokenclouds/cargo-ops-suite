@@ -41,7 +41,12 @@ export function TrackMap({
       {first ? (
         <g>
           <circle cx={first[0]} cy={first[1]} r="4.5" className="fill-accent" />
-          <text x={first[0] + 8} y={first[1] - 6} className="fill-foreground font-mono text-[11px]">
+          <text
+            x={first[0] > W - 60 ? first[0] - 8 : first[0] + 8}
+            y={first[1] - 8}
+            textAnchor={first[0] > W - 60 ? "end" : "start"}
+            className="fill-foreground font-mono text-[11px]"
+          >
             {origin}
           </text>
         </g>
@@ -49,7 +54,12 @@ export function TrackMap({
       {last && xy.length > 1 ? (
         <g>
           <circle cx={last[0]} cy={last[1]} r="4.5" className="fill-tertiary" />
-          <text x={last[0] + 8} y={last[1] - 6} className="fill-foreground font-mono text-[11px]">
+          <text
+            x={last[0] > W - 60 ? last[0] - 8 : last[0] + 8}
+            y={last[1] - 8}
+            textAnchor={last[0] > W - 60 ? "end" : "start"}
+            className="fill-foreground font-mono text-[11px]"
+          >
             {destination}
           </text>
         </g>

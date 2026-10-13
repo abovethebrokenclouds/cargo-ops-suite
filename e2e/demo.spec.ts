@@ -90,4 +90,28 @@ test.describe("demo mode (no connector)", () => {
     const stored = await page.evaluate((key) => window.localStorage.getItem(key), ONLINE_MAPS_KEY);
     expect(stored).toBe("on");
   });
+
+  test("/jobs shows DEMO-tagged generated jobs with accept disabled", async ({ page }) => {
+    await page.goto("/jobs");
+    await expect(page.getByTestId("demo-board-note")).toBeVisible();
+    const cards = page.getByTestId("job-card");
+    await expect(cards.first()).toBeVisible({ timeout: 30_000 });
+    expect(await cards.count()).toBeGreaterThan(3);
+    await expect(cards.first()).toContainText("KMEM");
+    await expect(cards.first().getByText("DEMO")).toBeVisible();
+    const accept = cards.first().getByTestId("accept-job");
+    await expect(accept).toBeDisabled();
+    await expect(accept).toHaveAttribute("title", /need the local connector/);
+    await expect(page.getByTestId("accept-disabled-note")).toBeVisible();
+    await expect(page.getByTestId("refresh-board")).toBeDisabled();
+    await expect(page.getByTestId("route-finder")).toBeVisible();
+  });
+
+  test("/logbook in demo mode has no flights and exports are disabled", async ({ page }) => {
+    await page.goto("/logbook");
+    await expect(page.getByTestId("export-disabled-note")).toBeVisible();
+    await expect(page.getByTestId("export-csv")).toBeDisabled();
+    await expect(page.getByTestId("export-json")).toBeDisabled();
+    await expect(page.getByTestId("logbook-row")).toHaveCount(0);
+  });
 });
