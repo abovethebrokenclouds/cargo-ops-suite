@@ -30,6 +30,10 @@ export const EVENT_NAMES = [
   "flight.ended",
   "job.completed",
   "crash",
+  // P3 cargo operations (additive).
+  "mission.started",
+  "mission.delivered",
+  "mission.failed",
 ] as const;
 export const eventNameSchema = z.enum(EVENT_NAMES);
 export type EventName = z.infer<typeof eventNameSchema>;
@@ -42,6 +46,13 @@ export const KNOWN_COMMANDS = [
   "flight.end",
   "settings.update",
   "fleet.buy",
+  // P3 cargo operations.
+  "jobs.list",
+  "jobs.refresh",
+  "job.release",
+  "mission.load",
+  "mission.unload",
+  "mission.abort",
 ] as const;
 export type KnownCommandName = (typeof KNOWN_COMMANDS)[number];
 

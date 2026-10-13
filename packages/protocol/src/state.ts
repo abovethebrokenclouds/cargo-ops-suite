@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { companyDomainSchema, jobsDomainSchema, missionSchema } from "./economy";
 
 // Simulator state domains carried in `snapshot.state` and `delta.patch`.
 // Units live in field names (Ft, Kt, Fpm, Deg, Lb, Gal, Pph, Nm, Sec) so no
@@ -180,8 +181,11 @@ export const phaseChangedSchema = z.object({
   to: flightPhaseSchema,
 });
 
-/** Placeholder until the economy/weather lanes define these. */
+/** Placeholder until the weather (P5) and fleet (P4) lanes define these. */
 const looseDomain = z.unknown();
+
+/** Active or most recent mission (P3). */
+export const missionDomainSchema = missionSchema;
 
 export const simDomainSchemas = {
   sim: simDomainSchema,
@@ -197,8 +201,9 @@ export const simDomainSchemas = {
   flight: flightDomainSchema,
   phase: phaseDomainSchema,
   weather: looseDomain,
-  company: looseDomain,
-  jobs: looseDomain,
+  company: companyDomainSchema,
+  jobs: jobsDomainSchema,
+  mission: missionDomainSchema,
   fleet: looseDomain,
 } as const;
 
@@ -220,8 +225,9 @@ export const simStateSchema = z.object({
   flight: flightDomainSchema.nullable().optional(),
   phase: phaseDomainSchema.nullable().optional(),
   weather: looseDomain,
-  company: looseDomain,
-  jobs: looseDomain,
+  company: companyDomainSchema.nullable().optional(),
+  jobs: jobsDomainSchema.nullable().optional(),
+  mission: missionDomainSchema.nullable().optional(),
   fleet: looseDomain,
 });
 
@@ -243,8 +249,9 @@ export const simStatePatchSchema = z.object({
   flight: flightDomainSchema.partial().nullable().optional(),
   phase: phaseDomainSchema.partial().nullable().optional(),
   weather: looseDomain,
-  company: looseDomain,
-  jobs: looseDomain,
+  company: companyDomainSchema.partial().nullable().optional(),
+  jobs: jobsDomainSchema.partial().nullable().optional(),
+  mission: missionDomainSchema.partial().nullable().optional(),
   fleet: looseDomain,
 });
 
