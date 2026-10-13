@@ -233,6 +233,11 @@ test.describe("demo mode (no connector)", () => {
       await page.keyboard.press(key);
       await expect(page).toHaveURL(new RegExp(`${path === "/" ? "/$" : path}$`));
       await expect(page.getByRole("heading", { level: 1 }).first()).toHaveText(heading);
+      if (path === "/map") {
+        // Let the map finish initialising first: on a software-WebGL CI runner its start-up
+        // blocks the page for over 1.5 s, which genuinely expires a `g` chord in progress.
+        await expect(page.getByTestId("basemap-badge")).toHaveText("Offline outline");
+      }
     }
     await page.keyboard.press("?");
     const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
