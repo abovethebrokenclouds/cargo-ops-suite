@@ -263,6 +263,82 @@
   color: color-mix(in oklab, var(--accent) 55%, var(--muted-foreground));
 }
 
+/* Live readouts: smooth state changes (tone, stale dimming) without moving layout. */
+@utility metric-live {
+  transition:
+    opacity 400ms ease,
+    filter 400ms ease,
+    color 400ms ease;
+  &[data-tone="warning"] {
+    background-image: none;
+    color: var(--warning);
+  }
+  &[data-tone="critical"] {
+    background-image: none;
+    color: var(--destructive);
+  }
+}
+@utility metric-glow {
+  filter: drop-shadow(0 0 22px color-mix(in oklab, var(--primary) 40%, transparent));
+}
+@utility metric-critical {
+  background-image: none;
+  color: var(--destructive);
+}
+/* Tiles whose last frame is old: values dim and desaturate. */
+[data-stale] .metric-live {
+  opacity: 0.5;
+  filter: saturate(0.3);
+}
+
+/* Instrument panel: elevated glass with a soft primary bloom and a faint scan grid. */
+@utility panel-instrument {
+  border: 1px solid color-mix(in oklab, var(--primary) 22%, var(--border));
+  border-radius: var(--radius-xl);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    inset 0 1px 0 0 oklch(0.95 0.02 250 / 8%),
+    var(--shadow-panel);
+  background:
+    radial-gradient(
+      80% 120% at 0% 0%,
+      color-mix(in oklab, var(--primary) 14%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      60% 120% at 100% 100%,
+      color-mix(in oklab, var(--tertiary) 12%, transparent),
+      transparent 60%
+    ),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0 3px,
+      color-mix(in oklab, var(--accent) 3%, transparent) 3px 4px
+    ),
+    color-mix(in oklab, var(--card) 88%, transparent);
+}
+
+/* Cockpit annunciator cell; `data-state="on"` illuminates it in `currentColor`. */
+@utility annunciator {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--background) 72%, transparent);
+  box-shadow: inset 0 1px 6px 0 oklch(0.05 0.02 262 / 45%);
+  transition:
+    color 300ms ease,
+    border-color 300ms ease,
+    background-color 300ms ease,
+    box-shadow 300ms ease;
+  &[data-state="on"] {
+    border-color: color-mix(in oklab, currentColor 45%, transparent);
+    background: color-mix(in oklab, currentColor 12%, var(--background));
+    box-shadow:
+      inset 0 0 14px 0 color-mix(in oklab, currentColor 18%, transparent),
+      0 0 18px -6px color-mix(in oklab, currentColor 60%, transparent);
+    text-shadow: 0 0 10px color-mix(in oklab, currentColor 55%, transparent);
+  }
+}
+
 /* Illuminated status light. Colour follows `currentColor` (e.g. `text-success`). */
 @utility status-dot {
   display: inline-block;

@@ -5,9 +5,12 @@ import { PageHero } from "@/components/AppNav";
 import { EmptyState } from "@/components/EmptyState";
 import { MetricTile } from "@/components/dashboard/MetricTile";
 import { DemoTag, Panel } from "@/components/dashboard/Panel";
-import { SimStatusChip } from "@/components/status/SimStatusChip";
-import { formatMinutes, formatUsd } from "@/lib/format";
+import { ConnectedStatusChip } from "@/components/status/ConnectedStatusChip";
+import { routeView } from "@/lib/flight/flight-view";
+import { EMPTY, formatMinutes, formatUsd } from "@/lib/format";
 import { company, fleet, jobs } from "@/lib/mock-data";
+import { fuelEnduranceMin, type ClientSimState } from "@/lib/sim-state";
+import { useSimConnection } from "@/lib/transport/useSimConnection";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -33,8 +36,31 @@ const fleetTone = {
   Maintenance: "text-warning",
 } as const;
 
+function linkCopy(state: ClientSimState): string {
+  switch (state.connection) {
+    case "demo":
+      return "Replaying the built-in demo flight; telemetry tiles are tagged DEMO. Run the local connector to bridge SimConnect to this app. The chip switches to live only after a real handshake.";
+    case "replay":
+      return "The connector is replaying a recorded flight; values are tagged REPLAY.";
+    case "live":
+      return state.welcome?.sim.connected || state.sim.sim?.connected
+        ? "Connected to the local connector with the simulator running."
+        : "Connected to the local connector. Start the simulator to stream telemetry.";
+    case "disconnected":
+    case "error":
+      return "The local connector is not reachable. Start it, then this page reconnects automatically.";
+    default:
+      return "Connecting to the simulator link…";
+  }
+}
+
 function Index() {
   const next = jobs[0];
+  const { state } = useSimConnection();
+  const route = routeView(state);
+  const endurance = fuelEnduranceMin(state.sim.fuel);
+  const simName = state.sim.sim?.name ?? state.welcome?.sim.name ?? null;
+  const protocol = state.welcome?.sim.protocol ?? null;
   return (
     <>
       <PageHero
@@ -63,18 +89,28 @@ function Index() {
         <MetricTile
           className="col-span-12 sm:col-span-6 xl:col-span-4"
           label="Active mission ETE"
-          value={null}
+          value={route.eteMin}
           format={formatMinutes}
           size="xl"
-          hint="No active mission."
+          source={route.eteMin === null ? null : state.source}
+          hint={
+            route.origin && route.destination
+              ? `${route.origin} → ${route.destination} · from the sim flight plan`
+              : "No active flight plan."
+          }
         />
         <MetricTile
           className="col-span-12 sm:col-span-6 xl:col-span-4"
           label="Fuel endurance"
-          value={null}
+          value={endurance}
           format={formatMinutes}
           size="xl"
-          hint="Needs a live simulator connection."
+          source={endurance === null ? null : state.source}
+          hint={
+            endurance === null
+              ? "Needs fuel quantity and flow from the simulator."
+              : "At the current total fuel flow."
+          }
         />
 
         <Panel
@@ -84,19 +120,16 @@ function Index() {
           icon={Radio}
         >
           <div className="flex flex-col gap-5">
-            <SimStatusChip status="demo" className="self-start" />
-            <p className="text-sm text-muted-foreground">
-              Showing demo seed data. The local connector (P1) bridges SimConnect to this app; the
-              chip switches to live only after a real handshake.
-            </p>
+            <ConnectedStatusChip className="self-start" />
+            <p className="text-sm text-muted-foreground">{linkCopy(state)}</p>
             <dl className="grid grid-cols-2 gap-3 font-mono text-xs">
               <div className="panel-inset p-3">
                 <dt className="text-muted-foreground">Simulator</dt>
-                <dd className="mt-1 text-foreground">—</dd>
+                <dd className="mt-1 truncate text-foreground">{simName ?? EMPTY}</dd>
               </div>
               <div className="panel-inset p-3">
                 <dt className="text-muted-foreground">Protocol</dt>
-                <dd className="mt-1 text-foreground">—</dd>
+                <dd className="mt-1 truncate text-foreground">{protocol ?? EMPTY}</dd>
               </div>
             </dl>
           </div>

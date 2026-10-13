@@ -76,7 +76,8 @@ export interface SimConnectionOptions {
   timers?: Timers;
 }
 
-const SimConnectionContext = createContext<SimConnectionValue | null>(null);
+/** Exported so component tests can supply a fixed value; app code uses the provider. */
+export const SimConnectionContext = createContext<SimConnectionValue | null>(null);
 
 export function SimConnectionProvider(props: {
   children?: ReactNode;

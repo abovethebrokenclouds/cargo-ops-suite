@@ -52,12 +52,12 @@ export function FlightProgressBar({
         ) : (
           <>
             <div
-              className="absolute inset-y-0 left-0 rounded-full bg-gradient-brand shadow-glow"
+              className="absolute inset-y-0 left-0 rounded-full bg-gradient-brand shadow-glow transition-[width] duration-1000 ease-linear"
               style={{ width: `${pct}%` }}
             />
             <Plane
               aria-hidden="true"
-              className="absolute top-1/2 size-5 -translate-x-1/2 -translate-y-1/2 rotate-45 text-foreground"
+              className="absolute top-1/2 size-5 -translate-x-1/2 -translate-y-1/2 rotate-45 text-foreground drop-shadow-[0_0_6px_var(--accent)] transition-[left] duration-1000 ease-linear"
               style={{ left: `${pct}%` }}
             />
           </>
