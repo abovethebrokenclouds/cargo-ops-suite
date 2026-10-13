@@ -39,6 +39,10 @@ export const EVENT_NAMES = [
   "loan.missed",
   "aircraft.repossessed",
   "repair.completed",
+  // P5 used aircraft and airworthiness (additive).
+  "defect.found",
+  "inspection.completed",
+  "aircraft.grounded",
 ] as const;
 export const eventNameSchema = z.enum(EVENT_NAMES);
 export type EventName = z.infer<typeof eventNameSchema>;
@@ -67,6 +71,15 @@ export const KNOWN_COMMANDS = [
   "loan.quote",
   "loan.take",
   "loan.payoff",
+  // P5 used market and airworthiness.
+  "market.refresh",
+  "market.inspect",
+  "market.buy",
+  "fleet.repairDefect",
+  "fleet.repairAll",
+  "fleet.annual",
+  "fleet.ferryPermit",
+  "fleet.defer",
 ] as const;
 export type KnownCommandName = (typeof KNOWN_COMMANDS)[number];
 
@@ -161,7 +174,12 @@ export const resultSchema = z.union([
     v,
     id: z.string().min(1),
     ok: z.literal(false),
-    error: z.object({ code: z.string().min(1), message: z.string() }),
+    error: z.object({
+      code: z.string().min(1),
+      message: z.string(),
+      /** P5: every blocking reason (e.g. the airworthiness gate), when there are several. */
+      reasons: z.array(z.object({ code: z.string().min(1), message: z.string() })).optional(),
+    }),
   }),
 ]);
 

@@ -1,4 +1,11 @@
 import { z } from "zod";
+import {
+  airworthinessSchema,
+  annualStateSchema,
+  ferryPermitSchema,
+  maintenanceOrderSchema,
+  systemStateSchema,
+} from "./maintenance";
 
 // Company, fleet, finance and ledger (plan §5 P4, §7, §7.2). Every domain here is
 // produced by the connector's company book (or, in the browser-only demo, by the same
@@ -38,6 +45,9 @@ export const LEDGER_CATEGORIES = [
   "interest",
   "insurance",
   "adjustment",
+  // P5: pre-purchase and annual inspections, ferry permits.
+  "inspection",
+  "permit",
 ] as const;
 export const ledgerCategorySchema = z.enum(LEDGER_CATEGORIES);
 export type LedgerCategory = z.infer<typeof ledgerCategorySchema>;
@@ -95,6 +105,8 @@ export const AIRCRAFT_STATUSES = [
   "sold",
   "returned",
   "repossessed",
+  // P5: destroyed in a crash (leaves the fleet).
+  "written_off",
 ] as const;
 export const aircraftStatusSchema = z.enum(AIRCRAFT_STATUSES);
 export type AircraftStatus = z.infer<typeof aircraftStatusSchema>;
@@ -130,6 +142,20 @@ export const fleetAircraftSchema = z.object({
   loanId: z.string().optional(),
   /** Wall clock, ISO 8601. */
   acquiredAt: z.string(),
+  // ---- P5 (optional: P4 frames have none of these) ----
+  /** Airframe age, years (in-game). */
+  ageYears: finite().nonnegative().optional(),
+  /** Per-system condition and known defects; `condition` is their weighted mean. */
+  systems: z.array(systemStateSchema).optional(),
+  /** Airworthiness gate result and badge. */
+  airworthiness: airworthinessSchema.optional(),
+  annual: annualStateSchema.optional(),
+  ferryPermit: ferryPermitSchema.optional(),
+  /** Queued and running maintenance orders, oldest first. */
+  maintenance: z.array(maintenanceOrderSchema).optional(),
+  /** Cost and in-game hours to repair every known defect where it is parked. */
+  repairAllCost: finite().nonnegative().optional(),
+  repairAllHours: finite().nonnegative().optional(),
 });
 export type FleetAircraft = z.infer<typeof fleetAircraftSchema>;
 
@@ -146,6 +172,8 @@ export const fleetDomainSchema = z.object({
   ambiguous: z.boolean(),
   /** Sum of owned aircraft values, dollars. */
   value: finite().nonnegative(),
+  /** P5 maintenance board: every queued or running order, by completion time. */
+  maintenance: z.array(maintenanceOrderSchema).optional(),
 });
 export type FleetState = z.infer<typeof fleetDomainSchema>;
 

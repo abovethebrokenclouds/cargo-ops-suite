@@ -726,9 +726,14 @@ describe("demo company", () => {
     const b = buildDemoCompany(lookup);
     expect(a.book.company).toEqual(b.book.company);
     expect(a.book.fleetDomain(a.selection)).toEqual(b.book.fleetDomain(b.selection));
-    expect(a.book.activeFleet().map((x) => x.ownership)).toEqual(["owned", "dry_lease"]);
-    expect(a.book.loansDomain().loans).toHaveLength(1);
-    const income = a.book.ledgerDomain().months.reduce((s, m) => s + m.net, 0);
-    expect(income).toBeGreaterThan(0);
+    // P5: the demo also buys an inspected used aircraft, financed (second loan).
+    expect(a.book.activeFleet().map((x) => x.ownership)).toEqual(["owned", "dry_lease", "owned"]);
+    expect(a.book.loansDomain().loans).toHaveLength(2);
+    // Revenue covers the flying costs; P5 adds an inspection and a field repair of the used
+    // aircraft, which the demo books too.
+    const months = a.book.ledgerDomain().months;
+    expect(months.reduce((s, m) => s + m.revenue, 0)).toBeGreaterThan(50_000);
+    const recent = a.book.ledgerDomain().recent;
+    expect(recent[0]?.balance).toBe(a.book.company.cash);
   });
 });
