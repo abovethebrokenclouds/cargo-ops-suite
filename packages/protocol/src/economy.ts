@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AIRCRAFT_TYPE_SOURCES } from "./aircraft-types";
 import { companyClockSchema } from "./company";
+import { milestoneSchema } from "./fbo";
 import { landingGradeSchema } from "./landing";
 
 // Cargo operations (plan §5 P3, §7): jobs, missions, the minimal company and the
@@ -80,6 +81,11 @@ export const jobSchema = z.object({
   /** Board estimate (landing 1.00, on time, current reputation). */
   payoutEstimate: finite().nonnegative(),
   breakdown: payoutBreakdownSchema,
+  /**
+   * P5 part 2: local demand × own cargo terminal multiplier fixed when the job was
+   * generated (absent = 1.00); the delivered payout uses the same factor.
+   */
+  demandFactor: finite().positive().optional(),
 });
 export type Job = z.infer<typeof jobSchema>;
 
@@ -202,6 +208,8 @@ export const companyDomainSchema = z.object({
   debt: finite().nonnegative().optional(),
   startingCash: finite().optional(),
   clock: companyClockSchema.optional(),
+  /** P5 part 2: every milestone, reached or not, with the date it was reached. */
+  milestones: z.array(milestoneSchema).optional(),
 });
 export type CompanyState = z.infer<typeof companyDomainSchema>;
 

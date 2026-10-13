@@ -153,8 +153,11 @@ export const maintenanceOrderSchema = z.object({
   defectIds: z.array(z.string()),
   label: z.string(),
   airport: icao(),
-  /** maintenance = maintenance-capable airport rates; field = elsewhere (dearer, slower). */
-  shop: z.enum(["maintenance", "field"]),
+  /**
+   * maintenance = maintenance-capable airport rates; field = elsewhere (dearer, slower);
+   * own = the player's own FBO maintenance shop (P5 part 2: cheaper, faster).
+   */
+  shop: z.enum(["maintenance", "field", "own"]),
   cost: finite().nonnegative(),
   hours: finite().nonnegative(),
   startGameMs: finite().nonnegative(),

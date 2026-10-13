@@ -24,6 +24,18 @@ import type {
 } from "../../protocol/src/company";
 import type { CompanyState, MissionCost } from "../../protocol/src/economy";
 import {
+  FBO_MODULE_KINDS,
+  FBO_MODULE_LABELS,
+  MILESTONE_IDS,
+  type DemandState,
+  type FboModuleKind,
+  type FboState,
+  type FbosState,
+  type InsuranceState,
+  type MilestoneId,
+} from "../../protocol/src/fbo";
+import type { LandingGrade } from "../../protocol/src/landing";
+import {
   SYSTEM_KEYS,
   SYSTEM_LABELS,
   type Defect,
@@ -50,6 +62,7 @@ import {
   systemsFromCondition,
   type GateResult,
   type MaintenanceCapability,
+  type Shop,
   type SystemConditions,
 } from "./airworthiness";
 import {
@@ -70,8 +83,68 @@ import {
 } from "./market";
 import { Rng, seedFrom } from "./prng";
 import type { AirportLookup, EconomyAirport } from "./airports";
+import {
+  AI_ARRIVAL,
+  BOUGHT_MODULES,
+  BUILT_MODULES,
+  CARGO_TERMINAL,
+  CLASS_FEE_FACTOR,
+  DEMAND,
+  FUEL_RATIO_RANGE,
+  HANDLING_RANGE,
+  HANGAR,
+  HOUR_MS,
+  INSURANCE,
+  MILESTONES,
+  RAMP,
+  REFERENCE_HANDLING_USD,
+} from "./fbo-constants";
+import {
+  airportSize,
+  elasticity,
+  emptyToday,
+  fboQuote,
+  fboSalePrice,
+  fboValue,
+  fuelPricing,
+  hangarNight,
+  levelsOf,
+  moduleCost,
+  moduleDays,
+  moduleEffect,
+  moduleUpkeep,
+  movementsPerDay,
+  newFboRecord,
+  ownShopCovers,
+  trafficHour,
+  type FboRecord,
+  type FboTransactionRecord,
+  type TrafficKind,
+} from "./fbo";
+import {
+  activeEvent,
+  addActivity,
+  decayActivity,
+  demandFactor,
+  demandIndex,
+  eventCandidates,
+  eventState,
+  fuelEventFactor,
+  rollDemandEvent,
+  type DemandEventRecord,
+} from "./demand";
+import {
+  CLAIMABLE_CAUSES,
+  insurancePremium,
+  insuranceRisk,
+  repairClaim,
+  writeOffClaim,
+  type Incident,
+} from "./insurance";
+import { milestoneList, type MilestoneRecord } from "./milestones";
 import { companyClock, gameMonthIndex } from "./clock";
 import {
+  GAME_DAY_MS,
   DEFAULT_FLAG_MONTHS,
   GAME_MONTH_MS,
   LATE_FEE_MIN_USD,
@@ -82,7 +155,7 @@ import {
   SALE_SHARE,
   STARTER_AIRCRAFT_KEY,
 } from "./company-constants";
-import { fuelCost, fuelPrice, landingFee } from "./costs";
+import { fuelCost, fuelPrice, landingFee, type FuelPrice } from "./costs";
 import {
   LENDERS,
   creditScore,
@@ -136,6 +209,21 @@ export interface CompanyCore {
   marketRefreshedGameMs: number;
   /** Maintenance orders opened so far (order ids). */
   orderCounter: number;
+  // ---- P5 part 2 ----
+  /** FBOs acquired so far (FBO ids). */
+  fboCounter: number;
+  /** Last in-game day whose start was processed (demand roll, FBO day close); absent = now. */
+  dayProcessed?: number | undefined;
+  /** Demand activity per airport (decays daily). */
+  activity: Record<string, number>;
+  /** Airborne hours flown by the company's aircraft. */
+  flightHours: number;
+  deliveries: number;
+  /** Consecutive deliveries landed A or better. */
+  landingStreak: number;
+  /** Used aircraft whose every known defect was repaired. */
+  restorations: number;
+  milestones: MilestoneRecord[];
 }
 
 export interface BookAircraft {
@@ -167,6 +255,18 @@ export interface BookAircraft {
   orders: MaintenanceOrder[];
   /** Defects created so far (defect ids). */
   defectCounter: number;
+  // ---- P5 part 2 (normalised by `normalizeAircraft`) ----
+  insurance: InsurancePolicy | null;
+  /** Hard landings and crashes (insurance risk). */
+  incidents: Incident[];
+}
+
+export interface InsurancePolicy {
+  sinceGameMs: number;
+  /** Last premium billed, dollars. */
+  premium: number;
+  claims: number;
+  claimsPaid: number;
 }
 
 const P5_KEYS = [
@@ -177,6 +277,8 @@ const P5_KEYS = [
   "ferryPermit",
   "orders",
   "defectCounter",
+  "insurance",
+  "incidents",
 ] as const;
 /** A P4 (or P5) aircraft record: the P5 fields may be missing. */
 export type BookAircraftInput = Omit<BookAircraft, (typeof P5_KEYS)[number]> & {
@@ -219,6 +321,8 @@ export function normalizeAircraft(a: BookAircraftInput, gameMs: number): BookAir
     ferryPermit: a.ferryPermit ?? null,
     orders,
     defectCounter: a.defectCounter ?? 0,
+    insurance: a.insurance ?? null,
+    incidents: a.incidents ?? [],
     condition: derivedCondition(systems),
   };
 }
@@ -273,6 +377,13 @@ export interface BookChanges {
   notices: BookNotice[];
   /** Used listings changed (status "listed" = upsert; otherwise remove). */
   listings: ListingRecord[];
+  // ---- P5 part 2 ----
+  fbos: FboRecord[];
+  fboTransactions: FboTransactionRecord[];
+  demandEvents: DemandEventRecord[];
+  /** The demand activity map changed (company.activity). */
+  activity: boolean;
+  milestones: MilestoneRecord[];
 }
 
 export interface Reason {
@@ -289,12 +400,16 @@ const fail = (code: string, message: string, reasons?: Reason[]) => ({
 });
 
 /** Categories that are capital flows, not operating revenue/expense. */
-const CAPITAL: ReadonlySet<LedgerCategory> = new Set<LedgerCategory>([
+export const CAPITAL_CATEGORIES: ReadonlySet<LedgerCategory> = new Set<LedgerCategory>([
   "loan_disbursement",
   "loan_payment",
   "purchase",
   "sale",
+  // P5 part 2: FBO purchase, construction and module installs are capital.
+  "fbo_purchase",
+  "fbo_construction",
 ]);
+const CAPITAL = CAPITAL_CATEGORIES;
 
 /** Fuel at or below max(1 lb, 0.5 % of the fuel at block-out) means the tanks ran dry. */
 export function tanksDryThresholdLb(fuelAtStartLb: number): number {
@@ -346,8 +461,14 @@ export interface BookOptions<C extends CompanyCore> {
   now: () => number;
   /** P5 used listings (status "listed"). */
   market?: readonly ListingRecord[];
-  /** Where maintenance is available (default: large airports; the FBO lane extends it). */
+  /**
+   * Where maintenance is available besides the player's own FBO maintenance shops
+   * (default: large airports).
+   */
   maintenance?: MaintenanceCapability;
+  /** P5 part 2: FBOs (every status) and recent demand events. */
+  fbos?: readonly FboRecord[];
+  demandEvents?: readonly DemandEventRecord[];
 }
 
 export class CompanyBook<C extends CompanyCore = CompanyCore> {
@@ -359,15 +480,31 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   private readonly now: () => number;
   private pending: BookChanges = emptyChanges();
   readonly listings = new Map<string, ListingRecord>();
+  /** Large airports (or the injected capability) plus the player's own maintenance shops. */
   readonly maintenance: MaintenanceCapability;
+  private readonly baseMaintenance: MaintenanceCapability;
+  readonly fbos = new Map<string, FboRecord>();
+  private events: DemandEventRecord[] = [];
+  private candidateCache: { key: string; list: EconomyAirport[] } | null = null;
 
   constructor(options: BookOptions<C>) {
+    const c = options.company;
     this.company = {
-      ...options.company,
-      marketGeneration: options.company.marketGeneration ?? 0,
-      marketRefreshedGameMs: options.company.marketRefreshedGameMs ?? 0,
-      orderCounter: options.company.orderCounter ?? 0,
+      ...c,
+      marketGeneration: c.marketGeneration ?? 0,
+      marketRefreshedGameMs: c.marketRefreshedGameMs ?? 0,
+      orderCounter: c.orderCounter ?? 0,
+      fboCounter: c.fboCounter ?? 0,
+      dayProcessed: c.dayProcessed ?? Math.floor(Math.max(0, c.gameMs) / GAME_DAY_MS),
+      activity: c.activity ?? {},
+      flightHours: c.flightHours ?? 0,
+      deliveries: c.deliveries ?? 0,
+      landingStreak: c.landingStreak ?? 0,
+      restorations: c.restorations ?? 0,
+      milestones: c.milestones ?? [],
     };
+    for (const f of options.fbos ?? []) this.fbos.set(f.id, f);
+    this.events = [...(options.demandEvents ?? [])];
     for (const a of options.fleet ?? []) {
       this.fleet.set(a.id, normalizeAircraft(a, this.company.gameMs));
     }
@@ -376,11 +513,16 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     this.recent = [...(options.recent ?? [])].slice(0, 20);
     this.airports = options.airports;
     this.now = options.now;
-    this.maintenance = options.maintenance ?? largeAirportMaintenance(options.airports);
+    this.baseMaintenance = options.maintenance ?? largeAirportMaintenance(options.airports);
+    this.maintenance = {
+      isMaintenanceCapable: (icao) =>
+        this.baseMaintenance.isMaintenanceCapable(icao) || this.ownShopLevel(icao) > 0,
+    };
   }
 
   /** Changes since the last drain (to persist), then reset. */
   drain(): BookChanges {
+    this.checkMilestones();
     const out = this.pending;
     this.pending = emptyChanges();
     return out;
@@ -395,7 +537,12 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       p.loans.length > 0 ||
       p.events.length > 0 ||
       p.notices.length > 0 ||
-      p.listings.length > 0
+      p.listings.length > 0 ||
+      p.fbos.length > 0 ||
+      p.fboTransactions.length > 0 ||
+      p.demandEvents.length > 0 ||
+      p.activity ||
+      p.milestones.length > 0
     );
   }
 
@@ -510,6 +657,8 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       ferryPermit: null,
       orders: [],
       defectCounter: 0,
+      insurance: null,
+      incidents: [],
     };
     this.company = { ...this.company, fleetCounter: n };
     this.fleet.set(a.id, a);
@@ -597,8 +746,17 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     return round2(this.activeFleet().reduce((s, a) => s + this.aircraftValue(a), 0));
   }
 
+  /** Σ book value of the FBOs owned (active or building). */
+  fboTotalValue(): number {
+    return round2(
+      [...this.fbos.values()]
+        .filter((f) => f.status === "active" || f.status === "building")
+        .reduce((s, f) => s + fboValue(f.invested), 0),
+    );
+  }
+
   netWorth(): number {
-    return round2(this.company.cash + this.fleetValue() - this.debt());
+    return round2(this.company.cash + this.fleetValue() + this.fboTotalValue() - this.debt());
   }
 
   defaulted(): boolean {
@@ -611,7 +769,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       reputation: this.company.reputation,
       positiveMonths: positiveMonths(this.company.pnl, gameMonthIndex(this.company.gameMs)),
       debt: this.debt(),
-      assets: Math.max(0, this.company.cash) + this.fleetValue(),
+      assets: Math.max(0, this.company.cash) + this.fleetValue() + this.fboTotalValue(),
       defaulted: this.defaulted(),
     });
   }
@@ -644,10 +802,26 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     if (this.company.marketGeneration > 0) {
       next = Math.min(next, this.company.marketRefreshedGameMs + MARKET_REFRESH_MS);
     }
+    // P5 part 2: day boundaries (demand, FBO day close), FBO hours, constructions, modules.
+    next = Math.min(next, (this.dayProcessed + 1) * GAME_DAY_MS);
+    for (const f of this.fbos.values()) {
+      if (f.status === "building" && f.readyAtGameMs !== null) {
+        next = Math.min(next, f.readyAtGameMs);
+      }
+      if (f.status !== "active") continue;
+      next = Math.min(next, (f.nextHour + 1) * HOUR_MS);
+      for (const k of FBO_MODULE_KINDS) {
+        const pending = f.modules[k].pending;
+        if (pending) next = Math.min(next, pending.readyAtGameMs);
+      }
+    }
     return next;
   }
 
   private processDue(t: number): void {
+    // P5 part 2: FBO constructions and module installs, traffic hours, day boundaries.
+    this.processFbos(t);
+    this.processDays(t);
     // Maintenance orders that are done (in completion order per aircraft).
     for (const a of this.activeFleet()) {
       if (a.orders.some((o) => o.readyAtGameMs <= t)) this.completeOrders(a, t);
@@ -695,6 +869,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
           `${a.registration} ${a.ownership === "dry_lease" ? "dry" : "wet"} lease, month ${this.company.monthBilled + 1}`,
         );
       }
+      this.monthlyFbosAndInsurance();
     }
     // Loan auto-debits.
     for (const loan of this.activeLoans()) {
@@ -784,6 +959,9 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
           this.company = { ...this.company, selectedAircraftId: null };
         }
       }
+    } else {
+      const f = this.fbos.get(loan.collateral.id);
+      if (f) this.touchFbo({ ...f, status: "repossessed", loanId: null });
     }
     this.notice("aircraft.repossessed", {
       loanId: loan.id,
@@ -793,7 +971,11 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   }
 
   private releaseCollateral(loan: BookLoan): void {
-    if (loan.collateral.type !== "aircraft") return;
+    if (loan.collateral.type === "fbo") {
+      const f = this.fbos.get(loan.collateral.id);
+      if (f && f.loanId === loan.id) this.touchFbo({ ...f, loanId: null });
+      return;
+    }
     const a = this.fleet.get(loan.collateral.id);
     if (a && a.loanId === loan.id) this.touchAircraft({ ...a, loanId: null });
   }
@@ -1003,12 +1185,35 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     const type = aircraftTypeByKey(a.typeKey);
     if (!type) return fail("unknown_type", a.typeKey);
     const costs: MissionCost[] = [];
+    // P5 part 2: the hull value before this flight (an insured write-off pays a share of it)
+    // and the player's own FBO where the aircraft parks (fuel at cost, waived fees, lounge).
+    const valueBefore = this.aircraftValue(a);
+    const own =
+      f.landingAirport && f.landings > 0 && !f.crashed
+        ? this.activeFboAt(f.landingAirport.ident)
+        : null;
+    const savings: Array<{ kind: string; amount: number; memo: string }> = [];
     // P5: known minor (1 % each) and major (5–15 %) defects burn extra fuel.
     const penalty = airworthinessGate(this.gateInput(a), this.company.gameMs).fuelPenaltyPct;
     if (a.ownership !== "wet_lease" && f.fuelKg > 0 && f.fuelAirport) {
-      const price = fuelPrice(f.fuelAirport, this.airports?.list ?? [f.fuelAirport]);
+      const regional = this.fuelPriceAt(f.fuelAirport);
       const billedKg = f.fuelKg * (1 + penalty / 100);
+      const farm =
+        own && own.icao === f.fuelAirport.ident && own.modules.fuel.level > 0
+          ? fuelPricing(regional.usdPerKg, own.fuelPriceRatio, own.modules.fuel.level)
+          : null;
+      const price: FuelPrice = farm ? { ...regional, usdPerKg: farm.cost } : regional;
       const amount = fuelCost(billedKg, price);
+      if (farm) {
+        const saved = round2(fuelCost(billedKg, regional) - amount);
+        if (saved > 0) {
+          savings.push({
+            kind: "fuel_at_cost",
+            amount: saved,
+            memo: `${Math.round(billedKg)} kg at cost $${farm.cost.toFixed(3)}/kg instead of $${regional.usdPerKg.toFixed(3)}/kg`,
+          });
+        }
+      }
       if (amount > 0) {
         this.post(
           "fuel",
@@ -1022,13 +1227,28 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
           label: `Fuel at ${f.fuelAirport.ident}`,
           amount,
           note:
-            penalty > 0
+            (penalty > 0
               ? `${round2(f.fuelKg)} kg + ${penalty} % defect burn × $${price.usdPerKg.toFixed(3)}/kg`
-              : `${round2(f.fuelKg)} kg × $${price.usdPerKg.toFixed(3)}/kg`,
+              : `${round2(f.fuelKg)} kg × $${price.usdPerKg.toFixed(3)}/kg`) +
+            (farm ? " (own fuel farm, at cost)" : ""),
         });
       }
     }
-    if (f.landingAirport && f.landings > 0) {
+    if (own && f.landingAirport) {
+      // Own ramp: no landing fee to pay yourself.
+      const fee = landingFee(f.landingAirport, type);
+      savings.push({
+        kind: "landing_fee_waived",
+        amount: fee,
+        memo: `Landing fee $${fee} waived at the own FBO`,
+      });
+      costs.push({
+        key: "landing_fee",
+        label: `Landing fee ${f.landingAirport.ident}`,
+        amount: 0,
+        note: `Waived at your FBO ($${fee})`,
+      });
+    } else if (f.landingAirport && f.landings > 0) {
       const fee = landingFee(f.landingAirport, type);
       this.post(
         "landing_fee",
@@ -1099,11 +1319,22 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     const escalated = new Map(rolls.escalated.map((d) => [d.id, d]));
     const defects = [...a.defects.map((d) => escalated.get(d.id) ?? d), ...rolls.added];
     const writtenOff = f.crashed && condition < WRITE_OFF_CONDITION;
+    const incidents: Incident[] = [...a.incidents];
+    const at = Math.floor(this.company.gameMs);
+    if (f.crashed) incidents.push({ gameMs: at, kind: "crash" });
+    else if (f.peakG !== null && f.peakG > INSURANCE.hardLandingG) {
+      incidents.push({ gameMs: at, kind: "hard_landing" });
+    }
+    this.company = {
+      ...this.company,
+      flightHours: round2(this.company.flightHours + Math.max(0, f.airborneMin) / 60),
+    };
     const next: BookAircraft = {
       ...a,
       systems,
       condition,
       defects,
+      incidents,
       defectCounter: counter,
       hours: round2(a.hours + Math.max(0, f.airborneMin) / 60),
       cycles: a.cycles + Math.max(0, f.landings),
@@ -1128,8 +1359,10 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
         on: f.refType,
       });
     }
+    if (own) this.ownArrival(own, a, savings, f.refId);
     if (writtenOff) {
       this.event(a.id, "written_off", { condition });
+      if (a.insurance) this.settleWriteOff(this.fleet.get(a.id) ?? next, valueBefore);
       if (this.company.selectedAircraftId === a.id) {
         this.company = { ...this.company, selectedAircraftId: null };
       }
@@ -1267,6 +1500,10 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
         a = { ...a, systems: systemsFromCondition(100) };
       } else if (o.kind === "defect") {
         a = { ...a, defects: a.defects.filter((d) => !o.defectIds.includes(d.id)) };
+        // P5 part 2: a used aircraft with every known defect repaired is a restoration.
+        if (a.ageYears > 0 && o.defectIds.length > 0 && !a.defects.some((d) => !d.hidden)) {
+          this.company = { ...this.company, restorations: this.company.restorations + 1 };
+        }
       } else {
         a = { ...a, annual: { lastGameMs: o.readyAtGameMs, lastHours: a.hours } };
       }
@@ -1318,8 +1555,18 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
 
   /** Cost and time to repair these defects where the aircraft is parked. */
   repairQuoteFor(a: BookAircraft, defects: readonly Defect[]) {
-    const shop = shopAt(this.maintenance, a.location);
+    const shop = this.shopFor(a.location, defects);
     return { shop, ...repairQuote(defects, shop) };
+  }
+
+  /**
+   * Shop rates at an airport: the own FBO maintenance shop when its level covers every
+   * defect's severity (any level for an annual), else maintenance-capable or field rates.
+   */
+  shopFor(icao: string, defects: readonly Pick<Defect, "severity">[]): Shop {
+    const level = this.ownShopLevel(icao);
+    if (level > 0 && defects.every((d) => ownShopCovers(level, d.severity))) return "own";
+    return shopAt(this.baseMaintenance, icao);
   }
 
   /** Repair one known defect (queued behind any running order). */
@@ -1335,6 +1582,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       return fail("insufficient_cash", `The repair costs $${q.cost.toLocaleString("en-US")}`);
     }
     this.post("repair", -q.cost, "aircraft", a.id, `${a.registration} repair: ${d.title}`);
+    this.claimRepair(a.id, [d], q.shop);
     const order = this.openOrder(this.fleet.get(a.id) ?? a, {
       kind: "defect",
       defectIds: [d.id],
@@ -1365,6 +1613,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       a.id,
       `${a.registration} repair of ${open.length} defect(s)`,
     );
+    this.claimRepair(a.id, open, q.shop);
     const order = this.openOrder(this.fleet.get(a.id) ?? a, {
       kind: "defect",
       defectIds: open.map((d) => d.id),
@@ -1386,7 +1635,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     }
     const type = aircraftTypeByKey(a.typeKey);
     if (!type) return fail("unknown_type", a.typeKey);
-    const shop = shopAt(this.maintenance, a.location);
+    const shop = this.shopFor(a.location, []);
     const q = annualQuote(type, shop);
     if (this.company.cash < q.cost) {
       return fail("insufficient_cash", `The annual costs $${q.cost.toLocaleString("en-US")}`);
@@ -1708,8 +1957,15 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   }
 
   private collateralCheck(collateral: Collateral): BookResult<number> {
-    if (collateral.type !== "aircraft") {
-      return fail("unsupported_collateral", "Only aircraft can be pledged until FBOs exist (P5)");
+    if (collateral.type === "fbo") {
+      const f = this.fbos.get(collateral.id);
+      if (!f || (f.status !== "active" && f.status !== "building")) {
+        return fail("unknown_fbo", `No FBO ${collateral.id}`);
+      }
+      if (f.loanId && this.loans.get(f.loanId)?.status === "active") {
+        return fail("collateral_encumbered", `The FBO at ${f.icao} already secures a loan`);
+      }
+      return { ok: true, data: fboValue(f.invested) };
     }
     const a = this.aircraft(collateral.id);
     if (!a) return fail("unknown_aircraft", `No aircraft ${collateral.id} in the fleet`);
@@ -1769,6 +2025,9 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
         this.touchAircraft({ ...a, loanId: loan.id });
         this.event(a.id, "financed", { loanId: loan.id, principal: loan.principal });
       }
+    } else {
+      const f = this.fbos.get(collateral.id);
+      if (f) this.touchFbo({ ...f, loanId: loan.id });
     }
     return this.loans.get(loan.id) ?? loan;
   }
@@ -1833,7 +2092,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   /** P5 fields of a fleet aircraft (systems, known defects, gate, annual, permit, orders). */
   private p5Fields(a: BookAircraft, type: AircraftType | null): Partial<FleetAircraft> {
     const g = this.gate(a);
-    const shop = shopAt(this.maintenance, a.location);
+    const shop = this.shopFor(a.location, []);
     const annual = type ? annualQuote(type, shop) : { cost: 0, hours: 0 };
     const known = a.defects.filter((d) => !d.hidden);
     const queued = this.queued(a);
@@ -1878,6 +2137,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       maintenance: a.orders.map((o) => ({ ...o, registration: a.registration })),
       repairAllCost: all.cost,
       repairAllHours: all.hours,
+      ...(a.ownership === "owned" ? { insurance: this.insuranceState(a) } : {}),
     };
   }
 
@@ -1928,7 +2188,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   /** P4 fields of the `company` domain. */
   companyFields(): Pick<
     CompanyState,
-    "tierName" | "creditScore" | "netWorth" | "debt" | "startingCash" | "clock"
+    "tierName" | "creditScore" | "netWorth" | "debt" | "startingCash" | "clock" | "milestones"
   > {
     return {
       tierName: tierName(reputationTier(this.company.reputation)),
@@ -1937,7 +2197,1003 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       debt: this.debt(),
       startingCash: this.company.startingCash,
       clock: companyClock(this.company.gameMs),
+      milestones: milestoneList(this.company.milestones),
     };
+  }
+
+  // ==== P5 part 2: FBOs, demand, insurance, milestones (book-p5b section) ====
+  private get dayProcessed(): number {
+    return this.company.dayProcessed ?? 0;
+  }
+
+  private touchFbo(f: FboRecord): void {
+    this.fbos.set(f.id, f);
+    const i = this.pending.fbos.findIndex((x) => x.id === f.id);
+    if (i >= 0) this.pending.fbos[i] = f;
+    else this.pending.fbos.push(f);
+    this.pending.company = true;
+  }
+
+  private fboTx(
+    f: FboRecord,
+    kind: string,
+    amount: number,
+    source: FboTransactionRecord["source"],
+    memo: string | null,
+  ): void {
+    this.pending.fboTransactions.push({
+      fboId: f.id,
+      at: this.now(),
+      gameMs: Math.floor(this.company.gameMs),
+      kind,
+      amount: round2(amount),
+      source,
+      memo,
+    });
+  }
+
+  private airportOf(icao: string): EconomyAirport | null {
+    return this.airports?.get(icao) ?? null;
+  }
+
+  /** The player's FBO at an airport (active or under construction). */
+  fboAt(icao: string): FboRecord | null {
+    const id = icao.toUpperCase();
+    for (const f of this.fbos.values()) {
+      if (f.icao === id && (f.status === "active" || f.status === "building")) return f;
+    }
+    return null;
+  }
+
+  /** The player's operating FBO at an airport. */
+  activeFboAt(icao: string): FboRecord | null {
+    const f = this.fboAt(icao);
+    return f && f.status === "active" ? f : null;
+  }
+
+  /** Level of the own maintenance shop at an airport (0 = none). */
+  ownShopLevel(icao: string): number {
+    return this.activeFboAt(icao)?.modules.maintenance.level ?? 0;
+  }
+
+  private readonly baseFuel = new Map<string, FuelPrice>();
+
+  /** The airport's fuel price now (P4 regional price × an active demand event's uplift). */
+  fuelPriceAt(airport: EconomyAirport, gameMs: number = this.company.gameMs): FuelPrice {
+    let base = this.baseFuel.get(airport.ident);
+    if (!base) {
+      base = fuelPrice(airport, this.airports?.list ?? [airport]);
+      this.baseFuel.set(airport.ident, base);
+    }
+    const k = fuelEventFactor(airport.ident, this.events, gameMs);
+    return k === 1 ? base : { ...base, usdPerKg: Math.round(base.usdPerKg * k * 1000) / 1000 };
+  }
+
+  private fboPnlAdd(
+    f: FboRecord,
+    d: { income?: number; upkeep?: number; savings?: number },
+  ): FboRecord {
+    const month = gameMonthIndex(this.company.gameMs);
+    const pnl = [...f.pnl];
+    const i = pnl.findIndex((m) => m.month === month);
+    const row =
+      i >= 0 && pnl[i] ? { ...pnl[i] } : { month, income: 0, upkeep: 0, savings: 0, net: 0 };
+    row.income = round2(row.income + (d.income ?? 0));
+    row.upkeep = round2(row.upkeep + (d.upkeep ?? 0));
+    row.savings = round2(row.savings + (d.savings ?? 0));
+    row.net = round2(row.income - row.upkeep);
+    if (i >= 0) pnl[i] = row;
+    else pnl.push(row);
+    pnl.sort((a, b) => a.month - b.month);
+    return { ...f, pnl: pnl.slice(-12) };
+  }
+
+  /** Fleet aircraft parked at an airport (not flying), oldest first. */
+  private parkedAt(icao: string): BookAircraft[] {
+    return this.activeFleet().filter((a) => a.location === icao && a.status !== "in_flight");
+  }
+
+  // ---- FBO acquisition and modules ----
+
+  /** Buy price, build cost, land lease and build time at an airport. */
+  quoteFbo(icao: string): BookResult<ReturnType<typeof fboQuote>> {
+    const airport = this.airportOf(icao);
+    if (!airport) return fail("unknown_airport", `Unknown airport ${icao}`);
+    return { ok: true, data: fboQuote(airport) };
+  }
+
+  /** Buy the existing FBO at an airport (ramp & services 1 and a fuel farm 1 included). */
+  buyFbo(args: {
+    icao: string;
+    financing?: { lenderId: string; termMonths: number; principal: number };
+  }): BookResult<{ fbo: FboState; loan: BookLoan | null }> {
+    return this.acquireFbo(args, "bought");
+  }
+
+  /** Build an FBO: construction cost now, a monthly land lease, ready in 3–14 in-game days. */
+  buildFbo(args: {
+    icao: string;
+    financing?: { lenderId: string; termMonths: number; principal: number };
+  }): BookResult<{ fbo: FboState; loan: BookLoan | null }> {
+    return this.acquireFbo(args, "built");
+  }
+
+  private acquireFbo(
+    args: { icao: string; financing?: { lenderId: string; termMonths: number; principal: number } },
+    origin: "bought" | "built",
+  ): BookResult<{ fbo: FboState; loan: BookLoan | null }> {
+    const airport = this.airportOf(args.icao);
+    if (!airport) return fail("unknown_airport", `Unknown airport ${args.icao}`);
+    if (this.fboAt(airport.ident)) {
+      return fail("fbo_exists", `You already have an FBO at ${airport.ident}`);
+    }
+    const q = fboQuote(airport);
+    const price = origin === "bought" ? q.buyPrice : q.buildCost;
+    let quote: LoanQuote | null = null;
+    if (args.financing) {
+      const lender = lenderById(args.financing.lenderId);
+      if (!lender) return fail("unknown_lender", `Unknown lender ${args.financing.lenderId}`);
+      quote = this.quoteWith(lender.id, args.financing.principal, args.financing.termMonths, price);
+      if (!quote.ok) return fail(quote.code ?? "loan_declined", quote.message ?? "Declined");
+    }
+    const principal = quote ? quote.principal : 0;
+    const fee = quote ? quote.originationFee : 0;
+    const needed = round2(price - principal + fee);
+    if (this.company.cash < needed) {
+      return fail(
+        "insufficient_cash",
+        `Needs $${needed.toLocaleString("en-US")} in cash (price − loan + 1 % fee)`,
+      );
+    }
+    const n = this.company.fboCounter + 1;
+    this.company = { ...this.company, fboCounter: n };
+    const rec = newFboRecord({
+      id: `FBO-${n}`,
+      icao: airport.ident,
+      origin,
+      gameMs: this.company.gameMs,
+      at: this.now(),
+      price,
+      landLeaseMonthly: origin === "built" ? q.landLeaseMonthly : 0,
+      readyAtGameMs:
+        origin === "built" ? Math.floor(this.company.gameMs + q.buildDays * GAME_DAY_MS) : null,
+      levels: origin === "bought" ? BOUGHT_MODULES : BUILT_MODULES,
+    });
+    this.touchFbo(rec);
+    this.post(
+      origin === "bought" ? "fbo_purchase" : "fbo_construction",
+      -price,
+      "fbo",
+      rec.id,
+      origin === "bought"
+        ? `Bought the FBO at ${airport.ident}`
+        : `FBO construction at ${airport.ident} (${q.buildDays} days)`,
+    );
+    const loan = quote ? this.openLoan(quote, { type: "fbo", id: rec.id }) : null;
+    const f = this.fbos.get(rec.id) ?? rec;
+    return { ok: true, data: { fbo: this.fboState(f), loan } };
+  }
+
+  private ownedFbo(fboId: string): BookResult<FboRecord> {
+    const f = this.fbos.get(fboId);
+    if (!f || (f.status !== "active" && f.status !== "building")) {
+      return fail("unknown_fbo", `No FBO ${fboId}`);
+    }
+    return { ok: true, data: f };
+  }
+
+  /** Sell an operating FBO: 75 % of the money invested; an open loan on it is paid off. */
+  sellFbo(fboId: string): BookResult<{ price: number; loanPaid: number }> {
+    const r = this.ownedFbo(fboId);
+    if (!r.ok) return r;
+    let f = r.data;
+    if (f.status !== "active") return fail("fbo_building", `The FBO at ${f.icao} is being built`);
+    const price = fboSalePrice(f.invested);
+    const loan = f.loanId ? this.loans.get(f.loanId) : undefined;
+    const owed = loan && loan.status === "active" ? loan.balance : 0;
+    if (owed > price) {
+      return fail(
+        "underwater",
+        `The sale ($${price.toLocaleString("en-US")}) does not cover the loan balance ($${owed.toLocaleString("en-US")})`,
+      );
+    }
+    // Today's accrued traffic is paid out first.
+    if (f.today.modelled > 0) {
+      this.post("fbo_income", f.today.modelled, "fbo", f.id, `FBO ${f.icao}: traffic until sale`);
+      f = this.fboPnlAdd(f, { income: f.today.modelled });
+    }
+    this.post("sale", price, "fbo", f.id, `Sold the FBO at ${f.icao}`);
+    if (loan && owed > 0) {
+      this.post(
+        "loan_payment",
+        -owed,
+        "loan",
+        loan.id,
+        `Payoff from the sale of the FBO at ${f.icao}`,
+      );
+      this.touchLoan({ ...loan, balance: 0, status: "paid_off" });
+    }
+    this.touchFbo({ ...f, status: "sold", loanId: null, today: emptyToday(f.today.day) });
+    return { ok: true, data: { price, loanPaid: owed } };
+  }
+
+  /** Install a module (level 1). */
+  buyModule(fboId: string, kind: FboModuleKind): BookResult<{ fbo: FboState }> {
+    const r = this.ownedFbo(fboId);
+    if (!r.ok) return r;
+    const m = r.data.modules[kind];
+    if (m.level > 0) {
+      return fail("module_installed", `${FBO_MODULE_LABELS[kind]} is installed: upgrade it`);
+    }
+    return this.queueModule(r.data, kind, 1);
+  }
+
+  /** Upgrade a module one level (≤ 3). */
+  upgradeModule(fboId: string, kind: FboModuleKind): BookResult<{ fbo: FboState }> {
+    const r = this.ownedFbo(fboId);
+    if (!r.ok) return r;
+    const m = r.data.modules[kind];
+    if (m.level === 0) {
+      return fail("module_not_installed", `${FBO_MODULE_LABELS[kind]} is not installed`);
+    }
+    if (m.level >= 3) return fail("module_max_level", `${FBO_MODULE_LABELS[kind]} is at level 3`);
+    return this.queueModule(r.data, kind, m.level + 1);
+  }
+
+  private queueModule(
+    f: FboRecord,
+    kind: FboModuleKind,
+    toLevel: number,
+  ): BookResult<{ fbo: FboState }> {
+    if (f.status !== "active") {
+      return fail("fbo_building", `The FBO at ${f.icao} is still being built`);
+    }
+    if (f.modules[kind].pending) {
+      return fail("module_pending", `${FBO_MODULE_LABELS[kind]} is already being installed`);
+    }
+    const airport = this.airportOf(f.icao);
+    const s = airport ? airportSize(airport).s : 0;
+    const cost = moduleCost(kind, toLevel, s);
+    if (this.company.cash < cost) {
+      return fail(
+        "insufficient_cash",
+        `${FBO_MODULE_LABELS[kind]} level ${toLevel} costs $${cost.toLocaleString("en-US")}`,
+      );
+    }
+    this.post(
+      "fbo_construction",
+      -cost,
+      "fbo",
+      f.id,
+      `${FBO_MODULE_LABELS[kind]} level ${toLevel} at ${f.icao}`,
+    );
+    const readyAtGameMs = Math.floor(this.company.gameMs + moduleDays(kind, toLevel) * GAME_DAY_MS);
+    const next: FboRecord = {
+      ...f,
+      invested: round2(f.invested + cost),
+      modules: {
+        ...f.modules,
+        [kind]: { ...f.modules[kind], pending: { toLevel, cost, readyAtGameMs } },
+      },
+    };
+    this.touchFbo(next);
+    return { ok: true, data: { fbo: this.fboState(next) } };
+  }
+
+  /** Player pricing: fuel price ratio (0.7–1.5 × regional) and handling fee ($20–$300). */
+  setFboPricing(
+    fboId: string,
+    p: { fuelPriceRatio?: number | undefined; handlingFeeUsd?: number | undefined },
+  ): BookResult<{ fbo: FboState }> {
+    const r = this.ownedFbo(fboId);
+    if (!r.ok) return r;
+    const ratio = p.fuelPriceRatio ?? r.data.fuelPriceRatio;
+    const fee = p.handlingFeeUsd ?? r.data.handlingFeeUsd;
+    if (!(ratio >= FUEL_RATIO_RANGE.min && ratio <= FUEL_RATIO_RANGE.max)) {
+      return fail(
+        "bad_price",
+        `Fuel price ratio is ${FUEL_RATIO_RANGE.min}–${FUEL_RATIO_RANGE.max}`,
+      );
+    }
+    if (!(fee >= HANDLING_RANGE.min && fee <= HANDLING_RANGE.max)) {
+      return fail("bad_price", `Handling fee is $${HANDLING_RANGE.min}–$${HANDLING_RANGE.max}`);
+    }
+    const next = {
+      ...r.data,
+      fuelPriceRatio: Math.round(ratio * 1000) / 1000,
+      handlingFeeUsd: Math.round(fee * 100) / 100,
+    };
+    this.touchFbo(next);
+    return { ok: true, data: { fbo: this.fboState(next) } };
+  }
+
+  /** Monthly upkeep: every installed module at its level + the land lease. */
+  fboUpkeep(f: FboRecord): number {
+    const airport = this.airportOf(f.icao);
+    const s = airport ? airportSize(airport).s : 0;
+    const modules =
+      f.status === "active"
+        ? FBO_MODULE_KINDS.reduce((sum, k) => sum + moduleUpkeep(k, f.modules[k].level, s), 0)
+        : 0;
+    return round2(modules + f.landLeaseMonthly);
+  }
+
+  // ---- FBO time: constructions, modules, traffic hours, day close ----
+
+  private processFbos(t: number): void {
+    for (const f0 of [...this.fbos.values()]) {
+      let f = f0;
+      let changed = false;
+      if (f.status === "building" && f.readyAtGameMs !== null && f.readyAtGameMs <= t) {
+        f = {
+          ...f,
+          status: "active",
+          readyAtGameMs: null,
+          builtAt: this.now(),
+          nextHour: Math.ceil(t / HOUR_MS),
+          today: emptyToday(Math.floor(t / GAME_DAY_MS)),
+        };
+        changed = true;
+        this.notice("fbo.built", { fboId: f.id, icao: f.icao, what: "construction" });
+      }
+      if (f.status !== "active") {
+        if (changed) this.touchFbo(f);
+        continue;
+      }
+      for (const k of FBO_MODULE_KINDS) {
+        const p = f.modules[k].pending;
+        if (p && p.readyAtGameMs <= t) {
+          f = { ...f, modules: { ...f.modules, [k]: { level: p.toLevel, pending: null } } };
+          changed = true;
+          this.notice("fbo.built", {
+            fboId: f.id,
+            icao: f.icao,
+            what: "module",
+            module: k,
+            level: p.toLevel,
+          });
+        }
+      }
+      while ((f.nextHour + 1) * HOUR_MS <= t) {
+        f = this.accrueHour(f, f.nextHour);
+        changed = true;
+      }
+      if (changed) this.touchFbo(f);
+    }
+  }
+
+  /** One in-game hour of modelled traffic, accrued into today's totals. */
+  private accrueHour(f0: FboRecord, hour: number): FboRecord {
+    let f = f0;
+    const day = Math.floor(hour / 24);
+    if (f.today.day < day) f = this.closeFboDay(f, f.today.day);
+    const airport = this.airportOf(f.icao);
+    if (!airport) return { ...f, nextHour: hour + 1 };
+    const levels = levelsOf(f);
+    const regional = this.fuelPriceAt(airport, hour * HOUR_MS).usdPerKg;
+    const r = trafficHour(
+      {
+        companySeed: this.company.seed,
+        icao: f.icao,
+        airportType: airport.type,
+        s: airportSize(airport).s,
+        levels,
+        fuel: fuelPricing(regional, f.fuelPriceRatio, levels.fuel),
+        handlingFeeUsd: f.handlingFeeUsd,
+        fuelSoldTodayKg: f.today.fuelKg,
+      },
+      hour,
+    );
+    const byKind = { ...f.today.byKind };
+    for (const k of Object.keys(byKind) as TrafficKind[])
+      byKind[k] = round2(byKind[k] + r.byKind[k]);
+    return {
+      ...f,
+      nextHour: hour + 1,
+      today: {
+        ...f.today,
+        modelled: round2(f.today.modelled + r.total),
+        movements: f.today.movements + r.captured,
+        fuelKg: f.today.fuelKg + r.fuelKg,
+        byKind,
+      },
+    };
+  }
+
+  /**
+   * Close an FBO's day: overnight hangar rent, then the day's modelled income is posted as
+   * one `fbo_income` ledger entry (with one transaction per kind) and the day is charted.
+   */
+  private closeFboDay(f: FboRecord, day: number): FboRecord {
+    const airport = this.airportOf(f.icao);
+    const s = airport ? airportSize(airport).s : 0;
+    const night = hangarNight(
+      this.company.seed,
+      f.icao,
+      day,
+      f.modules.hangar.level,
+      this.parkedAt(f.icao).length,
+      s,
+    );
+    const byKind = { ...f.today.byKind, hangar: round2(f.today.byKind.hangar + night.income) };
+    const modelled = round2(f.today.modelled + night.income);
+    let g: FboRecord = { ...f, rented: night.rented };
+    if (modelled > 0) {
+      this.post(
+        "fbo_income",
+        modelled,
+        "fbo",
+        f.id,
+        `FBO ${f.icao} day ${day + 1}: modelled traffic (${f.today.movements} movements)`,
+      );
+      for (const k of Object.keys(byKind) as TrafficKind[]) {
+        if (byKind[k] > 0) this.fboTx(f, k, byKind[k], "modelled", `Day ${day + 1}`);
+      }
+      g = this.fboPnlAdd(g, { income: modelled });
+    }
+    const entry = {
+      day,
+      own: f.today.own,
+      modelled,
+      simAi: f.today.simAi,
+      movements: f.today.movements,
+    };
+    this.notice("fbo.income", { fboId: f.id, icao: f.icao, source: "modelled", ...entry });
+    return { ...g, daily: [...g.daily, entry].slice(-30), today: emptyToday(day + 1) };
+  }
+
+  private processDays(t: number): void {
+    const day = Math.floor(t / GAME_DAY_MS);
+    while (this.dayProcessed < day) {
+      const d = this.dayProcessed + 1;
+      for (const f of [...this.fbos.values()]) {
+        if (f.status === "active") this.touchFbo(this.closeFboDay(f, f.today.day));
+      }
+      this.weatherWear(d - 1);
+      this.demandDay(d);
+      this.company = { ...this.company, dayProcessed: d };
+      this.pending.company = true;
+    }
+  }
+
+  /**
+   * Storm weather wear for in-game day `day`: aircraft parked (not flying) at an airport
+   * with a storm lose 0.4 condition points spread evenly, less inside an own hangar
+   * (−60/80/100 % by level, as many aircraft as it has bays, oldest first).
+   */
+  private weatherWear(day: number): void {
+    const t = (day + 1) * GAME_DAY_MS - 1;
+    for (const e of this.events) {
+      if (e.kind !== "storm" || !(e.startGameMs <= t && t < e.endGameMs)) continue;
+      const fbo = this.activeFboAt(e.icao);
+      const level = fbo?.modules.hangar.level ?? 0;
+      const bays = level > 0 ? (HANGAR.bays[level - 1] ?? 0) : 0;
+      this.parkedAt(e.icao).forEach((a, i) => {
+        const cut = i < bays ? (HANGAR.weatherWearCut[level - 1] ?? 0) : 0;
+        const wear = round2(DEMAND.stormWearPerDay * (1 - cut));
+        if (wear <= 0) return;
+        const systems = distributeWear(a.systems, { hours: wear, g: 0, overspeed: 0, crash: 0 });
+        this.touchAircraft({ ...a, systems });
+        this.event(a.id, "weather", { wear, event: e.id, hangar: cut > 0 });
+      });
+    }
+  }
+
+  private candidates(): EconomyAirport[] {
+    if (!this.airports) return [];
+    const extra = [...this.fbos.values()]
+      .filter((f) => f.status === "active" || f.status === "building")
+      .map((f) => f.icao)
+      .sort();
+    const key = `${this.company.base}|${extra.join(",")}`;
+    if (this.candidateCache?.key !== key) {
+      this.candidateCache = {
+        key,
+        list: eventCandidates(this.airports.get(this.company.base), this.airports.list, extra),
+      };
+    }
+    return this.candidateCache.list;
+  }
+
+  /** Start of in-game day `d`: activity decays, old events are forgotten, the day's roll. */
+  private demandDay(d: number): void {
+    const t = d * GAME_DAY_MS;
+    if (Object.keys(this.company.activity).length > 0) {
+      this.company = { ...this.company, activity: decayActivity(this.company.activity) };
+      this.pending.activity = true;
+    }
+    this.events = this.events.filter((e) => e.endGameMs > t - 30 * GAME_DAY_MS);
+    const ev = rollDemandEvent(this.company.seed, d, this.candidates(), this.events);
+    if (!ev) return;
+    this.events.push(ev);
+    this.pending.demandEvents.push(ev);
+    this.notice("demand.event", {
+      event: eventState(ev),
+      name: this.airportOf(ev.icao)?.name ?? ev.icao,
+    });
+  }
+
+  /** Month boundary: FBO upkeep and land leases, then hull insurance premiums. */
+  private monthlyFbosAndInsurance(): void {
+    const label = this.company.monthBilled + 1;
+    for (const f of [...this.fbos.values()]) {
+      if (f.status !== "active" && f.status !== "building") continue;
+      const upkeep = this.fboUpkeep(f);
+      if (upkeep <= 0) continue;
+      this.post("fbo_upkeep", -upkeep, "fbo", f.id, `FBO ${f.icao} upkeep, month ${label}`);
+      this.touchFbo(this.fboPnlAdd(this.fbos.get(f.id) ?? f, { upkeep }));
+    }
+    for (const a of this.activeFleet()) {
+      if (!a.insurance || a.ownership !== "owned") continue;
+      const premium = this.premiumFor(a);
+      this.post(
+        "insurance",
+        -premium,
+        "aircraft",
+        a.id,
+        `${a.registration} hull insurance, month ${label}`,
+      );
+      this.touchAircraft({ ...a, insurance: { ...a.insurance, premium } });
+    }
+  }
+
+  // ---- own arrivals and AI traffic ----
+
+  private ownArrival(
+    f0: FboRecord,
+    a: BookAircraft,
+    savings: Array<{ kind: string; amount: number; memo: string }>,
+    ref: string,
+  ): void {
+    let f = this.fbos.get(f0.id) ?? f0;
+    const day = Math.floor(this.company.gameMs / GAME_DAY_MS);
+    const total = round2(savings.reduce((s, x) => s + x.amount, 0));
+    for (const x of savings) this.fboTx(f, x.kind, x.amount, "own", `${a.registration}: ${x.memo}`);
+    let reputation = 0;
+    if (f.modules.ramp.level >= RAMP.loungeMinLevel && f.loungeDay !== day) {
+      reputation = RAMP.loungeReputation;
+      this.adjustReputation(reputation);
+      f = { ...f, loungeDay: day };
+      this.fboTx(
+        f,
+        "crew_lounge",
+        0,
+        "own",
+        `${a.registration}: crew lounge +${reputation} reputation`,
+      );
+    }
+    f = this.fboPnlAdd(
+      { ...f, today: { ...f.today, own: round2(f.today.own + total) } },
+      { savings: total },
+    );
+    this.touchFbo(f);
+    this.notice("fbo.income", {
+      fboId: f.id,
+      icao: f.icao,
+      source: "own",
+      aircraftId: a.id,
+      registration: a.registration,
+      ref,
+      savings: total,
+      reputation,
+      items: savings.map((x) => ({ kind: x.kind, amount: x.amount })),
+    });
+  }
+
+  /** Airports whose AI traffic the connector should watch (active FBOs). */
+  aiTargets(): Array<{ fboId: string; icao: string; lat: number; lon: number }> {
+    const out: Array<{ fboId: string; icao: string; lat: number; lon: number }> = [];
+    for (const f of this.fbos.values()) {
+      const airport = f.status === "active" ? this.airportOf(f.icao) : null;
+      if (airport) out.push({ fboId: f.id, icao: f.icao, lat: airport.lat, lon: airport.lon });
+    }
+    return out.sort((x, y) => (x.icao < y.icao ? -1 : 1));
+  }
+
+  /**
+   * An AI aircraft observed landing at an own FBO airport in the connected simulator: a
+   * labelled bonus (source sim_ai) = ramp fee + handling at the player's price × elasticity
+   * (+ 400 kg of fuel at the player's margin × elasticity with a fuel farm), turboprop class.
+   */
+  creditAiArrival(icao: string, objectId: number | string): BookResult<{ amount: number }> {
+    const f = this.activeFboAt(icao);
+    const airport = this.airportOf(icao);
+    if (!f || !airport) return fail("unknown_fbo", `No operating FBO at ${icao}`);
+    const levels = levelsOf(f);
+    const ff = CLASS_FEE_FACTOR.turboprop;
+    const ramp = Math.max(1, levels.ramp);
+    let amount = RAMP.feeUsd * ff * (RAMP.levelFactor[ramp - 1] ?? 1);
+    amount += f.handlingFeeUsd * ff * elasticity(f.handlingFeeUsd / REFERENCE_HANDLING_USD);
+    if (levels.fuel > 0) {
+      const p = fuelPricing(this.fuelPriceAt(airport).usdPerKg, f.fuelPriceRatio, levels.fuel);
+      amount += AI_ARRIVAL.fuelKg * Math.max(0, p.price - p.cost) * elasticity(f.fuelPriceRatio);
+    }
+    amount = round2(amount);
+    this.post(
+      "fbo_income",
+      amount,
+      "fbo",
+      f.id,
+      `FBO ${f.icao}: AI arrival observed in the simulator (bonus, object ${objectId})`,
+    );
+    this.fboTx(f, "ai_arrival", amount, "sim_ai", `Simulator AI object ${objectId}`);
+    const next = this.fboPnlAdd(
+      {
+        ...f,
+        aiArrivals: f.aiArrivals + 1,
+        today: { ...f.today, simAi: round2(f.today.simAi + amount) },
+      },
+      { income: amount },
+    );
+    this.touchFbo(next);
+    this.notice("fbo.income", {
+      fboId: f.id,
+      icao: f.icao,
+      source: "sim_ai",
+      amount,
+      objectId: String(objectId),
+    });
+    return { ok: true, data: { amount } };
+  }
+
+  // ---- demand ----
+
+  /** Demand index at an airport now. */
+  demandAt(icao: string): number {
+    return demandIndex(icao, this.company.activity, this.events, this.company.gameMs);
+  }
+
+  /**
+   * Board hooks for the job generator at `origin`: the payout factor per destination
+   * (demand of origin and destination × own cargo terminal bonus, 2 decimals) and the
+   * terminal's extra jobs.
+   */
+  jobDemand(origin: string): { demand: (dest: EconomyAirport) => number; extraJobs: number } {
+    const oi = this.demandAt(origin);
+    const level = this.activeFboAt(origin)?.modules.cargo.level ?? 0;
+    const bonus = level > 0 ? (CARGO_TERMINAL.payoutBonus[level - 1] ?? 0) : 0;
+    return {
+      extraJobs: level > 0 ? (CARGO_TERMINAL.extraJobs[level - 1] ?? 0) : 0,
+      demand: (dest) =>
+        Math.round(demandFactor(oi, this.demandAt(dest.ident)) * (1 + bonus) * 100) / 100,
+    };
+  }
+
+  /** A delivered mission: demand activity, delivery count and the landing streak. */
+  recordDelivery(d: { origin: string; destination: string; grade: LandingGrade | null }): void {
+    let activity = addActivity(this.company.activity, d.origin, DEMAND.departureActivity);
+    activity = addActivity(activity, d.destination, DEMAND.deliveryActivity);
+    const perfect = d.grade === "A+" || d.grade === "A";
+    this.company = {
+      ...this.company,
+      activity,
+      deliveries: this.company.deliveries + 1,
+      landingStreak: perfect ? this.company.landingStreak + 1 : 0,
+    };
+    this.pending.activity = true;
+    this.pending.company = true;
+  }
+
+  demandEventRecords(): DemandEventRecord[] {
+    return [...this.events];
+  }
+
+  fboRecords(): FboRecord[] {
+    return [...this.fbos.values()];
+  }
+
+  // ---- insurance ----
+
+  private premiumFor(a: BookAircraft): number {
+    return insurancePremium(this.aircraftValue(a), insuranceRisk(a.incidents, this.company.gameMs));
+  }
+
+  insuranceState(a: BookAircraft): InsuranceState {
+    return {
+      insured: a.insurance !== null,
+      premiumMonthly: this.premiumFor(a),
+      riskFactor: insuranceRisk(a.incidents, this.company.gameMs),
+      coverageShare: INSURANCE.coverageShare,
+      deductible: INSURANCE.deductible,
+      ...(a.insurance ? { sinceGameMs: a.insurance.sinceGameMs } : {}),
+      claims: a.insurance?.claims ?? 0,
+      claimsPaid: a.insurance?.claimsPaid ?? 0,
+    };
+  }
+
+  /** Hull insurance on an owned aircraft: the first month's premium now. */
+  buyInsurance(aircraftId: string): BookResult<{ premium: number }> {
+    const a = this.aircraft(aircraftId);
+    if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
+    if (a.ownership !== "owned") return fail("not_owned", "Only owned aircraft can be insured");
+    if (a.insurance) return fail("already_insured", `${a.registration} is already insured`);
+    const premium = this.premiumFor(a);
+    if (this.company.cash < premium) {
+      return fail("insufficient_cash", `The first premium is $${premium.toLocaleString("en-US")}`);
+    }
+    this.post(
+      "insurance",
+      -premium,
+      "aircraft",
+      a.id,
+      `${a.registration} hull insurance, first month`,
+    );
+    this.touchAircraft({
+      ...(this.fleet.get(a.id) ?? a),
+      insurance: {
+        sinceGameMs: Math.floor(this.company.gameMs),
+        premium,
+        claims: 0,
+        claimsPaid: 0,
+      },
+    });
+    this.event(a.id, "insured", { premium });
+    return { ok: true, data: { premium } };
+  }
+
+  /** Cancel a policy (no refund of the month already paid). */
+  cancelInsurance(aircraftId: string): BookResult<{ aircraftId: string }> {
+    const a = this.aircraft(aircraftId);
+    if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
+    if (!a.insurance) return fail("not_insured", `${a.registration} is not insured`);
+    this.touchAircraft({ ...a, insurance: null });
+    this.event(a.id, "insurance.cancelled", {});
+    return { ok: true, data: { aircraftId } };
+  }
+
+  /** An insured repair of incident defects (hard landing, crash): 80 % above $2,000. */
+  private claimRepair(aircraftId: string, defects: readonly Defect[], shop: Shop): void {
+    const a = this.fleet.get(aircraftId);
+    if (!a?.insurance) return;
+    const claimable = defects.filter((d) => CLAIMABLE_CAUSES.has(d.cause));
+    if (claimable.length === 0) return;
+    const cost = repairQuote(claimable, shop).cost;
+    const claim = repairClaim(cost);
+    if (claim <= 0) return;
+    this.post(
+      "insurance_claim",
+      claim,
+      "aircraft",
+      a.id,
+      `${a.registration} incident repair claim (80 % of $${cost.toLocaleString("en-US")} − $${INSURANCE.deductible.toLocaleString("en-US")})`,
+    );
+    this.touchAircraft({
+      ...a,
+      insurance: {
+        ...a.insurance,
+        claims: a.insurance.claims + 1,
+        claimsPaid: round2(a.insurance.claimsPaid + claim),
+      },
+    });
+    this.notice("insurance.claim", {
+      aircraftId: a.id,
+      registration: a.registration,
+      kind: "repair",
+      amount: claim,
+      cost,
+    });
+  }
+
+  /**
+   * An insured write-off: 80 % of the hull value before the crash is paid, and a loan on
+   * the aircraft is settled from it (fully when the payout covers the balance).
+   */
+  private settleWriteOff(a: BookAircraft, valueBefore: number): void {
+    if (!a.insurance) return;
+    const claim = writeOffClaim(valueBefore);
+    this.post(
+      "insurance_claim",
+      claim,
+      "aircraft",
+      a.id,
+      `${a.registration} hull write-off claim (80 % of $${valueBefore.toLocaleString("en-US")})`,
+    );
+    let loanPaid = 0;
+    let loanId = a.loanId;
+    const loan = a.loanId ? this.loans.get(a.loanId) : undefined;
+    if (loan && loan.status === "active" && claim > 0) {
+      loanPaid = round2(Math.min(loan.balance, claim));
+      this.post(
+        "loan_payment",
+        -loanPaid,
+        "loan",
+        loan.id,
+        `Settled from the insurance payout for ${a.registration}`,
+      );
+      const balance = round2(loan.balance - loanPaid);
+      const cleared = balance < 0.005;
+      this.touchLoan({
+        ...loan,
+        balance: cleared ? 0 : balance,
+        status: cleared ? "paid_off" : "active",
+      });
+      if (cleared) loanId = null;
+    }
+    this.touchAircraft({
+      ...a,
+      loanId,
+      insurance: {
+        ...a.insurance,
+        claims: a.insurance.claims + 1,
+        claimsPaid: round2(a.insurance.claimsPaid + claim),
+      },
+    });
+    this.notice("insurance.claim", {
+      aircraftId: a.id,
+      registration: a.registration,
+      kind: "write_off",
+      amount: claim,
+      loanPaid,
+    });
+  }
+
+  // ---- milestones ----
+
+  /** Mark milestones reached since the last check (called by `drain`). */
+  checkMilestones(): void {
+    const have = new Set<MilestoneId>(this.company.milestones.map((m) => m.id));
+    const owned = [...this.fbos.values()].filter(
+      (f) => f.status === "active" || f.status === "building",
+    ).length;
+    const loans = [...this.loans.values()];
+    const reached: Record<MilestoneId, boolean> = {
+      first_delivery: this.company.deliveries >= 1,
+      hours_100: this.company.flightHours >= MILESTONES.hours,
+      first_fbo: this.fbos.size > 0,
+      debt_free: loans.length > 0 && loans.every((l) => l.status === "paid_off"),
+      landing_streak: this.company.landingStreak >= MILESTONES.streak,
+      first_restoration: this.company.restorations >= 1,
+      fleet_three: this.activeFleet().length >= MILESTONES.fleet,
+      fbo_network: owned >= MILESTONES.fboNetwork,
+    };
+    const fresh: MilestoneRecord[] = [];
+    for (const id of MILESTONE_IDS) {
+      if (have.has(id) || !reached[id]) continue;
+      fresh.push({ id, gameMs: Math.floor(this.company.gameMs), at: this.now() });
+    }
+    if (fresh.length === 0) return;
+    this.company = { ...this.company, milestones: [...this.company.milestones, ...fresh] };
+    this.pending.company = true;
+    for (const m of fresh) {
+      this.pending.milestones.push(m);
+      const view = milestoneList([m]).find((x) => x.id === m.id);
+      this.notice("milestone.reached", { id: m.id, title: view?.title ?? m.id, gameMs: m.gameMs });
+    }
+  }
+
+  // ---- domains ----
+
+  fboState(f: FboRecord): FboState {
+    const airport = this.airportOf(f.icao);
+    const s = airport ? airportSize(airport).s : 0;
+    const regional = airport ? this.fuelPriceAt(airport).usdPerKg : 0;
+    const levels = levelsOf(f);
+    const fp = fuelPricing(regional, f.fuelPriceRatio, levels.fuel);
+    const bays = levels.hangar > 0 ? (HANGAR.bays[levels.hangar - 1] ?? 0) : 0;
+    const owned = Math.min(bays, this.parkedAt(f.icao).length);
+    const rented = Math.min(f.rented, Math.max(0, bays - owned));
+    const queue: FboState["queue"] = [];
+    if (f.status === "building" && f.readyAtGameMs !== null) {
+      queue.push({
+        kind: "construction",
+        label: "FBO construction",
+        readyAtGameMs: f.readyAtGameMs,
+      });
+    }
+    for (const k of FBO_MODULE_KINDS) {
+      const p = f.modules[k].pending;
+      if (p) {
+        queue.push({
+          kind: "module",
+          module: k,
+          toLevel: p.toLevel,
+          label: `${FBO_MODULE_LABELS[k]} level ${p.toLevel}`,
+          readyAtGameMs: p.readyAtGameMs,
+        });
+      }
+    }
+    queue.sort((x, y) => x.readyAtGameMs - y.readyAtGameMs);
+    const loan = f.loanId ? this.loans.get(f.loanId) : undefined;
+    const financed = loan?.status === "active";
+    return {
+      id: f.id,
+      icao: f.icao,
+      name: airport?.name ?? f.icao,
+      airportType: airport?.type ?? "medium",
+      lat: airport?.lat ?? 0,
+      lon: airport?.lon ?? 0,
+      status: f.status === "building" ? "building" : "active",
+      origin: f.origin,
+      acquiredGameMs: f.acquiredGameMs,
+      ...(f.readyAtGameMs !== null ? { readyAtGameMs: f.readyAtGameMs } : {}),
+      price: f.price,
+      invested: f.invested,
+      value: fboValue(f.invested),
+      financed,
+      ...(financed && f.loanId ? { loanId: f.loanId } : {}),
+      landLeaseMonthly: f.landLeaseMonthly,
+      upkeepMonthly: this.fboUpkeep(f),
+      sizeFactor: s,
+      movementsPerDay: movementsPerDay(s),
+      modules: FBO_MODULE_KINDS.map((k) => {
+        const m = f.modules[k];
+        const next = m.level < 3 ? m.level + 1 : null;
+        return {
+          kind: k,
+          label: FBO_MODULE_LABELS[k],
+          level: m.level,
+          upkeepMonthly: moduleUpkeep(k, m.level, s),
+          nextCost: next ? moduleCost(k, next, s) : null,
+          nextDays: next ? moduleDays(k, next) : null,
+          ...(m.pending ? { pending: m.pending } : {}),
+          effect: moduleEffect(k, m.level),
+        };
+      }),
+      pricing: {
+        fuelPriceRatio: f.fuelPriceRatio,
+        fuelUsdPerKg: fp.price,
+        regionalUsdPerKg: regional,
+        costUsdPerKg: fp.cost,
+        handlingFeeUsd: f.handlingFeeUsd,
+        referenceHandlingUsd: REFERENCE_HANDLING_USD,
+        fuelDemand: elasticity(f.fuelPriceRatio),
+        handlingDemand: elasticity(f.handlingFeeUsd / REFERENCE_HANDLING_USD),
+      },
+      occupancy: {
+        bays,
+        owned,
+        rented,
+        ratio: bays > 0 ? Math.round(((owned + rented) / bays) * 1000) / 1000 : 0,
+      },
+      today: {
+        own: f.today.own,
+        modelled: f.today.modelled,
+        simAi: f.today.simAi,
+        movements: f.today.movements,
+      },
+      daily: f.daily.slice(-30),
+      pnl: f.pnl.slice(-12),
+      queue,
+      aiArrivals: f.aiArrivals,
+    };
+  }
+
+  fbosDomain(): FbosState {
+    const month = gameMonthIndex(this.company.gameMs);
+    const fbos = [...this.fbos.values()]
+      .filter((f) => f.status === "active" || f.status === "building")
+      .sort((a, b) => a.acquiredGameMs - b.acquiredGameMs || (a.id < b.id ? -1 : 1));
+    let monthIncome = 0;
+    let monthUpkeep = 0;
+    for (const f of fbos) {
+      const row = f.pnl.find((m) => m.month === month);
+      monthIncome += row?.income ?? 0;
+      monthUpkeep += row?.upkeep ?? 0;
+    }
+    return {
+      fbos: fbos.map((f) => this.fboState(f)),
+      monthIncome: round2(monthIncome),
+      monthUpkeep: round2(monthUpkeep),
+      value: this.fboTotalValue(),
+    };
+  }
+
+  demandDomain(): DemandState {
+    const t = this.company.gameMs;
+    const active = this.events
+      .filter((e) => e.startGameMs <= t && t < e.endGameMs)
+      .sort((a, b) => a.startGameMs - b.startGameMs || (a.id < b.id ? -1 : 1));
+    const idents = new Set([...Object.keys(this.company.activity), ...active.map((e) => e.icao)]);
+    const indices = [...idents].sort().map((icao) => {
+      const e = activeEvent(icao, this.events, t);
+      return {
+        icao,
+        index: this.demandAt(icao),
+        activity: this.company.activity[icao] ?? 0,
+        ...(e ? { eventId: e.id } : {}),
+      };
+    });
+    return { indices, events: active.map(eventState) };
   }
 }
 
@@ -1960,6 +3216,11 @@ function emptyChanges(): BookChanges {
     events: [],
     notices: [],
     listings: [],
+    fbos: [],
+    fboTransactions: [],
+    demandEvents: [],
+    activity: false,
+    milestones: [],
   };
 }
 
@@ -2013,5 +3274,13 @@ export function newCompanyCore(
     marketGeneration: 0,
     marketRefreshedGameMs: 0,
     orderCounter: 0,
+    fboCounter: 0,
+    dayProcessed: 0,
+    activity: {},
+    flightHours: 0,
+    deliveries: 0,
+    landingStreak: 0,
+    restorations: 0,
+    milestones: [],
   };
 }

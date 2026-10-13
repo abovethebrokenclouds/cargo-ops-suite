@@ -71,6 +71,11 @@ export interface PayoutInput {
   /** Touchdown peak G, for the fragile damage check. */
   peakG?: number | null;
   noBonus?: boolean;
+  /**
+   * P5 part 2: local demand × own cargo terminal factor fixed on the job board; absent or
+   * 1 adds no line (P4/P5 payouts are unchanged).
+   */
+  demand?: number;
 }
 
 const fmt = (n: number, d = 2) => n.toFixed(d);
@@ -132,6 +137,15 @@ export function computePayout(input: PayoutInput): PayoutBreakdown {
       ? "No bonuses: sim rate went above 1×"
       : `1 + 0.02 × ${tier} (reputation ${Math.round(input.reputation)})`,
   });
+
+  if (input.demand !== undefined && input.demand !== 1) {
+    multiply({
+      key: "demand",
+      label: "Local demand",
+      value: input.demand,
+      note: "Demand index of origin and destination (events, activity) × own cargo terminal",
+    });
+  }
 
   let landing = input.estimate ? 1 : landingMultiplier(input.landingGrade);
   if (noBonus) landing = Math.min(1, landing);

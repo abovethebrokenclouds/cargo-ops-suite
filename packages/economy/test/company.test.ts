@@ -257,7 +257,7 @@ describe("wear and repair", () => {
     book.advance(3_600_000);
     expect(book.aircraft(a.id)?.status).toBe("available");
     expect(book.aircraft(a.id)?.condition).toBe(100);
-    expect(book.drain().notices.map((n) => n.name)).toEqual(["repair.completed"]);
+    expect(names(book.drain().notices)).toEqual(["repair.completed"]);
   });
 
   it("market value and sale price", () => {
@@ -505,7 +505,7 @@ describe("loans", () => {
     book.advance(GAME_MONTH_MS);
     let d = book.drain();
     ledger.push(...d.ledger);
-    expect(d.notices.map((n) => n.name)).toEqual(["loan.missed"]);
+    expect(names(d.notices)).toEqual(["loan.missed"]);
     expect(d.ledger.map((e) => [e.category, e.amount])).toEqual([["late_fee", -fee]]);
     expect(book.company.reputation).toBe(45);
     const interest1 = Math.round(500_000 * 100 * (loan.apr / 1200)) / 100;
@@ -515,11 +515,11 @@ describe("loans", () => {
     book.advance(GAME_MONTH_MS);
     d = book.drain();
     ledger.push(...d.ledger);
-    expect(d.notices.map((n) => n.name)).toEqual(["loan.missed"]);
+    expect(names(d.notices)).toEqual(["loan.missed"]);
     book.advance(GAME_MONTH_MS);
     d = book.drain();
     ledger.push(...d.ledger);
-    expect(d.notices.map((n) => n.name)).toEqual(["loan.missed", "aircraft.repossessed"]);
+    expect(names(d.notices)).toEqual(["loan.missed", "aircraft.repossessed"]);
     expect(book.company.reputation).toBe(35);
     expect(book.loans.get(loan.id)?.status).toBe("defaulted");
     expect(book.fleet.get(a.id)?.status).toBe("repossessed");
@@ -737,3 +737,8 @@ describe("demo company", () => {
     expect(recent[0]?.balance).toBe(a.book.company.cash);
   });
 });
+
+/** Notice names without the P5-part-2 day-roll notices (demand events run on the same clock). */
+function names(notices: readonly BookNotice[]): string[] {
+  return notices.map((n) => n.name).filter((n) => n !== "demand.event");
+}

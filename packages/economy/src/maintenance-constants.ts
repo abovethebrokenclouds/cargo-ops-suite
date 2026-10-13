@@ -82,6 +82,8 @@ export const PARTS_RARITY: Record<string, number> = {
 export const SHOP_FACTORS = {
   maintenance: { cost: 1, time: 1 },
   field: { cost: 1.35, time: 1.5 },
+  /** P5 part 2: the player's own FBO maintenance shop (within its level's severities). */
+  own: { cost: 0.75, time: 0.7 },
 } as const;
 
 /** Dispatch needs every system at or above this condition, percent. */
