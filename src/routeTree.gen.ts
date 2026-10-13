@@ -10,12 +10,28 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CompanyRouteImport } from './routes/company'
+import { Route as DiagnosticsRouteImport } from './routes/diagnostics'
 import { Route as FleetRouteImport } from './routes/fleet'
+import { Route as FlightRouteImport } from './routes/flight'
 import { Route as JobsRouteImport } from './routes/jobs'
+import { Route as LogbookRouteImport } from './routes/logbook'
+import { Route as MapRouteImport } from './routes/map'
+import { Route as SettingsRouteImport } from './routes/settings'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CompanyRoute = CompanyRouteImport.update({
+  id: '/company',
+  path: '/company',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DiagnosticsRoute = DiagnosticsRouteImport.update({
+  id: '/diagnostics',
+  path: '/diagnostics',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FleetRoute = FleetRouteImport.update({
@@ -23,40 +39,112 @@ const FleetRoute = FleetRouteImport.update({
   path: '/fleet',
   getParentRoute: () => rootRouteImport,
 } as any)
+const FlightRoute = FlightRouteImport.update({
+  id: '/flight',
+  path: '/flight',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const JobsRoute = JobsRouteImport.update({
   id: '/jobs',
   path: '/jobs',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LogbookRoute = LogbookRouteImport.update({
+  id: '/logbook',
+  path: '/logbook',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MapRoute = MapRouteImport.update({
+  id: '/map',
+  path: '/map',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/company': typeof CompanyRoute
+  '/diagnostics': typeof DiagnosticsRoute
   '/fleet': typeof FleetRoute
+  '/flight': typeof FlightRoute
   '/jobs': typeof JobsRoute
+  '/logbook': typeof LogbookRoute
+  '/map': typeof MapRoute
+  '/settings': typeof SettingsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/company': typeof CompanyRoute
+  '/diagnostics': typeof DiagnosticsRoute
   '/fleet': typeof FleetRoute
+  '/flight': typeof FlightRoute
   '/jobs': typeof JobsRoute
+  '/logbook': typeof LogbookRoute
+  '/map': typeof MapRoute
+  '/settings': typeof SettingsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/company': typeof CompanyRoute
+  '/diagnostics': typeof DiagnosticsRoute
   '/fleet': typeof FleetRoute
+  '/flight': typeof FlightRoute
   '/jobs': typeof JobsRoute
+  '/logbook': typeof LogbookRoute
+  '/map': typeof MapRoute
+  '/settings': typeof SettingsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/fleet' | '/jobs'
+  fullPaths:
+    | '/'
+    | '/company'
+    | '/diagnostics'
+    | '/fleet'
+    | '/flight'
+    | '/jobs'
+    | '/logbook'
+    | '/map'
+    | '/settings'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/fleet' | '/jobs'
-  id: '__root__' | '/' | '/fleet' | '/jobs'
+  to:
+    | '/'
+    | '/company'
+    | '/diagnostics'
+    | '/fleet'
+    | '/flight'
+    | '/jobs'
+    | '/logbook'
+    | '/map'
+    | '/settings'
+  id:
+    | '__root__'
+    | '/'
+    | '/company'
+    | '/diagnostics'
+    | '/fleet'
+    | '/flight'
+    | '/jobs'
+    | '/logbook'
+    | '/map'
+    | '/settings'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CompanyRoute: typeof CompanyRoute
+  DiagnosticsRoute: typeof DiagnosticsRoute
   FleetRoute: typeof FleetRoute
+  FlightRoute: typeof FlightRoute
   JobsRoute: typeof JobsRoute
+  LogbookRoute: typeof LogbookRoute
+  MapRoute: typeof MapRoute
+  SettingsRoute: typeof SettingsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -68,11 +156,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/company': {
+      id: '/company'
+      path: '/company'
+      fullPath: '/company'
+      preLoaderRoute: typeof CompanyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/diagnostics': {
+      id: '/diagnostics'
+      path: '/diagnostics'
+      fullPath: '/diagnostics'
+      preLoaderRoute: typeof DiagnosticsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/fleet': {
       id: '/fleet'
       path: '/fleet'
       fullPath: '/fleet'
       preLoaderRoute: typeof FleetRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/flight': {
+      id: '/flight'
+      path: '/flight'
+      fullPath: '/flight'
+      preLoaderRoute: typeof FlightRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/jobs': {
@@ -82,13 +191,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof JobsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/logbook': {
+      id: '/logbook'
+      path: '/logbook'
+      fullPath: '/logbook'
+      preLoaderRoute: typeof LogbookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/map': {
+      id: '/map'
+      path: '/map'
+      fullPath: '/map'
+      preLoaderRoute: typeof MapRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CompanyRoute: CompanyRoute,
+  DiagnosticsRoute: DiagnosticsRoute,
   FleetRoute: FleetRoute,
+  FlightRoute: FlightRoute,
   JobsRoute: JobsRoute,
+  LogbookRoute: LogbookRoute,
+  MapRoute: MapRoute,
+  SettingsRoute: SettingsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

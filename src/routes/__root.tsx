@@ -11,6 +11,8 @@ import {
 import { useEffect, type ReactNode } from "react";
 
 import { AppNav } from "../components/AppNav";
+import { ConnectedStatusChip } from "../components/status/ConnectedStatusChip";
+import { SimConnectionProvider } from "../lib/transport/useSimConnection";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
@@ -80,18 +82,19 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "Cargo Ops" },
-      { name: "description", content: "Cargo airline manager for MSFS 2024." },
+      {
+        name: "description",
+        content:
+          "Cargo Ops: a private cargo-operations companion for Microsoft Flight Simulator 2020 and 2024.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
       {
         rel: "stylesheet",
         href: appCss,
       },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap" },
       { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
     ],
   }),
@@ -121,10 +124,12 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <AppNav />
-      <main className="mx-auto max-w-6xl px-6 pb-20">
-        <Outlet />
-      </main>
+      <SimConnectionProvider>
+        <AppNav statusSlot={<ConnectedStatusChip />} />
+        <main className="mx-auto max-w-7xl px-4 pb-24 md:px-6">
+          <Outlet />
+        </main>
+      </SimConnectionProvider>
     </QueryClientProvider>
   );
 }

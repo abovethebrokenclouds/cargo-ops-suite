@@ -2,6 +2,7 @@
   "include": [
     "src/**/*.ts",
     "src/**/*.tsx",
+    "packages/**/*.ts",
     "vite.config.ts",
     "vitest.config.ts",
     "eslint.config.js"
@@ -30,7 +31,8 @@
     "exactOptionalPropertyTypes": true,
     "noUncheckedSideEffectImports": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@cargo-ops/protocol": ["./packages/protocol/src/index.ts"]
     }
   }
 }

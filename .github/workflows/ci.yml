@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run check:inventory
+      - run: bun run test
+      - name: Build (Lovable default, SSR)
+        run: bun run build
+      - name: Build (local SPA, CARGO_OPS_LOCAL=1)
+        run: bun run build:local
+      - name: No runtime CDN font requests
+        run: |
+          if grep -rl "fonts.googleapis.com\|fonts.gstatic.com" dist .output 2>/dev/null; then
+            echo "Found a runtime CDN font reference"; exit 1
+          fi

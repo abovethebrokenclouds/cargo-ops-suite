@@ -6,10 +6,16 @@
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
+// CARGO_OPS_LOCAL=1 builds a static SPA that the local connector serves on the
+// Windows PC. Without it, the default Lovable SSR/Cloudflare build is unchanged.
+const local = process.env["CARGO_OPS_LOCAL"] === "1";
+
 export default defineConfig({
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     // nitro/vite builds from this
     server: { entry: "server" },
+    ...(local ? { spa: { enabled: true } } : {}),
   },
+  ...(local ? { nitro: false as const } : {}),
 });
