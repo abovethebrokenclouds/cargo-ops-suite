@@ -15,7 +15,8 @@
     "build:local": "CARGO_OPS_LOCAL=1 vite build",
     "typecheck": "tsc --noEmit",
     "check:inventory": "node scripts/check-inventory.mjs",
-    "check": "bun run lint && bun run typecheck && bun run check:inventory && bun run test && bun run build && bun run build:local"
+    "check": "bun run lint && bun run typecheck && bun run check:inventory && bun run test && bun run build && bun run build:local",
+    "e2e": "playwright test"
   },
   "overrides": {
     "rolldown": "1.2.1"
@@ -80,6 +81,7 @@
   "devDependencies": {
     "@eslint/js": "^9.32.0",
     "@lovable.dev/vite-tanstack-config": "2.25.3",
+    "@playwright/test": "1.64.0",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.0.0",
     "@types/node": "^22.16.5",

@@ -3,6 +3,8 @@
     "src/**/*.ts",
     "src/**/*.tsx",
     "packages/**/*.ts",
+    "e2e/**/*.ts",
+    "playwright.config.ts",
     "vite.config.ts",
     "vitest.config.ts",
     "eslint.config.js"
