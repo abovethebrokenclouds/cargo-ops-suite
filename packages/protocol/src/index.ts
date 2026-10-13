@@ -5,3 +5,4 @@ export * from "./landing";
 export * from "./aircraft-types";
 export * from "./economy";
 export * from "./company";
+export * from "./maintenance";

@@ -56,6 +56,41 @@ export interface DemoCompany {
 
 const grade = (g: number) => (g <= 1.4 ? "B" : g <= 1.7 ? "C" : "D");
 
+/**
+ * Day 52: inspect the cheapest listing within 600 nm of the base that the demo company may
+ * buy with 30 % down; day 53.5, once the inspection is done, buy it financed at 70 % LTV by
+ * the first lender that offers. Returns the aircraft id.
+ */
+function buyUsed(book: CompanyBook, to: (day: number) => void): string | null {
+  to(52);
+  const tier = Math.floor(book.company.reputation / 20);
+  const pick = book
+    .marketDomain()
+    .listings.filter(
+      (l) =>
+        l.purchaseMinTier <= tier &&
+        l.distanceFromBaseNm <= 600 &&
+        l.askingPrice * 0.31 < book.company.cash * 0.6,
+    )
+    .sort((a, b) => a.askingPrice - b.askingPrice)[0];
+  if (!pick || !book.inspectListing(pick.id).ok) return null;
+  to(53.5);
+  const offer = book.loansDomain().offers.find((o) => o.eligible && o.maxLtv >= 0.7);
+  const bought = book.buyListing({
+    listingId: pick.id,
+    ...(offer
+      ? {
+          financing: {
+            lenderId: offer.lenderId,
+            termMonths: Math.max(36, offer.minTermMonths),
+            principal: Math.round(pick.askingPrice * 0.7),
+          },
+        }
+      : {}),
+  });
+  return bought.ok ? bought.data.aircraft.id : null;
+}
+
 /** Build the seeded DEMO company. Deterministic for a given airport list. */
 export function buildDemoCompany(lookup: AirportLookup): DemoCompany {
   let wall = DEMO_EPOCH_MS;
@@ -69,6 +104,8 @@ export function buildDemoCompany(lookup: AirportLookup): DemoCompany {
   };
   const book = new CompanyBook({ company, airports: lookup, now: () => wall });
   const starter = book.ensureStarter();
+  // P5: the seeded used market (refreshes every 7 in-game days while the script runs).
+  book.ensureMarket();
   const to = (day: number) => {
     const target = Math.round(day * GAME_DAY_MS);
     if (target > book.company.gameMs) {
@@ -78,7 +115,13 @@ export function buildDemoCompany(lookup: AirportLookup): DemoCompany {
   };
   let leased: string | null = null;
   let loanTaken = false;
+  let used: string | null = null;
+  let usedDone = false;
   for (const leg of LEGS) {
+    if (!usedDone && leg.day > 52) {
+      usedDone = true;
+      used = buyUsed(book, to);
+    }
     if (!loanTaken && leg.day > 20 && starter) {
       to(20.5);
       book.takeLoan({
@@ -139,6 +182,15 @@ export function buildDemoCompany(lookup: AirportLookup): DemoCompany {
     });
     book.adjustReputation(deliveryReputationDelta(g, 0));
     to(leg.day + blockMin / 1440);
+  }
+  if (used) {
+    // Defer the minor defects, queue the rest: the maintenance board shows an ETA.
+    to(DEMO_END_DAY - 0.4);
+    const a = book.aircraft(used);
+    for (const d of a?.defects ?? []) {
+      if (!d.hidden && d.severity === "minor") book.defer(used, d.id);
+    }
+    book.repairAll(used);
   }
   to(DEMO_END_DAY);
   book.drain();

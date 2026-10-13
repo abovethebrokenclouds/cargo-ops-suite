@@ -42,6 +42,7 @@ const fleetStatus = {
   sold: "Sold",
   returned: "Returned",
   repossessed: "Repossessed",
+  written_off: "Written off",
 } as const;
 
 const fleetTone: Record<string, string> = {
@@ -49,7 +50,11 @@ const fleetTone: Record<string, string> = {
   Flying: "text-accent",
   Maintenance: "text-warning",
   Grounded: "text-destructive",
+  "Ferry only": "text-warning",
+  "Annual due": "text-warning",
 };
+
+const gateLabel = { grounded: "Grounded", ferry_only: "Ferry only", annual_due: "Annual due" };
 
 function linkCopy(state: ClientSimState): string {
   switch (state.connection) {
@@ -247,7 +252,15 @@ function Index() {
           ) : (
             <ul className="flex flex-col gap-2" data-testid="dashboard-fleet">
               {fleetList.map((a) => {
-                const status = !a.airworthy ? "Grounded" : fleetStatus[a.status];
+                const gate = a.airworthiness?.status;
+                const status =
+                  a.status === "maintenance" || a.status === "in_flight"
+                    ? fleetStatus[a.status]
+                    : !a.airworthy
+                      ? gate && gate !== "airworthy"
+                        ? gateLabel[gate]
+                        : "Grounded"
+                      : fleetStatus[a.status];
                 return (
                   <li
                     key={a.id}

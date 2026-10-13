@@ -7,6 +7,7 @@
 //                                    startingCash, sum, count, balanced }
 //   GET  /api/fleet                → fleet domain + new-aircraft catalogue + aircraft events
 //   GET  /api/loans                → loans domain (credit score, offers) + lenders
+//   GET  /api/market               → used market domain (listings without hidden defects)
 //   GET  /api/logbook              → { flights } joined with their mission and payout
 //   GET  /api/export/csv           → logbook CSV (text/csv)
 //   GET  /api/export/gpx?flight=ID → one flight's track (application/gpx+xml)
@@ -106,6 +107,10 @@ export function economyApi(options: EconomyApiOptions) {
             events: repo.listAircraftEvents().slice(-200),
           },
         };
+      case "/api/market":
+        if (method !== "GET") return methodNotAllowed;
+        if (!session.economy) return { status: 404, body: { error: "not_found" } };
+        return { status: 200, body: session.economy.marketDomain() };
       case "/api/loans":
         if (method !== "GET") return methodNotAllowed;
         if (!session.economy) return { status: 404, body: { error: "not_found" } };

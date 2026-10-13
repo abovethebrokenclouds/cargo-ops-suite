@@ -9,6 +9,7 @@ import { OWNERSHIP_LABELS } from "@/lib/economy/company";
 import { formatInt, formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+import { AirworthinessBadge } from "./Airworthiness";
 import { TypeSilhouette } from "./TypeSilhouette";
 
 /** Condition 0–100 % as an illuminated bar; red under the 20 % dispatch limit. */
@@ -59,6 +60,7 @@ const statusTone = {
   sold: "text-muted-foreground",
   returned: "text-muted-foreground",
   repossessed: "text-destructive",
+  written_off: "text-destructive",
 } as const;
 
 const statusLabel = {
@@ -68,6 +70,7 @@ const statusLabel = {
   sold: "Sold",
   returned: "Returned",
   repossessed: "Repossessed",
+  written_off: "Written off",
 } as const;
 
 export function FleetCard({
@@ -75,19 +78,26 @@ export function FleetCard({
   source,
   selected,
   actions,
+  focused = false,
 }: {
   aircraft: FleetAircraft;
   source: Source | null;
   selected: boolean;
   actions?: ReactNode;
+  /** Shown in the systems panel below. */
+  focused?: boolean;
 }) {
   const type = aircraftTypeByKey(a.typeKey);
   const grounded = !a.airworthy;
+  const gate = a.airworthiness?.status;
+  const gateLabel =
+    gate === "ferry_only" ? "Ferry only" : gate === "annual_due" ? "Annual due" : "Grounded";
   return (
     <article
       className={cn(
         "panel-elevated relative flex flex-col gap-5 p-5 md:p-6",
         selected && "ring-1 ring-primary/50",
+        focused && "ring-2 ring-accent/60",
       )}
       data-testid="fleet-card"
       data-aircraft-id={a.id}
@@ -116,6 +126,7 @@ export function FleetCard({
               <Landmark className="size-3" aria-hidden="true" /> Financed
             </span>
           ) : null}
+          {gate ? <AirworthinessBadge status={gate} /> : null}
           {selected ? (
             <span className="rounded-sm bg-accent/15 px-1.5 py-0.5 font-mono text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-accent">
               Active
@@ -156,7 +167,7 @@ export function FleetCard({
           <dt className="label-eyebrow">Status</dt>
           <dd className={cn("mt-1 flex items-center gap-2", statusTone[a.status])}>
             <span className="status-dot" aria-hidden="true" />
-            {grounded && a.status === "available" ? "Grounded" : statusLabel[a.status]}
+            {grounded && a.status === "available" ? gateLabel : statusLabel[a.status]}
           </dd>
         </div>
         <div>

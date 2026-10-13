@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Plane, Store } from "lucide-react";
+import { ClipboardList, Plane, Store, Warehouse, Wrench } from "lucide-react";
 import { useState } from "react";
 
 import type { FleetAircraft } from "@cargo-ops/protocol";
@@ -9,7 +9,11 @@ import { ghostButton } from "@/components/company/styles";
 import { MetricTile } from "@/components/dashboard/MetricTile";
 import { DemoTag, Panel } from "@/components/dashboard/Panel";
 import { AircraftMarket } from "@/components/fleet/AircraftMarket";
+import { SystemsPanel } from "@/components/fleet/Airworthiness";
 import { FleetCard } from "@/components/fleet/FleetCard";
+import { MaintenanceBoard } from "@/components/fleet/MaintenanceBoard";
+import { UsedMarket } from "@/components/fleet/UsedMarket";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SourceTag } from "@/components/status/SourceTag";
 import { useAirportLookup } from "@/lib/economy/board";
 import { useCompanyView } from "@/lib/economy/company";
@@ -23,12 +27,14 @@ export const Route = createFileRoute("/fleet")({
       { title: "Fleet — Cargo Ops" },
       {
         name: "description",
-        content: "Owned and leased aircraft, condition, location, repairs and the aircraft market.",
+        content:
+          "Owned and leased aircraft, systems and airworthiness, maintenance, and the new and used aircraft markets.",
       },
       { property: "og:title", content: "Fleet — Cargo Ops" },
       {
         property: "og:description",
-        content: "Owned and leased aircraft, condition, location, repairs and the aircraft market.",
+        content:
+          "Owned and leased aircraft, systems and airworthiness, maintenance, and the new and used aircraft markets.",
       },
     ],
   }),
@@ -39,8 +45,10 @@ function Fleet() {
   const { state } = useSimConnection();
   const command = useCommand();
   const lookup = useAirportLookup();
-  const { company, fleet, loans, source, connector, demo } = useCompanyView(state, lookup);
+  const { company, fleet, loans, market, source, connector, demo } = useCompanyView(state, lookup);
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState("hangar");
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const run = async (name: string, args: unknown, success: string) => {
     setBusy(true);
@@ -60,6 +68,8 @@ function Fleet() {
       : undefined;
   const aircraft = fleet?.aircraft ?? [];
   const ready = aircraft.filter((a) => a.status === "available" && a.airworthy).length;
+  const inShop = aircraft.filter((a) => a.status === "maintenance").length;
+  const detail = aircraft.find((a) => a.id === detailId) ?? aircraft[0] ?? null;
 
   const actions = (a: FleetAircraft) => (
     <>
@@ -74,6 +84,15 @@ function Fleet() {
         data-testid="select-aircraft"
       >
         Fly this one
+      </button>
+      <button
+        type="button"
+        className={ghostButton}
+        aria-pressed={detail?.id === a.id}
+        onClick={() => setDetailId(a.id)}
+        data-testid="show-systems"
+      >
+        Systems
       </button>
       <button
         type="button"
@@ -120,7 +139,7 @@ function Fleet() {
       <PageHero
         eyebrow="Hangar"
         title="Fleet"
-        sub="Every airframe in your company, and the market for the next one."
+        sub="Every airframe in your company, its systems and paperwork, and the market for the next one."
       />
 
       <div className="grid-ops">
@@ -135,7 +154,7 @@ function Fleet() {
         ) : null}
 
         <MetricTile
-          className="col-span-12 md:col-span-6"
+          className="col-span-12 md:col-span-4"
           label="Fleet value"
           value={fleet?.value ?? null}
           format={formatUsd}
@@ -144,17 +163,24 @@ function Fleet() {
           hint="Owned aircraft at market value (price × hours × condition)."
         />
         <MetricTile
-          className="col-span-6 md:col-span-3"
+          className="col-span-4 md:col-span-2"
           label="Airframes"
           value={fleet ? aircraft.length : null}
           source={fleet ? source : null}
         />
         <MetricTile
-          className="col-span-6 md:col-span-3"
+          className="col-span-4 md:col-span-3"
           label="Ready"
           value={fleet ? ready : null}
           source={fleet ? source : null}
-          hint="Available and ≥ 20 % condition"
+          hint="Available and airworthy: no grounding defect, minors deferred, every system ≥ 20 %, annual current"
+        />
+        <MetricTile
+          className="col-span-4 md:col-span-3"
+          label="In the shop"
+          value={fleet ? inShop : null}
+          source={fleet ? source : null}
+          hint="Aircraft with maintenance orders running or queued"
         />
 
         <p
@@ -174,61 +200,148 @@ function Fleet() {
           ) : null}
         </p>
 
-        {fleet === null ? (
-          <div className="col-span-12">
-            <EmptyState
-              icon={Plane}
-              title={demo ? "Building the demo fleet…" : "No fleet data"}
-              description={
-                demo
-                  ? "Loading the bundled airport list for the seeded demo company."
-                  : "Start the local connector to manage your fleet."
-              }
-            />
-          </div>
-        ) : (
-          aircraft.map((a) => (
-            <div key={a.id} className="col-span-12 md:col-span-6 xl:col-span-4">
-              <FleetCard
-                aircraft={a}
-                source={source}
-                selected={fleet.selectedId === a.id}
-                actions={actions(a)}
-              />
-            </div>
-          ))
-        )}
-        {demo ? (
-          <p
-            className="col-span-12 text-xs text-muted-foreground"
-            data-testid="fleet-disabled-note"
-          >
-            Fleet actions are disabled in demo mode: they need the connector.
-          </p>
-        ) : null}
+        <Tabs value={tab} onValueChange={setTab} className="col-span-12">
+          <TabsList className="h-auto flex-wrap gap-1 bg-secondary p-1">
+            <TabsTrigger value="hangar" className="gap-1.5" data-testid="tab-hangar">
+              <Warehouse className="size-4" aria-hidden="true" /> Hangar
+            </TabsTrigger>
+            <TabsTrigger value="used" className="gap-1.5" data-testid="tab-used-market">
+              <ClipboardList className="size-4" aria-hidden="true" /> Used market
+              {market ? (
+                <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                  {market.listings.length}
+                </span>
+              ) : null}
+            </TabsTrigger>
+            <TabsTrigger value="new" className="gap-1.5" data-testid="tab-new-aircraft">
+              <Store className="size-4" aria-hidden="true" /> New aircraft
+            </TabsTrigger>
+          </TabsList>
 
-        <Panel
-          className="col-span-12"
-          eyebrow="Market"
-          title="New aircraft"
-          icon={Store}
-          action={<SourceTag source={source} />}
-        >
-          <p className="mb-4 text-sm text-muted-foreground">
-            Catalogue prices and lease rates are approximate, for gameplay. Reputation tier gates
-            which classes you may buy (leasing is allowed one tier lower).
-            {company ? ` Your tier: ${company.reputationTier} · ${company.tierName ?? ""}.` : ""}
-          </p>
-          <AircraftMarket
-            company={company}
-            loans={loans}
-            source={source}
-            enabled={connector}
-            disabledNote={disabledNote}
-            busy={busy}
-            run={run}
-          />
-        </Panel>
+          <TabsContent value="hangar" className="mt-5">
+            <div className="grid-ops">
+              {fleet === null ? (
+                <div className="col-span-12">
+                  <EmptyState
+                    icon={Plane}
+                    title={demo ? "Building the demo fleet…" : "No fleet data"}
+                    description={
+                      demo
+                        ? "Loading the bundled airport list for the seeded demo company."
+                        : "Start the local connector to manage your fleet."
+                    }
+                  />
+                </div>
+              ) : (
+                aircraft.map((a) => (
+                  <div key={a.id} className="col-span-12 md:col-span-6 xl:col-span-4">
+                    <FleetCard
+                      aircraft={a}
+                      source={source}
+                      selected={fleet.selectedId === a.id}
+                      focused={detail?.id === a.id && aircraft.length > 1}
+                      actions={actions(a)}
+                    />
+                  </div>
+                ))
+              )}
+              {demo ? (
+                <p
+                  className="col-span-12 text-xs text-muted-foreground"
+                  data-testid="fleet-disabled-note"
+                >
+                  Fleet actions are disabled in demo mode: they need the connector.
+                </p>
+              ) : null}
+
+              {detail && detail.systems ? (
+                <Panel
+                  className="col-span-12"
+                  eyebrow="Airworthiness"
+                  title={`Systems · ${detail.registration}`}
+                  icon={Plane}
+                  action={<SourceTag source={source} />}
+                >
+                  <SystemsPanel
+                    aircraft={detail}
+                    enabled={connector}
+                    disabledNote={disabledNote}
+                    busy={busy}
+                    run={run}
+                  />
+                </Panel>
+              ) : null}
+
+              <Panel
+                className="col-span-12"
+                eyebrow="Maintenance"
+                title="Maintenance board"
+                icon={Wrench}
+                action={<SourceTag source={fleet ? source : null} />}
+              >
+                <MaintenanceBoard
+                  orders={fleet?.maintenance ?? []}
+                  gameMs={company?.clock?.gameMs ?? null}
+                />
+              </Panel>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="used" className="mt-5">
+            <Panel
+              eyebrow="Market"
+              title="Used aircraft"
+              icon={ClipboardList}
+              action={<SourceTag source={source} />}
+            >
+              {demo ? (
+                <p
+                  className="mb-4 text-sm text-muted-foreground"
+                  data-testid="market-disabled-note"
+                >
+                  Seeded demo listings computed in your browser; inspecting and buying need the
+                  connector.
+                </p>
+              ) : null}
+              <UsedMarket
+                market={market}
+                company={company}
+                loans={loans}
+                source={source}
+                enabled={connector}
+                disabledNote={disabledNote}
+                busy={busy}
+                run={run}
+              />
+            </Panel>
+          </TabsContent>
+
+          <TabsContent value="new" className="mt-5">
+            <Panel
+              eyebrow="Market"
+              title="New aircraft"
+              icon={Store}
+              action={<SourceTag source={source} />}
+            >
+              <p className="mb-4 text-sm text-muted-foreground">
+                Catalogue prices and lease rates are approximate, for gameplay. Reputation tier
+                gates which classes you may buy (leasing is allowed one tier lower).
+                {company
+                  ? ` Your tier: ${company.reputationTier} · ${company.tierName ?? ""}.`
+                  : ""}
+              </p>
+              <AircraftMarket
+                company={company}
+                loans={loans}
+                source={source}
+                enabled={connector}
+                disabledNote={disabledNote}
+                busy={busy}
+                run={run}
+              />
+            </Panel>
+          </TabsContent>
+        </Tabs>
       </div>
     </>
   );

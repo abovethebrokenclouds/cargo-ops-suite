@@ -7,7 +7,11 @@ import {
   LEDGER_CATEGORIES,
   LOAN_STATUSES,
   OWNERSHIPS,
+  SYSTEM_KEYS,
   collateralSchema,
+  defectSchema,
+  ferryPermitSchema,
+  maintenanceOrderSchema,
   jobSchema,
   missionSchema,
   pnlMonthSchema,
@@ -24,9 +28,10 @@ import {
   STARTING_CASH,
   gameMonthIndex,
   type AircraftEventRecord,
-  type BookAircraft,
+  type BookAircraftInput,
   type BookChanges,
   type BookLoan,
+  type ListingRecord,
 } from "../economy";
 import type { Storage } from "./db";
 
@@ -67,6 +72,10 @@ export const companyRecordSchema = z.object({
   selectedAircraftId: z.string().nullable().default(null),
   pnl: z.array(pnlMonthSchema).default([]),
   ledgerCount: z.number().int().nonnegative().default(0),
+  // ---- P5 (defaults make a P4 record valid) ----
+  marketGeneration: z.number().int().nonnegative().default(0),
+  marketRefreshedGameMs: z.number().finite().nonnegative().default(0),
+  orderCounter: z.number().int().nonnegative().default(0),
 });
 export type CompanyRecord = z.infer<typeof companyRecordSchema>;
 
@@ -87,6 +96,13 @@ export interface LedgerEntry {
   memo: string | null;
 }
 
+const systemConditionsSchema = z.object(
+  Object.fromEntries(SYSTEM_KEYS.map((k) => [k, z.number().finite().min(0).max(100)])) as Record<
+    (typeof SYSTEM_KEYS)[number],
+    z.ZodNumber
+  >,
+);
+
 const bookAircraftSchema = z.object({
   id: z.string().min(1),
   registration: z.string().min(1),
@@ -102,8 +118,45 @@ const bookAircraftSchema = z.object({
   acquiredGameMs: z.number().finite().nonnegative(),
   readyAtGameMs: z.number().finite().nonnegative().nullable(),
   loanId: z.string().nullable(),
+  // ---- P5 (absent in P4 rows; the book normalises them) ----
+  ageYears: z.number().finite().nonnegative().optional(),
+  systems: systemConditionsSchema.optional(),
+  defects: z.array(defectSchema).optional(),
+  annual: z
+    .object({
+      lastGameMs: z.number().finite().nonnegative(),
+      lastHours: z.number().finite().nonnegative(),
+    })
+    .optional(),
+  ferryPermit: ferryPermitSchema.nullable().optional(),
+  orders: z.array(maintenanceOrderSchema).optional(),
+  defectCounter: z.number().int().nonnegative().optional(),
 });
-export const fleetRecordSchema: z.ZodType<BookAircraft, z.ZodTypeDef, unknown> = bookAircraftSchema;
+export const fleetRecordSchema: z.ZodType<BookAircraftInput, z.ZodTypeDef, unknown> =
+  bookAircraftSchema;
+
+/** A used market listing as stored (hidden defects included). */
+export const listingRecordSchema: z.ZodType<ListingRecord, z.ZodTypeDef, unknown> = z.object({
+  id: z.string().min(1),
+  generation: z.number().int().nonnegative(),
+  typeKey: z.string().min(1),
+  ageYears: z.number().finite().nonnegative(),
+  hours: z.number().finite().nonnegative(),
+  cycles: z.number().int().nonnegative(),
+  location: z.string().min(2).max(8),
+  systems: systemConditionsSchema,
+  defects: z.array(defectSchema),
+  askingPrice: z.number().finite().positive(),
+  sellerNote: z.string(),
+  listedGameMs: z.number().finite().nonnegative(),
+  inspection: z.object({
+    status: z.enum(["none", "pending", "done"]),
+    fee: z.number().finite().nonnegative(),
+    readyAtGameMs: z.number().finite().nonnegative().optional(),
+    found: z.number().int().nonnegative().optional(),
+  }),
+  status: z.enum(["listed", "sold", "expired"]),
+});
 
 export const loanRecordSchema: z.ZodType<BookLoan, z.ZodTypeDef, unknown> = z.object({
   id: z.string().min(1),
@@ -392,7 +445,7 @@ export class EconomyRepo {
 
   // ---- fleet, loans, aircraft events (P4) ----
 
-  saveAircraft(a: BookAircraft): void {
+  saveAircraft(a: BookAircraftInput): void {
     this.db
       .prepare(
         `INSERT INTO fleet (id, registration, type_key, ownership, status, location, condition, loan_id,
@@ -415,7 +468,7 @@ export class EconomyRepo {
       );
   }
 
-  listFleet(): BookAircraft[] {
+  listFleet(): BookAircraftInput[] {
     const rows = this.db.prepare("SELECT json FROM fleet ORDER BY acquired_at, id").all() as Array<{
       json: string;
     }>;
@@ -462,6 +515,40 @@ export class EconomyRepo {
     });
   }
 
+  // ---- used market (P5) ----
+
+  saveListing(l: ListingRecord): void {
+    if (l.status !== "listed") {
+      this.db.prepare("DELETE FROM market_listings WHERE id = ?").run(l.id);
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO market_listings (id, generation, type_key, location, asking_price, inspection, json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET inspection = excluded.inspection, json = excluded.json`,
+      )
+      .run(
+        l.id,
+        l.generation,
+        l.typeKey,
+        l.location,
+        l.askingPrice,
+        l.inspection.status,
+        JSON.stringify(l),
+      );
+  }
+
+  listListings(): ListingRecord[] {
+    const rows = this.db
+      .prepare("SELECT json FROM market_listings ORDER BY generation, id")
+      .all() as Array<{ json: string }>;
+    return rows.flatMap((r) => {
+      const l = parse(listingRecordSchema, r.json);
+      return l ? [l] : [];
+    });
+  }
+
   addAircraftEvent(e: AircraftEventRecord): void {
     this.db
       .prepare(
@@ -501,6 +588,7 @@ export class EconomyRepo {
       for (const a of changes.aircraft) this.saveAircraft(a);
       for (const l of changes.loans) this.saveLoan(l);
       for (const e of changes.events) this.addAircraftEvent(e);
+      for (const l of changes.listings) this.saveListing(l);
     });
   }
 

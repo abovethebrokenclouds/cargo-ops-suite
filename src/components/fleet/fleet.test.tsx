@@ -19,13 +19,14 @@ const demo = demoDomains(lookup);
 const noop = async () => true;
 
 describe("demo company (same book as the connector)", () => {
-  it("is deterministic: owned + financed starter, a dry lease, one loan, a balanced ledger", () => {
+  it("is deterministic: financed starter, a dry lease, a financed used aircraft, a balanced ledger", () => {
     expect(demoDomains(lookup)).toEqual(demo);
     expect(demo.fleet.aircraft.map((a) => [a.ownership, a.financed])).toEqual([
       ["owned", true],
       ["dry_lease", false],
+      ["owned", true],
     ]);
-    expect(demo.loans.loans).toHaveLength(1);
+    expect(demo.loans.loans).toHaveLength(2);
     const newest = demo.ledger.recent[0];
     expect(newest?.balance).toBe(demo.company.cash);
     expect(demo.company.creditScore).toBeGreaterThan(0);

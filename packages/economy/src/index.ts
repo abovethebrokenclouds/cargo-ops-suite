@@ -16,3 +16,7 @@ export * from "./fleet-rules";
 export * from "./finance";
 export * from "./book";
 export * from "./demo-company";
+// P5 used aircraft, airworthiness and maintenance.
+export * from "./maintenance-constants";
+export * from "./airworthiness";
+export * from "./market";

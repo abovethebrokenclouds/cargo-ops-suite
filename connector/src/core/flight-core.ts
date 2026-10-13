@@ -33,7 +33,11 @@ import { TelemetryRecorder } from "./telemetry-recorder";
 /** Optional observers (the economy engine) of the flight core's lifecycle. */
 export interface FlightHooks {
   /** Extra flight.start preconditions (e.g. the loaded mission's origin); null = allowed. */
-  beforeStart?(sample: FlightSample): { code: string; message: string } | null;
+  beforeStart?(sample: FlightSample): {
+    code: string;
+    message: string;
+    reasons?: Array<{ code: string; message: string }>;
+  } | null;
   /** Every processed sample, after the tracker (flight = the running flight's domain). */
   onSample?(sample: FlightSample, flight: FlightState | null, onGround: boolean | null): void;
   onFlightStarted?(record: FlightRecord, explicit: boolean): void;
@@ -124,7 +128,7 @@ export class FlightCore {
       const pre = this.tracker.precheck(this.lastSample, this.fsm.onGround);
       if (pre) return failure(cmd.id, pre.code, pre.message);
       const blocked = this.lastSample ? (this.hooks.beforeStart?.(this.lastSample) ?? null) : null;
-      if (blocked) return failure(cmd.id, blocked.code, blocked.message);
+      if (blocked) return failure(cmd.id, blocked.code, blocked.message, blocked.reasons);
       this.explicitStart = true;
       const result = this.tracker.start(this.lastSample, this.fsm.onGround, this.context());
       if (!result.ok) {
@@ -284,6 +288,17 @@ function success(id: string, data: unknown): Result {
   return { type: "result", v: PROTOCOL_VERSION, id, ok: true, data };
 }
 
-function failure(id: string, code: string, message: string): Result {
-  return { type: "result", v: PROTOCOL_VERSION, id, ok: false, error: { code, message } };
+function failure(
+  id: string,
+  code: string,
+  message: string,
+  reasons?: Array<{ code: string; message: string }>,
+): Result {
+  return {
+    type: "result",
+    v: PROTOCOL_VERSION,
+    id,
+    ok: false,
+    error: { code, message, ...(reasons?.length ? { reasons } : {}) },
+  };
 }
