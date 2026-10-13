@@ -11,7 +11,12 @@ import {
   type ReactNode,
 } from "react";
 import { z } from "zod";
-import type { ClientMessage, FixtureFrame } from "@cargo-ops/protocol";
+import {
+  PROTOCOL_VERSION,
+  type ClientMessage,
+  type FixtureFrame,
+  type Result,
+} from "@cargo-ops/protocol";
 import {
   actionFromMessage,
   initialSimState,
@@ -58,11 +63,23 @@ export function toWebSocketUrl(wsUrl: string, pageHref: string): string {
   return url.toString();
 }
 
+/** Send a command and wait for its `result` (never throws; failures are `ok: false`). */
+export type CommandFn = (name: string, args?: unknown) => Promise<Result>;
+
 export interface SimConnectionValue {
   state: ClientSimState;
   send: (msg: ClientMessage) => void;
   /** Null until the provider has mounted in the browser. */
   transportKind: TransportKind | null;
+  /** Command round-trip; absent in test fixtures that only render state. */
+  command?: CommandFn;
+}
+
+/** How long a command waits for its result, ms. */
+export const COMMAND_TIMEOUT_MS = 10_000;
+
+function localFailure(id: string, code: string, message: string): Result {
+  return { type: "result", v: PROTOCOL_VERSION, id, ok: false, error: { code, message } };
 }
 
 /** Overrides for tests; production code passes none. */
@@ -88,6 +105,8 @@ export function SimConnectionProvider(props: {
   const transportRef = useRef<Transport | null>(null);
   const optionsRef = useRef(props.options ?? {});
   const resyncSent = useRef(false);
+  const pending = useRef(new Map<string, (r: Result) => void>());
+  const commandSeq = useRef(0);
 
   useEffect(() => {
     // Everything browser-specific happens here, never at render or module time.
@@ -112,6 +131,14 @@ export function SimConnectionProvider(props: {
               ? { type: "status", status: ev.status }
               : { type: "status", status: ev.status, error: ev.error },
           );
+          return;
+        }
+        if (ev.msg.type === "result") {
+          const resolve = pending.current.get(ev.msg.id);
+          if (resolve) {
+            pending.current.delete(ev.msg.id);
+            resolve(ev.msg);
+          }
           return;
         }
         const action = actionFromMessage(ev.msg, timers.now());
@@ -176,8 +203,40 @@ export function SimConnectionProvider(props: {
     transportRef.current?.send(msg);
   }, []);
 
-  const value = useMemo(() => ({ state, send, transportKind }), [state, send, transportKind]);
+  const command = useCallback<CommandFn>((name, args = {}) => {
+    const id = `cmd-${Date.now().toString(36)}-${++commandSeq.current}`;
+    const transport = transportRef.current;
+    if (!transport) {
+      return Promise.resolve(localFailure(id, "not_connected", "Not connected to the connector"));
+    }
+    return new Promise<Result>((resolve) => {
+      const timer = globalThis.setTimeout(() => {
+        if (!pending.current.delete(id)) return;
+        resolve(localFailure(id, "timeout", "The connector did not answer in time"));
+      }, COMMAND_TIMEOUT_MS);
+      pending.current.set(id, (r) => {
+        globalThis.clearTimeout(timer);
+        resolve(r);
+      });
+      transport.send({ type: "command", v: PROTOCOL_VERSION, id, name, args });
+    });
+  }, []);
+
+  const value = useMemo(
+    () => ({ state, send, transportKind, command }),
+    [state, send, transportKind, command],
+  );
   return createElement(SimConnectionContext.Provider, { value }, props.children);
+}
+
+/** The command round-trip, or a stub that reports "not connected". */
+export function useCommand(): CommandFn {
+  const value = useContext(SimConnectionContext);
+  return (
+    value?.command ??
+    ((name) =>
+      Promise.resolve(localFailure(name, "not_connected", "Not connected to the connector")))
+  );
 }
 
 export function useSimConnection(): SimConnectionValue {

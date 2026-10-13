@@ -5,7 +5,10 @@ import { PageHero } from "@/components/AppNav";
 import { EmptyState } from "@/components/EmptyState";
 import { MetricTile } from "@/components/dashboard/MetricTile";
 import { DemoTag, Panel } from "@/components/dashboard/Panel";
+import { KindBadge } from "@/components/cargo/MissionCard";
+import { MissionStrip } from "@/components/cargo/MissionStrip";
 import { ConnectedStatusChip } from "@/components/status/ConnectedStatusChip";
+import { SourceTag } from "@/components/status/SourceTag";
 import { routeView } from "@/lib/flight/flight-view";
 import { EMPTY, formatMinutes, formatUsd } from "@/lib/format";
 import { company, fleet, jobs } from "@/lib/mock-data";
@@ -55,8 +58,27 @@ function linkCopy(state: ClientSimState): string {
 }
 
 function Index() {
-  const next = jobs[0];
   const { state } = useSimConnection();
+  const liveJobs = state.connection === "demo" ? null : (state.sim.jobs ?? null);
+  const liveCompany = state.connection === "demo" ? null : (state.sim.company ?? null);
+  const liveNext =
+    liveJobs?.available.reduce<(typeof liveJobs.available)[number] | null>(
+      (best, j) => (!best || j.payoutEstimate > best.payoutEstimate ? j : best),
+      null,
+    ) ?? null;
+  const next = liveNext
+    ? {
+        id: liveNext.id,
+        from: liveNext.origin,
+        to: liveNext.destination,
+        cargo: liveNext.kind,
+        weightKg: liveNext.weightKg,
+        payout: liveNext.payoutEstimate,
+        deadline: formatMinutes(liveNext.timeLimitMin),
+      }
+    : liveJobs
+      ? null
+      : jobs[0];
   const route = routeView(state);
   const endurance = fuelEnduranceMin(state.sim.fuel);
   const simName = state.sim.sim?.name ?? state.welcome?.sim.name ?? null;
@@ -64,7 +86,7 @@ function Index() {
   return (
     <>
       <PageHero
-        eyebrow={`Ops centre · Hub ${company.hub}`}
+        eyebrow={`Ops centre · Hub ${liveCompany?.base ?? company.hub}`}
         title="Move the world."
         sub="Your cargo operation for Microsoft Flight Simulator 2020 and 2024. Dispatch, fly, get paid."
       >
@@ -77,14 +99,23 @@ function Index() {
       </PageHero>
 
       <div className="grid-ops">
+        <MissionStrip
+          mission={state.sim.mission ?? null}
+          source={state.source}
+          className="col-span-12"
+        />
         <MetricTile
           className="col-span-12 md:col-span-6 xl:col-span-4"
           label="Company cash"
-          value={company.cash}
+          value={liveCompany ? liveCompany.cash : company.cash}
           format={formatUsd}
           size="xl"
-          source="demo"
-          hint="Demo seed balance. The ledger arrives in P4."
+          source={liveCompany ? state.source : "demo"}
+          hint={
+            liveCompany
+              ? `Reputation ${liveCompany.reputation} / 100 (tier ${liveCompany.reputationTier}). Full ledger in P4.`
+              : "Demo seed balance. The ledger arrives in P4."
+          }
         />
         <MetricTile
           className="col-span-12 sm:col-span-6 xl:col-span-4"
@@ -140,13 +171,14 @@ function Index() {
           eyebrow="Dispatch"
           title="Next best job"
           icon={Package}
-          action={<DemoTag />}
+          action={liveJobs ? <SourceTag source={state.source} /> : <DemoTag />}
         >
           {next ? (
             <div className="flex flex-wrap items-end justify-between gap-6">
               <div className="min-w-0">
-                <p className="font-mono text-xs text-muted-foreground">
-                  {next.id} · due in {next.deadline}
+                <p className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
+                  {next.id} · {liveNext ? `${next.deadline} limit` : `due in ${next.deadline}`}
+                  {liveNext ? <KindBadge kind={liveNext.kind} /> : null}
                 </p>
                 <p className="mt-2 font-display text-4xl font-bold tracking-tight md:text-5xl">
                   {next.from} <span className="text-gradient">→</span> {next.to}

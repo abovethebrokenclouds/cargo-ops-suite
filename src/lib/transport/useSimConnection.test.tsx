@@ -163,4 +163,33 @@ describe("SimConnectionProvider", () => {
     const resyncs = ws.sent.map((s) => JSON.parse(s)).filter((m) => m.type === "resync");
     expect(resyncs).toEqual([{ type: "resync", v: 1, lastSeq: 4 }]);
   });
+
+  it("command() resolves with the matching result (demo mode answers demo_mode)", async () => {
+    let result: unknown = null;
+    function Commander() {
+      const { command } = useSimConnection();
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            void command?.("job.accept", { jobId: "J-1" }).then((r) => (result = r));
+          }}
+        >
+          go
+        </button>
+      );
+    }
+    render(
+      <SimConnectionProvider
+        options={{ connectorFlag: "0", origin: "http://x", demoFrames: () => demoFrames }}
+      >
+        <Commander />
+      </SimConnectionProvider>,
+    );
+    await flush();
+    act(() => screen.getByText("go").click());
+    await flush();
+    await flush();
+    expect(result).toMatchObject({ type: "result", ok: false, error: { code: "demo_mode" } });
+  });
 });
