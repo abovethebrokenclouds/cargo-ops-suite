@@ -6,6 +6,7 @@ import {
   displayAglFt,
   enduranceStatus,
   enginesRunning,
+  flightSummary,
   isSessionUp,
   isStale,
   latestTouchdown,
@@ -171,5 +172,67 @@ describe("latestTouchdown", () => {
     const view = latestTouchdown([ev(1, "touchdown", { rateFpm: -300 })]);
     expect(view).toMatchObject({ rateFpm: -300, gForce: null, bankDeg: null, grade: "C" });
     expect(latestTouchdown([ev(1, "touchdown", "bad")])?.grade).toBeNull();
+  });
+});
+
+describe("latestTouchdown with the connector analyser", () => {
+  const analysed = {
+    rateFpm: -310,
+    rateSource: "touchdownVelocity",
+    peakG: 1.45,
+    gsKt: 68,
+    bankDeg: 1.2,
+    pitchDeg: -3.5,
+    lat: 33.64,
+    lon: -84.45,
+    bounces: 1,
+    grade: "D",
+    rateGrade: "D",
+    gGrade: "C",
+    speedGrade: null,
+  };
+
+  it("keeps the connector's grade and rate source", () => {
+    const view = latestTouchdown([ev(1, "touchdown", analysed)]);
+    expect(view).toMatchObject({
+      analysed: true,
+      rateSource: "touchdownVelocity",
+      rateFpm: -310,
+      gForce: 1.45,
+      bounces: 1,
+      grade: "D",
+    });
+  });
+
+  it("marks legacy payloads as not analysed", () => {
+    const view = latestTouchdown([ev(1, "touchdown", { rateFpm: -142, gForce: 1.18 })]);
+    expect(view).toMatchObject({ analysed: false, rateSource: null, grade: "B" });
+  });
+});
+
+describe("flightSummary", () => {
+  it("prefers tracker fields and falls back to P1 fields", () => {
+    expect(flightSummary(null)).toBeNull();
+    expect(flightSummary({ active: true, flownDistanceNm: 12, elapsedSec: 600 })).toMatchObject({
+      distanceNm: 12,
+      blockMin: 10,
+      airborneMin: null,
+      flags: null,
+    });
+    const flags = {
+      teleport: true,
+      noBonus: false,
+      invalidated: false,
+      crashed: false,
+      paused: false,
+    };
+    const view = flightSummary({
+      active: false,
+      status: "completed",
+      distanceNm: 287.5,
+      blockMin: 119.3,
+      flags,
+    });
+    expect(view).toMatchObject({ status: "completed", distanceNm: 287.5, blockMin: 119.3, flags });
   });
 });

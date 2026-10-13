@@ -170,9 +170,85 @@ describe("LiveFlightView", () => {
     expect(within(card).getByText("72 kt")).toBeInTheDocument();
     expect(within(card).getByText("+0.8°")).toBeInTheDocument();
     expect(within(card).getByText("+4.6°")).toBeInTheDocument();
-    expect(
-      within(card).getByText(/Provisional — connector analyser arrives in P2/),
-    ).toBeInTheDocument();
+    expect(within(card).getByTestId("landing-source")).toHaveTextContent(/^Provisional/);
     expect(within(card).getByText("DEMO")).toBeInTheDocument();
+  });
+
+  it("shows the connector's grade without the provisional label", () => {
+    let s = session("replay", "replay", { ...cruise, phase: { current: "TaxiIn" } });
+    s = addEvent(s, 1, "touchdown", {
+      rateFpm: -142,
+      rateSource: "verticalSpeed",
+      peakG: 1.18,
+      gsKt: 72,
+      bankDeg: null,
+      pitchDeg: null,
+      lat: 33.64,
+      lon: -84.45,
+      bounces: 0,
+      grade: "B",
+      rateGrade: "B",
+      gGrade: "A",
+      speedGrade: null,
+    });
+    renderView(s, "live");
+    const card = screen.getByTestId("landing-card");
+    expect(within(card).getByTestId("landing-grade")).toHaveTextContent("B");
+    expect(within(card).queryByText(/Provisional/)).toBeNull();
+    expect(within(card).getByTestId("landing-source")).toHaveTextContent(
+      "the last airborne vertical-speed sample",
+    );
+    expect(within(card).getByText("Bounces")).toBeInTheDocument();
+    expect(within(card).queryByText("Bank")).toBeNull();
+  });
+
+  it("shows the tracked-flight summary with verification flags", () => {
+    renderView(
+      session("live", "sim", {
+        ...cruise,
+        flight: {
+          active: true,
+          status: "active",
+          id: "f1",
+          distanceNm: 152.4,
+          blockMin: 75,
+          airborneMin: 61,
+          fuelUsedLb: 410,
+          maxAltFt: 11500,
+          flags: {
+            teleport: true,
+            noBonus: true,
+            invalidated: false,
+            crashed: false,
+            paused: false,
+          },
+        },
+      }),
+      "live",
+    );
+    const summary = screen.getByTestId("flight-summary");
+    expect(within(summary).getByText("In progress")).toBeInTheDocument();
+    expect(summary.querySelector('[data-readout="Distance flown"]')).toHaveTextContent("152.4");
+    expect(summary.querySelector('[data-readout="Block time"]')).toHaveTextContent("1h 15m");
+    expect(summary.querySelector('[data-readout="Air time"]')).toHaveTextContent("1h 01m");
+    expect(summary.querySelector('[data-annunciator="Teleport"]')).toHaveAttribute(
+      "data-state",
+      "on",
+    );
+    expect(summary.querySelector('[data-annunciator="No bonus"]')).toHaveAttribute(
+      "data-state",
+      "on",
+    );
+    expect(summary.querySelector('[data-annunciator="Invalidated"]')).toHaveAttribute(
+      "data-state",
+      "off",
+    );
+    // One frame so far: the telemetry strip waits for a second one.
+    expect(screen.getByText("Collecting telemetry")).toBeInTheDocument();
+  });
+
+  it("shows no flight summary values without a flight domain", () => {
+    renderView(initialSimState, null);
+    expect(screen.getByText("No tracked flight")).toBeInTheDocument();
   });
 });
