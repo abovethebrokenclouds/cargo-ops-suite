@@ -253,6 +253,11 @@ test.describe("demo mode (no connector)", () => {
     page,
   }) => {
     await page.goto("/settings");
+    // Interact only after hydration (the chip turns DEMO from an effect), or clicks are lost.
+    await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
+      "data-status",
+      "demo",
+    );
     await expect(page.getByTestId("demo-mode")).toHaveText(/On/);
     await expect(page.getByTestId("token-masked")).toHaveText("none in demo mode");
     await expect(page.getByTestId("backup-now")).toBeDisabled();

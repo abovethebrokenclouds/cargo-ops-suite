@@ -45,7 +45,9 @@ export function KeyboardShortcuts() {
       if (!openRef.current && document.querySelector('[role="dialog"], [role="alertdialog"]')) {
         return;
       }
-      const action = machine.current.handle(e, Date.now(), pathRef.current);
+      // Time the chord with the event's own timestamp (when the key was pressed), not the
+      // handling time: a busy main thread (e.g. the map initialising) must not split `g f`.
+      const action = machine.current.handle(e, e.timeStamp, pathRef.current);
       if (!action) return;
       if (action.type === "pending") return;
       e.preventDefault();
