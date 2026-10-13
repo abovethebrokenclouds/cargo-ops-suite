@@ -89,6 +89,10 @@ test.describe("demo mode (no connector)", () => {
 
   test("/settings toggles online maps in this browser", async ({ page }) => {
     await page.goto("/settings");
+    await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
+      "data-status",
+      "demo",
+    );
     const toggle = page.getByTestId("online-maps-switch");
     await expect(toggle).toHaveAttribute("aria-checked", "false");
     await toggle.click();
@@ -211,6 +215,8 @@ test.describe("demo mode (no connector)", () => {
   test("keyboard shortcuts: g + letter navigates, ? opens the list, typing is ignored", async ({
     page,
   }) => {
+    // Eleven page loads on the dev server: allow for a slow CI runner.
+    test.setTimeout(120_000);
     await page.goto("/");
     await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
       "data-status",
@@ -245,8 +251,12 @@ test.describe("demo mode (no connector)", () => {
     await expect(dialog).toContainText("Diagnostics");
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
-    // Typing in a field never navigates.
+    // Typing in a field never navigates. Type only after hydration, or React resets the field.
     await page.goto("/jobs");
+    await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
+      "data-status",
+      "demo",
+    );
     const field = page.getByLabel("Board airport");
     await field.click();
     await page.keyboard.type("gm");
