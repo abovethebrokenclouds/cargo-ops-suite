@@ -6,7 +6,7 @@
 // milestones").
 
 import { describe, expect, it } from "vitest";
-import { aircraftTypeByKey } from "@cargo-ops/protocol";
+import { aircraftTypeByKey, type Defect } from "@cargo-ops/protocol";
 import {
   CompanyBook,
   GAME_DAY_MS,
@@ -44,7 +44,6 @@ import {
   type BookNotice,
   type CompanyCore,
   type DemandEventRecord,
-  type Defect,
   type FlightSettlement,
 } from "../src/index";
 import { bundledAirports } from "./airports";
