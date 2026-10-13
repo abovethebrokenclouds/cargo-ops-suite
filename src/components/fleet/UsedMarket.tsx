@@ -64,7 +64,7 @@ export function UsedMarket({
           <Repeat className="size-3.5" aria-hidden="true" /> Refresh listings
         </button>
       </div>
-      <ul className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3" data-testid="used-market">
+      <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" data-testid="used-market">
         {market.listings.map((l) => (
           <ListingCard
             key={l.id}

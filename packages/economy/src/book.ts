@@ -1858,6 +1858,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
         reasons: g.reasons,
         ferryEligible:
           a.ferryPermit === null &&
+          a.status === "available" &&
           ferryEligible(this.gateInput(a), g) &&
           !this.maintenance.isMaintenanceCapable(a.location),
         payloadPenaltyPct: g.payloadPenaltyPct,
