@@ -140,6 +140,16 @@ export const PAYLOAD_TOLERANCE_SHARE = 0.1;
  */
 export const DEFAULT_CREW_ALLOWANCE_KG = 0;
 /**
+ * TOTAL WEIGHT cross-check (docs/ECONOMY.md "TOTAL WEIGHT cross-check"): the payload implied
+ * by TOTAL WEIGHT − EMPTY WEIGHT − fuel may differ from the compared payload by
+ * max(CROSSCHECK_TOLERANCE_MIN_KG, CROSSCHECK_TOLERANCE_SHARE × implied) before a mismatch is
+ * flagged. 100 kg covers a pilot the sim does not report as a station, oil and unusable fuel.
+ */
+export const CROSSCHECK_TOLERANCE_MIN_KG = 100;
+export const CROSSCHECK_TOLERANCE_SHARE = 0.1;
+/** Upper bound of a payload entered by the player, kg (above any cargo aircraft). */
+export const MAX_ENTERED_PAYLOAD_KG = 200_000;
+/**
  * Whole (trimmed) station names of pilot seats: only the FIRST matching station counts
  * as crew (a second seat such as "Copilot" may hold cargo or a passenger). Never matches
  * baggage, cargo or compartment stations ("Pilot Baggage" is cargo).

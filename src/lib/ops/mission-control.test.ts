@@ -230,6 +230,26 @@ describe("goNoGoLamps", () => {
     }
   });
 
+  it("payload lamp: over max gross only by the payload you entered is a caution, not a no-go", () => {
+    const over = {
+      stage: "preview",
+      status: "overloaded",
+      overBasis: "entered",
+      enteredKg: 2500,
+      enteredRole: "used",
+      source: "sim",
+      cargoKg: 840,
+      toleranceKg: 84,
+      checkedAt: "2026-10-14T12:00:00.000Z",
+      message: "Empty weight + fuel + the payload entered by you is above the maximum",
+    } as const;
+    const s = withSnapshot({
+      ...FULL,
+      mission: { payloadCheck: over } as unknown as NonNullable<Snapshot["state"]["mission"]>,
+    });
+    expect(lamps(s)["payload"]).toMatchObject({ state: "hold", value: "OVER (YOURS)" });
+  });
+
   it("drops telemetry lamps to NO DATA once the session ends", () => {
     const s = simReducer(withSnapshot(FULL), { type: "status", status: "disconnected" });
     const l = lamps(s);

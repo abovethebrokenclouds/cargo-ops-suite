@@ -711,6 +711,118 @@ function withTeleport(frames: FixtureFrame[]): FixtureFrame[] {
   });
 }
 
+describe("payload entered by you and the TOTAL WEIGHT cross-check (docs/ECONOMY.md)", () => {
+  const frames = loadFixture(FIXTURE);
+  // Fixture weights: TOTAL 8,430 − EMPTY 4,730 − fuel 1,700 = 2,000 lb = 907.2 kg implied.
+
+  it("no stations + a value entered at load: unknown (bonuses kept), shown as yours, cross-checked", () => {
+    const tmp = tempDir();
+    try {
+      const r = rig(withStations(frames, null), tmp.dir);
+      const job = acceptKatlJob(r);
+      const loaded = r.ok<Mission>("mission.load", { jobIds: [job.id], enteredPayloadKg: 830 });
+      assert.equal(loaded.enteredPayloadKg, 830);
+      assert.equal(loaded.payloadCheck?.enteredRole, "used");
+      r.source.playRange(0, BOARDING_END);
+      const preview = r.mission()?.payloadCheck;
+      assert.equal(preview?.status, "unknown");
+      assert.equal(preview?.source, "replay");
+      assert.equal(preview?.enteredKg, 830);
+      // 907.2 kg at the snapshot; the replayed TOTAL WEIGHT and fuel drift by a few lb.
+      assert.ok(Math.abs((preview?.impliedKg ?? 0) - 907.2) < 1, `${preview?.impliedKg}`);
+      assert.equal(preview?.crossCheck, "match");
+      assert.equal(preview?.crossCheckWith, "entered");
+      assert.equal(preview?.simPayloadKg, undefined, "no sim number is invented");
+      r.source.playRange(BOARDING_END);
+      const m = r.mission();
+      assert.equal(m?.status, "delivered");
+      assert.equal(m?.payloadCheck?.stage, "departure");
+      assert.equal(m?.payloadCheck?.status, "unknown");
+      assert.equal(m?.payloadCheck?.enteredRole, "used");
+      // The unknown rule: bonuses kept, the player number earns nothing extra.
+      assert.equal(m?.payout?.total, EXPECTED_PAYOUT);
+      assert.equal(m?.payout?.jobs[0]?.payloadMismatch, undefined);
+      const ev = r.events("mission.payload_check");
+      const data = ev[0]?.type === "event" ? (ev[0].data as { payoutBonuses: boolean }) : null;
+      assert.equal(data?.payoutBonuses, true);
+      const row = r.economy.logbook()[0]?.mission?.payloadCheck;
+      assert.equal(row?.enteredKg, 830);
+      assert.ok(Math.abs((row?.impliedKg ?? 0) - 907.2) < 1, `${row?.impliedKg}`);
+      r.close();
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it("a contradicting sim reading wins: underloaded stations + an entered 840 kg pay no bonuses", () => {
+    const tmp = tempDir();
+    try {
+      const r = rig(
+        withStations(frames, [
+          { name: "Pilot", weightLb: 170 },
+          { name: "Cargo Zone A", weightLb: 50 },
+          { name: "Cargo Zone B", weightLb: 50 },
+          { name: "Cargo Zone C", weightLb: 50 },
+          { name: "Cargo Pod", weightLb: 50 },
+        ]),
+        tmp.dir,
+      );
+      const job = acceptKatlJob(r);
+      r.ok("mission.load", { jobIds: [job.id] });
+      r.source.playRange(0, BOARDING_END);
+      assert.equal(r.mission()?.payloadCheck?.status, "underloaded");
+      const set = r.ok<Mission>("mission.payload", { kg: 840 });
+      assert.equal(set.enteredPayloadKg, 840);
+      assert.equal(set.payloadCheck?.status, "underloaded");
+      assert.equal(set.payloadCheck?.enteredRole, "contradicts");
+      // TOTAL WEIGHT still implies 907.2 kg: the station sum (167.8 kg) is flagged.
+      assert.equal(set.payloadCheck?.crossCheck, "mismatch");
+      assert.equal(set.payloadCheck?.crossCheckWith, "stations");
+      r.ok("flight.start");
+      // Frozen at departure: the entered payload can no longer change.
+      const late = r.cmd("mission.payload", { kg: 900 });
+      assert.equal(!late.ok && late.error.code, "mission_in_progress");
+      r.source.playRange(BOARDING_END);
+      const m = r.mission();
+      assert.equal(m?.status, "delivered");
+      assert.equal(m?.payloadCheck?.status, "underloaded");
+      assert.equal(m?.payloadCheck?.enteredRole, "contradicts");
+      assert.equal(m?.payout?.jobs[0]?.payloadMismatch, true);
+      assert.equal(m?.payout?.total, 6850);
+      r.close();
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it("mission.payload: validated, cleared with null, persisted with the mission", () => {
+    const tmp = tempDir();
+    try {
+      const r = rig(withStations(frames, null), tmp.dir);
+      const none = r.cmd("mission.payload", { kg: 100 });
+      assert.equal(!none.ok && none.error.code, "no_mission");
+      const job = acceptKatlJob(r);
+      r.ok("mission.load", { jobIds: [job.id] });
+      for (const bad of [{ kg: -1 }, { kg: 300_000 }, { kg: "800" }, {}, { kg: 1, x: 1 }]) {
+        const res = r.cmd("mission.payload", bad);
+        assert.equal(!res.ok && res.error.code, "bad_args", JSON.stringify(bad));
+      }
+      const badLoad = r.cmd("mission.load", { jobIds: [job.id], enteredPayloadKg: -5 });
+      assert.equal(badLoad.ok, false);
+      r.ok("mission.payload", { kg: 812.34 });
+      assert.equal(r.mission()?.enteredPayloadKg, 812.3);
+      assert.equal(r.economy.openMission()?.enteredPayloadKg, 812.3, "stored with the mission");
+      r.ok("mission.payload", { kg: null });
+      assert.equal(r.mission()?.enteredPayloadKg, null);
+      assert.equal(r.economy.openMission()?.enteredPayloadKg, null);
+      assert.equal(r.mission()?.payloadCheck?.enteredKg, undefined);
+      r.close();
+    } finally {
+      tmp.cleanup();
+    }
+  });
+});
+
 /** Replace the payload stations of the snapshot (null: the sim reports none). */
 function withStations(
   frames: FixtureFrame[],

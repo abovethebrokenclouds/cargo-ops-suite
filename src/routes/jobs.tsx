@@ -9,6 +9,7 @@ import { ConnectionNotice } from "@/components/status/ConnectionNotice";
 import { EmptyState } from "@/components/EmptyState";
 import { DemandEvents } from "@/components/cargo/DemandEvents";
 import { KindBadge, MissionCard } from "@/components/cargo/MissionCard";
+import { EnteredPayload } from "@/components/cargo/EnteredPayload";
 import { MissionStrip } from "@/components/cargo/MissionStrip";
 import { PayoutBreakdown } from "@/components/cargo/PayoutBreakdown";
 import { RouteFinder } from "@/components/cargo/RouteFinder";
@@ -349,6 +350,25 @@ function Jobs() {
 
         {mission && !demo ? (
           <MissionStrip mission={mission} source={source} className="col-span-12" />
+        ) : null}
+        {mission &&
+        !demo &&
+        connector &&
+        (mission.status === "loaded" || mission.status === "in_progress") ? (
+          <EnteredPayload
+            className="col-span-12"
+            valueKg={mission.enteredPayloadKg}
+            cargoKg={mission.payloadKg}
+            busy={busy}
+            editable={mission.status === "loaded"}
+            onSave={(kg) =>
+              void run(
+                "mission.payload",
+                { kg },
+                kg === null ? "Entered payload cleared" : `Payload entered by you: ${kg} kg`,
+              )
+            }
+          />
         ) : null}
         {connector && !demo && company ? (
           <CrewAllowance
