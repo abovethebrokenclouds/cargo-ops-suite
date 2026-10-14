@@ -25,6 +25,27 @@ describe("ShortcutMachine", () => {
     }
   });
 
+  it("starts the chord window when the page responded, not before", () => {
+    const m = new ShortcutMachine();
+    // g pressed at 0, the page was blocked and only processed it (and its release) at 2 000.
+    m.handle({ key: "g" }, 0, "/");
+    m.responded(1_900);
+    m.responded(2_000);
+    expect(m.handle({ key: "j" }, 2_100, "/")).toEqual({ type: "navigate", to: "/jobs" });
+    // A second key queued during the block (timestamp before the response) still counts.
+    m.handle({ key: "g" }, 5_000, "/");
+    m.responded(8_000);
+    expect(m.handle({ key: "c" }, 5_200, "/")).toEqual({ type: "navigate", to: "/company" });
+    // A responsive page: the window still expires CHORD_TIMEOUT_MS after the page saw g.
+    m.handle({ key: "g" }, 10_000, "/");
+    m.responded(10_005);
+    expect(m.handle({ key: "j" }, 10_005 + CHORD_TIMEOUT_MS + 1, "/")).toBeNull();
+    // responded() without a pending g does nothing.
+    m.responded(20_000);
+    expect(m.pending).toBe(false);
+    expect(m.handle({ key: "j" }, 20_001, "/")).toBeNull();
+  });
+
   it("forgets a g after the timeout and ignores unknown second keys", () => {
     const m = new ShortcutMachine();
     m.handle({ key: "g" }, 0, "/");
