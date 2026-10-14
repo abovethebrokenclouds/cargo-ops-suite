@@ -67,6 +67,7 @@ async function main(): Promise<number> {
       ...(options.record ? { record: options.record } : {}),
       ...(web ? { web } : {}),
       ...(options.basemapDir ? { basemapDir: resolve(options.basemapDir) } : {}),
+      ...(options.weather ? { weather: options.weather } : {}),
     });
   } catch (err) {
     const error = err as NodeJS.ErrnoException;
