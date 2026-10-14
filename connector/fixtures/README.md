@@ -29,3 +29,13 @@ A SimBrief OFP in JSON written by hand for the P6 import tests (`connector/test/
 `packages/protocol/src/simbrief.test.ts`). Field names follow SimBrief's publicly documented JSON
 format as far as known; every value is invented. It is not a SimBrief response and contains no
 real account. Replace it with a real OFP fetched on the PC once the import is verified.
+
+## `awc-metar.handmade.json` (HAND-MADE, not a recording)
+
+A response of the aviationweather.gov Data API (`/api/data/metar?ids=…&format=json`) written by
+hand for the weather tests (`connector/test/weather.test.ts`, `packages/weather/test/`), because
+aviationweather.gov was not reachable from the cloud container (egress proxy 403, 2026-10-14).
+Field names follow the API's documented JSON (`icaoId`, `obsTime`, `rawOb`, `wdir`, `wspd`,
+`wgst`, `visib`, `altim`, `clouds`, `fltCat`, …); station ids are real, every value is invented.
+The KORD entry lacks the decoded fields on purpose so the parser fallback is exercised. Replace
+it with a recorded response fetched on the PC (VERIFICATION PC-48).

@@ -42,7 +42,11 @@ Values are tagged `SIM`, `REPLAY` or `DEMO`; a dash means "no data", never a mad
 
 1. In the sim: on the ground at the origin (within 3 nm), parking brake **set**, then start.
    Block-out starts the mission; **Live Flight** (`g` `f`) shows altitude, speeds, fuel,
-   endurance vs ETE, phase, payload and, after touchdown, the landing grade.
+   endurance vs ETE, phase, payload and, after touchdown, the landing grade. **Weather en
+   route** shows the origin and destination METAR: a VFR / MVFR / IFR / LIFR chip, wind,
+   visibility, ceiling, how old the observation is and the raw text on request. On the job board
+   each contract has a **Weather** button with the same view. For simulation only: never use it
+   for real-world flight planning.
 2. Fly it. The **Map** (`g` `m`) follows the aircraft (`f` toggles follow), with route, trail,
    airports, your FBOs and demand events.
 3. Land, taxi in, **park with engines off and the brake set**. The leg is verified (≥ 90 % of
@@ -87,6 +91,10 @@ Shortcuts are ignored while you type in a field.
   figures are always kg and USD; speeds are knots.
 - **Connector**: address and a masked token (reset with `--reset-token`, setup guide §6).
 - **Basemap**: local extract → online OpenFreeMap (switch off to stay offline) → outline.
+- **Weather** (this browser): **Online weather** lets the connector fetch origin and destination
+  METARs from aviationweather.gov (NOAA, no account) for Live Flight and the job board; switch it
+  off and no weather request leaves your PC. Replays and the demo show **SAMPLE** METARs, which
+  are examples, never real weather.
 - **Data**: **Back up now**, the backup list (a daily backup is automatic, newest 14 kept),
   career export/import (import replaces the career; refused during a flight). Restoring a backup
   is manual with the connector stopped — steps in the page and in setup guide §6.

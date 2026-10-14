@@ -44,6 +44,8 @@ for you; see `docs/SETUP_WINDOWS.md`.
 --data-dir <dir>        Config, databases, logs (default below)
 --reset-token           Generate a new access token
 --backup-keep <n>       Database backups kept in <data-dir>/backups (default 14; 0 = no daily backup)
+--weather online|sample|off
+                        METAR source (default online with simconnect, sample with fake)
 --open                  Open the browser when ready (start / open / xdg-open)
 --verbose               Debug logging
 --lan                   Not implemented; refuses to start
@@ -101,6 +103,7 @@ connector (`127.0.0.1:<port>` or `localhost:<port>`), which blocks DNS rebinding
 | `PUT /api/simbrief`                     | Bearer token                                                    | update `{ enabled?, username?, userId? }` (strict zod; `400 bad_request`)                                                                                                                                                                                          |
 | `POST /api/simbrief/import`             | Bearer token                                                    | fetch the latest OFP → `{ plan }`; `409 simbrief_disabled`/`simbrief_no_user`/`simbrief_busy`, `429 rate_limited` (30 s), `504 simbrief_timeout`, `502 simbrief_unreachable`/`simbrief_error`/`simbrief_invalid`                                                   |
 | `DELETE /api/simbrief/plan`             | Bearer token                                                    | forget the planned flight                                                                                                                                                                                                                                          |
+| `GET /api/weather/metar?ids=&online=`   | Bearer token                                                    | `{ mode, onlineAllowed, stations: [{ station, report, note }], attribution, endpoint }` for 1–8 ICAO ids (`400 bad_request` otherwise); `online=1` is the page's switch, without it nothing is fetched                                                             |
 | other `/api/*`                          | Bearer token                                                    | `404` JSON                                                                                                                                                                                                                                                         |
 | `GET /ws`                               | allowed `Origin` **and** token (`?token=` or the first `hello`) | protocol v1 (below)                                                                                                                                                                                                                                                |
 | `GET /*`                                | none                                                            | static SPA; extension-less paths → `_shell.html`                                                                                                                                                                                                                   |
@@ -286,6 +289,18 @@ pilot ID is kept in the `settings` table; `POST /api/simbrief/import` fetches
 no retries, and maps it with `packages/protocol/src/simbrief.ts` (tested against the
 HAND-MADE `fixtures/simbrief-ofp.handmade.json`; unverified against a real OFP). The username
 is never logged.
+
+`src/core/weather.ts`: METARs for the origin and destination (plan §3, §8). Mode `online`
+(default with SimConnect) fetches `https://aviationweather.gov/api/data/metar?ids=…&format=json`
+(NOAA Aviation Weather Center, public US Government data, no key) only when the page sends
+`online=1` (its per-browser **Online weather** switch): all due stations in one request, a
+`CargoOps/<version> (private use)` User-Agent, 10 s timeout, no retries, a 10-minute cache in
+the `metar_cache` table, never more than one request per station per minute (also after a
+failure). Offline or on errors the last report is served marked stale (up to 3 h), otherwise a
+note. Decoding prefers the API's JSON fields and falls back to `packages/weather`'s parser on
+`rawOb`; tested against the HAND-MADE `fixtures/awc-metar.handmade.json` because the host was
+not reachable from the cloud container. Mode `sample` (default with `--sim fake`) serves
+built-in SAMPLE reports and never touches the network; `off` serves nothing.
 
 Packaging: no single-file executable is built — that would bundle `node-simconnect`
 (LGPL-3.0-or-later); it stays an unmodified module in `node_modules`. The supported launcher

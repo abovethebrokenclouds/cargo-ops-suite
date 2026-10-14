@@ -1,5 +1,5 @@
 {
-  "_comment": "HAND-MADE, not a recording: aviationweather.gov was unreachable from the build container (egress proxy 403). Shape follows the documented AWC Data API METAR JSON (GET /api/data/metar?ids=...&format=json); station ids are real, every value is invented. Entry 4 deliberately lacks decoded fields so the parser fallback is exercised. Replace with a recorded response once one is fetched on the PC (PC-47).",
+  "_comment": "HAND-MADE, not a recording: aviationweather.gov was unreachable from the build container (egress proxy 403). Shape follows the documented AWC Data API METAR JSON (GET /api/data/metar?ids=...&format=json); station ids are real, every value is invented. Entry 4 deliberately lacks decoded fields so the parser fallback is exercised. Replace with a recorded response once one is fetched on the PC (PC-48).",
   "request": "https://aviationweather.gov/api/data/metar?ids=KMEM,KATL,KSEA,KORD,EGLL&format=json",
   "response": [
     {
