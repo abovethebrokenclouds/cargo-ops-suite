@@ -269,12 +269,9 @@ export class FlightCore {
     }
 
     const hadLeg = this.tracker.legActive;
-    const events = this.tracker.onSample(
-      sample,
-      transition,
-      this.fsm.onGround === false,
-      this.context(),
-    );
+    const ctx = this.context();
+    const events = this.tracker.onSample(sample, transition, this.fsm.onGround === false, ctx);
+    this.tracker.fillRoute(ctx);
     if (!hadLeg && this.tracker.legActive) this.telemetry.begin(sample.tMs);
     this.telemetry.sample(sample, this.fsm.phase);
     this.handleTrackerEvents(events);

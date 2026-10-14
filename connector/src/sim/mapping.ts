@@ -10,6 +10,7 @@ import {
   type FuelState,
   type MotionState,
   type PayloadState,
+  type PlanState,
   type PositionState,
   type WeightsState,
 } from "../protocol";
@@ -170,7 +171,61 @@ export function mapZulu(raw: RawValues): string | undefined {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
 }
 
+/**
+ * The simulator's GPS flight plan (best effort, deprecated in MSFS 2024), or null for
+ * "no GPS plan". Null when GPS IS ACTIVE FLIGHT PLAN is missing (rejected) or false, when the
+ * plan has no waypoints, or when the next waypoint id is read but empty: MSFS 2024 can leave
+ * the flag set with empty values for plans made in the EFB, and those must not look like a
+ * plan. Fields the sim did not report (rejected SimVars) stay absent, never filled in.
+ *
+ * The destination is only known from the GPS when the active waypoint is the last one (its id
+ * is then the destination and its distance the remaining distance) or when an approach is
+ * loaded (GPS APPROACH AIRPORT ID). Otherwise the GPS plan has no destination ident.
+ */
+export function mapPlan(raw: RawValues): PlanState | null {
+  if (bool(raw, "gpsPlanActive") !== true) return null;
+  const count = num(raw, "gpsWpCount");
+  const index = num(raw, "gpsWpIndex");
+  const nextWpId = str(raw, "gpsNextWpId");
+  if (count !== undefined && Math.round(count) <= 0) return null;
+  if (nextWpId === "") return null;
+  const plan: PlanState = { active: true, basis: "gps" };
+  const wpCount = count !== undefined ? Math.round(count) : undefined;
+  const wpIndex = index !== undefined && index >= 0 ? Math.round(index) : undefined;
+  if (wpCount !== undefined) plan.wpCount = wpCount;
+  if (wpIndex !== undefined) plan.wpIndex = wpIndex;
+  if (nextWpId) plan.nextWpId = nextWpId;
+  const lat = num(raw, "gpsNextWpLat");
+  const lon = num(raw, "gpsNextWpLon");
+  if (lat !== undefined && lon !== undefined && !(lat === 0 && lon === 0)) {
+    if (Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+      plan.nextWpLat = lat;
+      plan.nextWpLon = lon;
+    }
+  }
+  const wpDist = num(raw, "gpsWpDistanceNm");
+  if (wpDist !== undefined && wpDist >= 0) plan.nextWpDistanceNm = round1(wpDist);
+  const wpEte = num(raw, "gpsWpEteSec");
+  if (wpEte !== undefined && wpEte > 0) plan.nextWpEteSec = Math.round(wpEte);
+  const ete = num(raw, "gpsEteSec");
+  if (ete !== undefined && ete > 0) plan.eteSec = Math.round(ete);
+  const lastLeg =
+    wpCount !== undefined && wpIndex !== undefined && wpCount > 0 && wpIndex === wpCount - 1;
+  if (lastLeg && nextWpId) {
+    plan.destination = nextWpId;
+    if (plan.nextWpDistanceNm !== undefined) plan.destDistanceNm = plan.nextWpDistanceNm;
+  } else {
+    const approach = str(raw, "gpsApproachAirportId");
+    if (approach) plan.destination = approach;
+  }
+  return valid<PlanState>("plan", plan) ?? null;
+}
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
 export interface SlowMapping {
+  /** null = the sim reports no usable GPS plan. */
+  plan?: PlanState | null;
   aircraft?: AircraftState;
   fuel?: FuelState;
   weights?: WeightsState;
@@ -191,6 +246,7 @@ export function mapSlow(raw: RawValues, counts: IndexCounts): SlowMapping {
   const controls = mapControls(raw);
   const simRate = mapSimRate(raw);
   const zulu = mapZulu(raw);
+  out.plan = mapPlan(raw);
   if (aircraft) out.aircraft = aircraft;
   if (fuel) out.fuel = fuel;
   if (payload) out.payload = payload;

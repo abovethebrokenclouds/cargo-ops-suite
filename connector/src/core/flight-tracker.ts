@@ -146,6 +146,24 @@ export class FlightTracker {
     return events;
   }
 
+  /**
+   * Route fields the running flight started without (a destination picked after takeoff):
+   * filled once, never overridden. The planned distance is then the distance flown so far
+   * plus the remaining distance at that moment.
+   */
+  fillRoute(ctx: TrackerContext): void {
+    const flight = this.flight;
+    const leg = this.leg;
+    if (!flight || !leg) return;
+    if (!flight.ctx.origin && ctx.origin) flight.ctx.origin = ctx.origin;
+    if (!flight.ctx.destination && ctx.destination) {
+      flight.ctx.destination = ctx.destination;
+      if (flight.plannedDistanceNm === undefined && ctx.destDistanceNm !== undefined) {
+        flight.plannedDistanceNm = round1(leg.distanceNm + ctx.destDistanceNm);
+      }
+    }
+  }
+
   onTouchdown(td: Touchdown): void {
     this.flight?.landings.push(td);
   }

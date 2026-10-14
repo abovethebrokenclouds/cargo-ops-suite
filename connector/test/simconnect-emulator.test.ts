@@ -908,6 +908,205 @@ describe("SimConnect emulator: payload check against the sim (PC-49 logic)", () 
   });
 });
 
+describe("SimConnect emulator: GPS flight plan and destination (PC-53 logic)", () => {
+  /** Last leg of a KMEM → KATL GPS plan, values in the units the connector asks for. */
+  const GPS_LAST_LEG: Record<string, SimValue> = {
+    "GPS IS ACTIVE FLIGHT PLAN": 1,
+    "GPS FLIGHT PLAN WP COUNT": 2,
+    "GPS FLIGHT PLAN WP INDEX": 1,
+    "GPS WP NEXT ID": "KATL",
+    "GPS WP NEXT LAT": 33.6367,
+    "GPS WP NEXT LON": -84.4281,
+    "GPS WP DISTANCE": 287.7,
+    "GPS WP ETE": 6905,
+    "GPS ETE": 6905,
+    "GPS APPROACH AIRPORT ID": "",
+  };
+  const GPS_OFF: Record<string, SimValue> = {
+    "GPS IS ACTIVE FLIGHT PLAN": 0,
+    "GPS FLIGHT PLAN WP COUNT": 0,
+    "GPS FLIGHT PLAN WP INDEX": 0,
+    "GPS WP NEXT ID": "",
+    "GPS WP DISTANCE": 0,
+    "GPS WP ETE": 0,
+    "GPS ETE": 0,
+  };
+
+  interface PlanRig {
+    emu: SimConnectEmulator;
+    session: ConnectorSession;
+    source: SimConnectSource;
+    frames: Frame[];
+    plan(): Record<string, unknown> | null;
+    cmd(name: string, args?: unknown): Result;
+  }
+  const rigs: PlanRig[] = [];
+  afterEach(async () => {
+    for (const r of rigs.splice(0)) {
+      await r.source.stop();
+      await r.emu.close();
+    }
+  });
+
+  async function planRig(options: EmulatorOptions): Promise<PlanRig> {
+    const emu = await SimConnectEmulator.start({ secondMs: 100, simFrameMs: 40, ...options });
+    const source = new SimConnectSource({
+      log: () => {},
+      remote: { host: "127.0.0.1", port: emu.port },
+      retryMinMs: 100,
+      retryMaxMs: 400,
+    });
+    const session = new ConnectorSession(source, () => {}, {
+      airports: loadAirportsData().airports,
+    });
+    const frames: Frame[] = [];
+    session.store.subscribe((f) => frames.push(f));
+    session.start();
+    let n = 0;
+    const r: PlanRig = {
+      emu,
+      session,
+      source,
+      frames,
+      plan: () => (session.store.getDomain("plan") ?? null) as Record<string, unknown> | null,
+      cmd: (name, args = {}) =>
+        session.command({
+          type: "command",
+          v: PROTOCOL_VERSION,
+          id: `p${++n}`,
+          name,
+          args,
+        } as Command),
+    };
+    rigs.push(r);
+    source.start();
+    return r;
+  }
+
+  it("source: GPS active → plan (source 'sim'), then inactive → null; stale EFB values → null", async () => {
+    const h = await harness({ values: { ...CARAVAN, ...GPS_LAST_LEG } });
+    const plan = await waitFor(() => latest(h.updates, "plan"), "a GPS plan");
+    assert.deepEqual(plan, {
+      active: true,
+      basis: "gps",
+      wpCount: 2,
+      wpIndex: 1,
+      nextWpId: "KATL",
+      nextWpLat: 33.6367,
+      nextWpLon: -84.4281,
+      nextWpDistanceNm: 287.7,
+      nextWpEteSec: 6905,
+      eteSec: 6905,
+      destination: "KATL",
+      destDistanceNm: 287.7,
+    });
+    // GPS IS ACTIVE FLIGHT PLAN, WP NEXT ID and APPROACH AIRPORT ID were requested as strings
+    // / bools in the units of the table; nothing was rejected.
+    const defined = h.emu.packets.filter((p) => p.fn === FN.ADD_TO_DATA_DEFINITION);
+    const nextId = defined.find((p) => p.fields["name"] === "GPS WP NEXT ID");
+    assert.equal(nextId?.fields["type"], DATATYPE.STRING64);
+    const dist = defined.find((p) => p.fields["name"] === "GPS WP DISTANCE");
+    assert.equal(dist?.fields["unit"], "nautical miles");
+    assert.equal(h.logs.filter((l) => /SimConnect rejected/.test(l.message)).length, 0);
+
+    // The pilot deactivates the plan: the source reports "no plan" (null), not stale values.
+    let mark = h.updates.length;
+    h.emu.set(GPS_OFF);
+    await waitFor(() => latest(h.updates, "plan", mark) === null, "plan null after deactivation");
+
+    // MSFS 2024 EFB plan: the flag is set but the GPS values are empty → still no plan.
+    h.emu.set({ "GPS IS ACTIVE FLIGHT PLAN": 1, "GPS FLIGHT PLAN WP COUNT": 3 });
+    mark = h.updates.length;
+    await waitFor(
+      () =>
+        h.updates.slice(mark).filter((u) => u.type === "data" && u.patch.plan !== undefined)
+          .length >= 3,
+      "three slow frames",
+    );
+    assert.ok(
+      h.updates
+        .slice(mark)
+        .every((u) => u.type !== "data" || u.patch.plan === undefined || u.patch.plan === null),
+      "an empty active plan is never reported",
+    );
+  });
+
+  it("rejected GPS SimVars degrade through the rebuild: no flag → no plan; no next id → no ident", async () => {
+    const h = await harness({
+      values: { ...CARAVAN, ...GPS_LAST_LEG },
+      reject: ["GPS IS ACTIVE FLIGHT PLAN"],
+    });
+    await waitFor(
+      () => h.logs.some((l) => /SimConnect rejected "GPS IS ACTIVE FLIGHT PLAN"/.test(l.message)),
+      "rejection",
+    );
+    let mark = h.updates.length;
+    await waitFor(() => latest(h.updates, "fuel", mark), "slow data after the rebuild");
+    assert.equal(latest(h.updates, "plan", mark), null, "without the flag there is no GPS plan");
+
+    const h2 = await harness({
+      values: { ...CARAVAN, ...GPS_LAST_LEG },
+      reject: ["GPS WP NEXT ID"],
+    });
+    await waitFor(
+      () => h2.logs.some((l) => /SimConnect rejected "GPS WP NEXT ID"/.test(l.message)),
+      "rejection",
+    );
+    mark = h2.updates.length;
+    const plan = await waitFor(() => latest(h2.updates, "plan", mark), "plan after the rebuild");
+    assert.equal(plan.active, true);
+    assert.equal(plan.nextWpId, undefined, "never guessed");
+    assert.equal(plan.destination, undefined, "no ident without GPS WP NEXT ID");
+    assert.equal(plan.eteSec, 6905);
+    assert.ok(latest(h2.updates, "fuel", mark));
+  });
+
+  it("session: manual KATL, GPS plan takes over (gps), GPS off → manual again; frames are 'sim'", async () => {
+    const r = await planRig({ values: { ...CARAVAN, ...GPS_OFF } });
+    await waitFor(() => r.session.store.getDomain("position"), "position from the sim");
+    await waitFor(() => r.session.store.getDomain("fuel"), "slow data from the sim");
+    assert.equal(r.plan(), null, "no GPS plan, no manual choice, no mission");
+
+    const set = r.cmd("plan.destination", { icao: "KATL" });
+    assert.ok(set.ok);
+    const manual = r.plan();
+    assert.equal(manual?.["basis"], "manual");
+    assert.equal(manual?.["destination"], "KATL");
+    assert.equal(manual?.["origin"], "KMEM");
+    assert.ok(Math.abs((manual?.["destDistanceNm"] as number) - 286.6) < 2);
+    assert.equal(manual?.["eteSec"], undefined, "parked: no ETE");
+
+    // A GPS plan is activated in the sim: it wins.
+    r.emu.set({ ...GPS_LAST_LEG, "GPS WP DISTANCE": 280.1, "GPS ETE": 6700 });
+    const gps = await waitFor(
+      () => (r.plan()?.["basis"] === "gps" ? r.plan() : null),
+      "GPS plan in use",
+    );
+    assert.equal(gps["destDistanceNm"], 280.1, "the GPS's own distance");
+    assert.equal(gps["eteSec"], 6700, "the GPS's own ETE");
+    assert.equal(gps["origin"], undefined, "the GPS does not tell the origin");
+
+    // Deactivated: back to the manual destination, no GPS leftovers.
+    r.emu.set(GPS_OFF);
+    const back = await waitFor(
+      () => (r.plan()?.["basis"] === "manual" ? r.plan() : null),
+      "manual again",
+    );
+    assert.equal(back["nextWpId"], undefined);
+    assert.equal(back["eteSec"], undefined);
+    const planDeltas = r.frames.filter(
+      (f) => f.type === "delta" && (f.patch as Record<string, unknown>)["plan"] !== undefined,
+    );
+    assert.ok(planDeltas.length >= 3);
+    assert.ok(planDeltas.every((f) => f.source === "sim"));
+
+    // The simulator quits: the plan is cleared with the other sim-derived domains.
+    r.emu.setAccepting(false);
+    r.emu.quit();
+    await waitFor(() => r.plan() === null && !r.source.link().connected, "plan cleared offline");
+  });
+});
+
 describe("SimConnect emulator: real connector CLI end to end", () => {
   let child: ChildProcess | null = null;
   let emu: SimConnectEmulator | null = null;

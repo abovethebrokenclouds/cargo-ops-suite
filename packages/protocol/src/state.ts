@@ -110,9 +110,24 @@ export const controlsDomainSchema = z.object({
   parkingBrake: z.boolean(),
 });
 
-/** GPS flight plan, best effort (deprecated simvars in MSFS 2024). */
+/**
+ * Where the `plan` domain's destination comes from, in the connector's precedence order:
+ * - `gps`: the simulator's active GPS flight plan (best effort; the GPS SimVars are
+ *   deprecated in MSFS 2024 and may not reflect EFB plans). Distance and ETE are the GPS's own.
+ * - `manual`: a destination the player picked for the current flight (`plan.destination`).
+ * - `mission`: the loaded mission's destination.
+ * For `manual` and `mission` the connector computes distance (great circle from the live
+ * position) and ETE (distance / ground speed); they are never GPS values.
+ */
+export const PLAN_BASES = ["gps", "manual", "mission"] as const;
+export const planBasisSchema = z.enum(PLAN_BASES);
+export type PlanBasis = z.infer<typeof planBasisSchema>;
+
+/** Route to the destination: GPS flight plan (best effort), manual destination or mission. */
 export const planDomainSchema = z.object({
   active: z.boolean(),
+  /** Absent in older frames and recordings: those are GPS plans. */
+  basis: planBasisSchema.optional(),
   origin: z.string().optional(),
   destination: z.string().optional(),
   wpIndex: z.number().int().nonnegative().optional(),
@@ -124,8 +139,10 @@ export const planDomainSchema = z.object({
   nextWpDistanceNm: finite().nonnegative().optional(),
   /** Distance to destination, nautical miles. */
   destDistanceNm: finite().nonnegative().optional(),
-  /** GPS ETE to destination, seconds. */
+  /** ETE to destination, seconds (GPS ETE for `gps`, distance / ground speed otherwise). */
   eteSec: finite().nonnegative().optional(),
+  /** GPS ETE to the next waypoint, seconds. */
+  nextWpEteSec: finite().nonnegative().optional(),
 });
 
 export const FLIGHT_STATUSES = ["active", "completed", "aborted", "failed"] as const;
