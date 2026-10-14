@@ -74,14 +74,23 @@ function chronological(kind: DatabaseKind, names: readonly string[]): string[] {
 /**
  * Which backup files to delete so only the newest `keep` remain. Pure. Ordered by the UTC
  * stamp in the name (a daily file before that day's manual ones). `keep` < 1 keeps all.
+ * `protect` (the file just written) always survives and counts towards `keep`: a daily file
+ * written after that day's manual ones sorts older than them but must not be rotated away.
  */
-export function planRotation(kind: DatabaseKind, names: readonly string[], keep: number): string[] {
+export function planRotation(
+  kind: DatabaseKind,
+  names: readonly string[],
+  keep: number,
+  protect?: string,
+): string[] {
   if (!Number.isInteger(keep) || keep < 1) return [];
   const ours = chronological(
     kind,
     names.filter((n) => parseBackupName(kind, n) !== null),
   );
-  return ours.slice(0, Math.max(0, ours.length - keep));
+  const kept = protect !== undefined && ours.includes(protect);
+  const others = kept ? ours.filter((n) => n !== protect) : ours;
+  return others.slice(0, Math.max(0, others.length - (kept ? keep - 1 : keep)));
 }
 
 export function listBackups(dir: string, kind: DatabaseKind): BackupInfo[] {
@@ -164,7 +173,7 @@ export class BackupManager {
         message: err instanceof Error ? err.message : String(err),
       };
     }
-    const removed = this.rotate();
+    const removed = this.rotate(name);
     const backup = this.list().find((b) => b.name === name);
     if (!backup) return { ok: false, code: "backup_failed", message: `${name} was not written` };
     return { ok: true, backup, removed };
@@ -176,9 +185,9 @@ export class BackupManager {
     return this.create(false);
   }
 
-  rotate(): string[] {
+  rotate(protect?: string): string[] {
     const names = existsSync(this.dir) ? readdirSync(this.dir) : [];
-    const doomed = planRotation(this.kind, names, this.keep);
+    const doomed = planRotation(this.kind, names, this.keep, protect);
     for (const name of doomed) rmSync(join(this.dir, name), { force: true });
     return doomed;
   }

@@ -1,0 +1,815 @@
+// The REAL SimConnectSource (and, at the end, the real connector CLI) against the test-only
+// SimConnect protocol emulator (test/support/simconnect-emulator.ts) over TCP.
+//
+// What this proves: the connector and node-simconnect agree with the SimConnect wire format
+// as the public SDK documents it — handshake and protocol fallback, every data definition,
+// frame decoding, exceptions, system events, reconnects, AI traffic by type. What it does NOT
+// prove: anything about what MSFS itself sends (names it accepts, units, event timing).
+// Results are recorded as "Emulated" evidence in docs/VERIFICATION.md, never as PC checks.
+
+import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { after, afterEach, describe, it } from "node:test";
+import { configPath } from "../src/core/config";
+import type { ServerMessage, SimStatePatch } from "../src/protocol";
+import { SimConnectSource } from "../src/sim/simconnect-source";
+import { SIMVARS, buildDatums } from "../src/sim/simvars";
+import type { LogLevel, SimUpdate } from "../src/sim/source";
+import { connectClient, hello, tempDir } from "./helpers";
+import {
+  DATATYPE,
+  FN,
+  SimConnectEmulator,
+  type EmulatorOptions,
+  type SimValue,
+} from "./support/simconnect-emulator";
+
+const MAIN = join(__dirname, "..", "src", "cli", "main.js");
+
+/** A Caravan parked at KMEM: values in the units the connector asks for. */
+const CARAVAN: Record<string, SimValue> = {
+  "NUMBER OF ENGINES": 1,
+  "PAYLOAD STATION COUNT": 2,
+  TITLE: "Emulated Caravan 208B",
+  "ATC ID": "N208EM",
+  "FUEL TOTAL QUANTITY": 335.5,
+  "FUEL TOTAL QUANTITY WEIGHT": 2247.9,
+  "ENG FUEL FLOW PPH:1": 62.5,
+  "TOTAL WEIGHT": 7417.9,
+  "EMPTY WEIGHT": 4600,
+  "MAX GROSS WEIGHT": 8807,
+  "PAYLOAD STATION WEIGHT:1": 170,
+  "PAYLOAD STATION WEIGHT:2": 400,
+  "PAYLOAD STATION NAME:1": "Pilot",
+  "PAYLOAD STATION NAME:2": "Cargo",
+  "GENERAL ENG COMBUSTION:1": 1,
+  "BRAKE PARKING POSITION": 1,
+  "SIMULATION RATE": 1,
+  "ZULU TIME": 50_400,
+  "ZULU DAY OF MONTH": 13,
+  "ZULU MONTH OF YEAR": 10,
+  "ZULU YEAR": 2026,
+  "PLANE LATITUDE": 35.0424,
+  "PLANE LONGITUDE": -89.9767,
+  "INDICATED ALTITUDE": 341,
+  "PLANE ALT ABOVE GROUND": 0,
+  "AIRSPEED INDICATED": 0,
+  "AIRSPEED TRUE": 0,
+  "GROUND VELOCITY": 0,
+  "PLANE HEADING DEGREES MAGNETIC": 178,
+  "PLANE HEADING DEGREES TRUE": 179.5,
+  "VERTICAL SPEED": 0,
+  "G FORCE": 1,
+  "PLANE TOUCHDOWN NORMAL VELOCITY": 0,
+  "PLANE TOUCHDOWN BANK DEGREES": 0,
+  "PLANE TOUCHDOWN PITCH DEGREES": 0,
+  "SIM ON GROUND": 1,
+};
+
+interface Harness {
+  emu: SimConnectEmulator;
+  source: SimConnectSource;
+  updates: SimUpdate[];
+  logs: Array<{ level: LogLevel; message: string }>;
+}
+
+const running: Harness[] = [];
+
+async function harness(
+  options: EmulatorOptions = {},
+  sourceOptions: { aiSampleIntervalMs?: number } = {},
+): Promise<Harness> {
+  const emu = await SimConnectEmulator.start({
+    secondMs: 100,
+    simFrameMs: 40,
+    values: CARAVAN,
+    ...options,
+  });
+  const logs: Harness["logs"] = [];
+  const updates: SimUpdate[] = [];
+  const source = new SimConnectSource({
+    log: (level, message) => logs.push({ level, message }),
+    remote: { host: "127.0.0.1", port: emu.port },
+    retryMinMs: 100,
+    retryMaxMs: 400,
+    ...sourceOptions,
+  });
+  source.subscribe((u) => updates.push(u));
+  const h = { emu, source, updates, logs };
+  running.push(h);
+  source.start();
+  return h;
+}
+
+afterEach(async () => {
+  for (const h of running.splice(0)) {
+    await h.source.stop();
+    await h.emu.close();
+  }
+});
+
+async function waitFor<T>(
+  probe: () => T | undefined | null | false,
+  what: string,
+  timeoutMs = 5000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = probe();
+    if (value !== undefined && value !== null && value !== false) return value;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+function latest<K extends keyof SimStatePatch>(
+  updates: SimUpdate[],
+  domain: K,
+  from = 0,
+): SimStatePatch[K] | undefined {
+  for (let i = updates.length - 1; i >= from; i--) {
+    const u = updates[i];
+    if (u?.type === "data" && u.patch[domain] !== undefined) return u.patch[domain];
+  }
+  return undefined;
+}
+
+function events(updates: SimUpdate[], name: string, from = 0): unknown[] {
+  return updates
+    .slice(from)
+    .filter(
+      (u): u is Extract<SimUpdate, { type: "event" }> => u.type === "event" && u.name === name,
+    )
+    .map((u) => u.data);
+}
+
+function connectedUpdates(updates: SimUpdate[]) {
+  return updates.filter(
+    (u): u is Extract<SimUpdate, { type: "connected" }> => u.type === "connected",
+  );
+}
+
+describe("SimConnect emulator: handshake (PC-03/04/05 logic)", () => {
+  it("MSFS 2024: opens with SunRise, names the sim from applicationName", async () => {
+    const h = await harness({ profile: "msfs2024" });
+    const conn = await waitFor(() => connectedUpdates(h.updates)[0], "connected");
+    assert.deepEqual(conn, {
+      type: "connected",
+      simName: "MSFS 2024",
+      protocol: "SunRise",
+      version: "12.1.282174.999",
+    });
+    assert.deepEqual(h.source.link(), {
+      connected: true,
+      name: "MSFS 2024",
+      version: "12.1.282174.999",
+      protocol: "SunRise",
+    });
+    const opens = h.emu.packets.filter((p) => p.fn === FN.OPEN);
+    assert.equal(opens.length, 1);
+    assert.equal(opens[0]?.protocol, 6);
+    assert.equal(opens[0]?.fields["appName"], "Cargo Ops");
+    assert.ok(
+      h.logs.some((l) =>
+        /Connected to SunRise \(MSFS 2024\) v12\.1\.282174\.999 via SimConnect SunRise/.test(
+          l.message,
+        ),
+      ),
+    );
+    // Every system event subscribed and the "Sim" state requested (the state reply comes
+    // after the subscriptions, which are sent first on the same connection).
+    await waitFor(() => h.logs.some((l) => l.message === 'System state "Sim" = 1'), "Sim state");
+    const subscribed = h.emu.packets
+      .filter((p) => p.fn === FN.SUBSCRIBE_TO_SYSTEM_EVENT)
+      .map((p) => p.fields["name"]);
+    for (const name of [
+      "Pause",
+      "Pause_EX1",
+      "SimStart",
+      "SimStop",
+      "FlightLoaded",
+      "AircraftLoaded",
+      "Crashed",
+      "CrashReset",
+      "1sec",
+    ]) {
+      assert.ok(subscribed.includes(name), `subscribed ${name}`);
+    }
+    assert.deepEqual(h.emu.unhandled, []);
+    assert.deepEqual(h.emu.protocolErrors, []);
+  });
+
+  it("MSFS 2020: SunRise refused (VERSION_MISMATCH), falls back to KittyHawk quickly", async () => {
+    const started = Date.now();
+    const h = await harness({ profile: "msfs2020" });
+    const conn = await waitFor(() => connectedUpdates(h.updates)[0], "connected");
+    // Without the fast-fail open helper this took node-simconnect's 5 s open timeout.
+    assert.ok(Date.now() - started < 3000, `fallback took ${Date.now() - started} ms`);
+    assert.equal(conn.simName, "MSFS 2020");
+    assert.equal(conn.protocol, "KittyHawk");
+    assert.equal(conn.version, "11.0.282174.999");
+    const opens = h.emu.packets.filter((p) => p.fn === FN.OPEN);
+    assert.deepEqual(
+      opens.map((p) => [p.protocol, p.fields["alias"]]),
+      [
+        [6, "RS"],
+        [5, "HK"],
+      ],
+    );
+    assert.ok(
+      h.logs.some((l) =>
+        /open with SunRise failed: open refused: VERSION_MISMATCH/.test(l.message),
+      ),
+    );
+  });
+
+  it("MSFS 2020 that just closes the connection on SunRise also falls back", async () => {
+    const started = Date.now();
+    const h = await harness({ profile: "msfs2020", unsupportedProtocol: "close" });
+    const conn = await waitFor(() => connectedUpdates(h.updates)[0], "connected");
+    assert.ok(Date.now() - started < 3000, `fallback took ${Date.now() - started} ms`);
+    assert.equal(conn.simName, "MSFS 2020");
+    assert.equal(conn.protocol, "KittyHawk");
+  });
+
+  it("the name follows applicationName, not the protocol; unknown names fall back to the protocol", async () => {
+    const a = await harness({ profile: "msfs2024", applicationName: "KittyHawk" });
+    const connA = await waitFor(() => connectedUpdates(a.updates)[0], "connected A");
+    assert.equal(connA.simName, "MSFS 2020");
+    assert.equal(connA.protocol, "SunRise");
+    const b = await harness({ profile: "msfs2024", applicationName: "FutureSim" });
+    const connB = await waitFor(() => connectedUpdates(b.updates)[0], "connected B");
+    assert.equal(connB.simName, "MSFS 2024");
+  });
+
+  it("nothing listening: stays offline, says so once at info level, keeps retrying", async () => {
+    const emu = await SimConnectEmulator.start();
+    const port = emu.port;
+    await emu.close();
+    const logs: Array<{ level: LogLevel; message: string }> = [];
+    const updates: SimUpdate[] = [];
+    const source = new SimConnectSource({
+      log: (level, message) => logs.push({ level, message }),
+      remote: { host: "127.0.0.1", port },
+      retryMinMs: 50,
+      retryMaxMs: 50,
+    });
+    source.subscribe((u) => updates.push(u));
+    source.start();
+    try {
+      await waitFor(
+        () => logs.filter((l) => /Simulator not reachable/.test(l.message)).length >= 3,
+        "three attempts",
+        // Windows retries a refused loopback connect for ~2 s before failing it.
+        30_000,
+      );
+      const notReachable = logs.filter((l) => /Simulator not reachable/.test(l.message));
+      assert.equal(notReachable[0]?.level, "info");
+      assert.ok(notReachable.slice(1).every((l) => l.level === "debug"));
+      assert.equal(source.link().connected, false);
+      assert.equal(connectedUpdates(updates).length, 0);
+    } finally {
+      await source.stop();
+    }
+  });
+});
+
+describe("SimConnect emulator: data definitions and decoding (PC-07/08/09 decode path)", () => {
+  it("every SimVar in the table is defined with the right type and decodes into telemetry", async () => {
+    const h = await harness();
+    await waitFor(() => latest(h.updates, "payload"), "slow data");
+    await waitFor(() => latest(h.updates, "motion"), "fast data");
+
+    // Every table entry was sent (indexed ones per engine / station), as the right data type.
+    const defined = h.emu.packets.filter((p) => p.fn === FN.ADD_TO_DATA_DEFINITION);
+    const counts = { engines: 1, stations: 2 };
+    const expected = [
+      ...buildDatums("fast", counts),
+      ...buildDatums("counts", counts),
+      ...buildDatums("slow", counts),
+    ];
+    for (const d of expected) {
+      const p = defined.find((x) => x.fields["name"] === d.simvar);
+      assert.ok(p, `defined ${d.simvar}`);
+      const type =
+        d.type === "f64"
+          ? DATATYPE.FLOAT64
+          : d.type === "string64"
+            ? DATATYPE.STRING64
+            : DATATYPE.STRING256;
+      assert.equal(p.fields["type"], type, `${d.simvar} type`);
+      assert.equal(p.fields["unit"], d.unit ?? "", `${d.simvar} unit`);
+    }
+    for (const spec of SIMVARS) {
+      assert.ok(
+        defined.some((p) => String(p.fields["name"]).split(":")[0] === spec.name),
+        `table entry ${spec.name}`,
+      );
+    }
+    assert.equal(h.logs.filter((l) => /SimConnect rejected/.test(l.message)).length, 0);
+    assert.equal(h.logs.filter((l) => /Dropped a/.test(l.message)).length, 0);
+    assert.ok(h.logs.some((l) => l.message === "Aircraft has 1 engine(s), 2 payload station(s)"));
+
+    assert.deepEqual(latest(h.updates, "position"), {
+      lat: 35.0424,
+      lon: -89.9767,
+      altFt: 341,
+      aglFt: 0,
+    });
+    assert.deepEqual(latest(h.updates, "motion"), {
+      iasKt: 0,
+      tasKt: 0,
+      gsKt: 0,
+      hdgMagDeg: 178,
+      hdgTrueDeg: 179.5,
+      vsFpm: 0,
+      gForce: 1,
+      onGround: true,
+      touchdownVelocityFpm: 0,
+      touchdownBankDeg: 0,
+      touchdownPitchDeg: 0,
+    });
+    assert.deepEqual(latest(h.updates, "aircraft"), {
+      title: "Emulated Caravan 208B",
+      atcId: "N208EM",
+    });
+    assert.deepEqual(latest(h.updates, "fuel"), {
+      totalGal: 335.5,
+      totalLb: 2247.9,
+      flowPph: [62.5],
+    });
+    assert.deepEqual(latest(h.updates, "payload"), {
+      stations: [
+        { name: "Pilot", weightLb: 170 },
+        { name: "Cargo", weightLb: 400 },
+      ],
+    });
+    assert.deepEqual(latest(h.updates, "weights"), {
+      totalLb: 7417.9,
+      emptyLb: 4600,
+      maxGrossLb: 8807,
+      payloadLb: 570,
+    });
+    assert.deepEqual(latest(h.updates, "engines"), { running: [true] });
+    assert.deepEqual(latest(h.updates, "controls"), { parkingBrake: true });
+    assert.deepEqual(latest(h.updates, "sim"), {
+      connected: true,
+      paused: false,
+      simRate: 1,
+      name: "MSFS 2024",
+    });
+    assert.equal(h.source.zulu, "2026-10-13T14:00:00.000Z");
+    assert.equal(h.source.simRunning, true);
+  });
+
+  it("follows changing values (a takeoff roll) at the throttled fast rate", async () => {
+    const h = await harness();
+    await waitFor(() => latest(h.updates, "motion"), "fast data");
+    const mark = h.updates.length;
+    h.emu.set({
+      "PLANE ALT ABOVE GROUND": 1500,
+      "INDICATED ALTITUDE": 1841,
+      "AIRSPEED INDICATED": 120,
+      "AIRSPEED TRUE": 124,
+      "GROUND VELOCITY": 130,
+      "VERTICAL SPEED": 700,
+      "SIM ON GROUND": 0,
+    });
+    const motion = await waitFor(() => {
+      const m = latest(h.updates, "motion", mark);
+      return m && m.onGround === false ? m : undefined;
+    }, "airborne motion");
+    assert.equal(motion.iasKt, 120);
+    assert.equal(motion.vsFpm, 700);
+    // Above 1,000 ft AGL the fast domains are throttled to 5 Hz (emulator sends at 25 Hz).
+    const t0 = Date.now();
+    const before = h.updates.filter((u) => u.type === "data" && u.patch.position).length;
+    await new Promise((r) => setTimeout(r, 1000));
+    const n = h.updates.filter((u) => u.type === "data" && u.patch.position).length - before;
+    const elapsed = (Date.now() - t0) / 1000;
+    assert.ok(n >= 3 && n <= 6.5 * elapsed, `${n} fast patches in ${elapsed.toFixed(2)} s`);
+  });
+});
+
+describe("SimConnect emulator: rejected SimVars", () => {
+  it("logs 'SimConnect rejected', drops the datum and keeps everything else working", async () => {
+    // One fast and one slow SimVar rejected: their exceptions land in the same 250 ms rebuild
+    // window. Before the fix only the last group was rebuilt and fast data never came back.
+    const h = await harness({ reject: ["PLANE TOUCHDOWN PITCH DEGREES", "PAYLOAD STATION NAME"] });
+    await waitFor(
+      () => h.logs.filter((l) => /SimConnect rejected/.test(l.message)).length >= 2,
+      "two rejections",
+    );
+    const rejected = h.logs.filter((l) => /SimConnect rejected/.test(l.message));
+    assert.ok(rejected.every((l) => l.level === "warn"));
+    assert.ok(
+      rejected.some((l) =>
+        l.message.startsWith(
+          'SimConnect rejected "PLANE TOUCHDOWN PITCH DEGREES" (degrees): NAME_UNRECOGNIZED. ' +
+            "Dropping PLANE TOUCHDOWN PITCH DEGREES;",
+        ),
+      ),
+    );
+    assert.ok(
+      rejected.some((l) =>
+        /"PAYLOAD STATION NAME:1" \(string\): NAME_UNRECOGNIZED/.test(l.message),
+      ),
+    );
+    const mark = h.updates.length;
+    // Fast data comes back without the rejected touchdown pitch (never guessed).
+    const motion = await waitFor(
+      () => latest(h.updates, "motion", mark),
+      "fast data after rebuild",
+    );
+    assert.equal(motion.onGround, true);
+    assert.equal(motion.touchdownPitchDeg, undefined);
+    assert.equal(motion.touchdownBankDeg, 0);
+    assert.ok(latest(h.updates, "position", mark));
+    // Slow data comes back; stations without a name get the "Station i" label.
+    const payload = await waitFor(
+      () => latest(h.updates, "payload", mark),
+      "slow data after rebuild",
+    );
+    assert.deepEqual(payload, {
+      stations: [
+        { name: "Station 1", weightLb: 170 },
+        { name: "Station 2", weightLb: 400 },
+      ],
+    });
+    // The rebuilt definitions no longer contain the rejected names.
+    const lastFast = h.emu.packets.filter(
+      (p) => p.fn === FN.ADD_TO_DATA_DEFINITION && p.fields["name"] === "PLANE LATITUDE",
+    );
+    assert.ok(lastFast.length >= 2, "fast definition rebuilt");
+    const pitch = h.emu.definedNames().filter((n) => n === "PLANE TOUCHDOWN PITCH DEGREES");
+    assert.equal(pitch.length, 1, "PLANE TOUCHDOWN PITCH DEGREES not requested again");
+  });
+
+  it("an unknown SIMULATION RATE leaves the sim domain unreported (nothing guessed)", async () => {
+    const h = await harness({ reject: ["SIMULATION RATE"] });
+    await waitFor(
+      () => h.logs.some((l) => /SimConnect rejected "SIMULATION RATE"/.test(l.message)),
+      "rejection",
+    );
+    const mark = h.updates.length;
+    await waitFor(() => latest(h.updates, "fuel", mark), "slow data after rebuild");
+    assert.equal(latest(h.updates, "sim"), undefined);
+  });
+});
+
+describe("SimConnect emulator: system events (PC-11/14/21/22 logic)", () => {
+  it("Pause_EX1 / Pause / EX1-shaped events and sim-rate changes are reported", async () => {
+    const h = await harness();
+    await waitFor(() => latest(h.updates, "sim"), "sim domain");
+    let mark = h.updates.length;
+    h.emu.pause(4); // ACTIVE_PAUSE
+    await waitFor(() => events(h.updates, "sim.paused", mark).length > 0, "paused");
+    assert.deepEqual(events(h.updates, "sim.paused", mark)[0], {
+      paused: true,
+      event: "Pause_EX1",
+      flags: 4,
+    });
+    await waitFor(() => latest(h.updates, "sim", mark)?.paused === true, "sim.paused true");
+    mark = h.updates.length;
+    h.emu.pause(0);
+    await waitFor(() => events(h.updates, "sim.paused", mark).length > 0, "unpaused");
+    assert.equal((events(h.updates, "sim.paused", mark)[0] as { paused: boolean }).paused, false);
+    // The legacy Pause event that follows does not flip it back.
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(events(h.updates, "sim.paused", mark).length, 1);
+
+    // Active pause delivered in the SIMCONNECT_RECV_EVENT_EX1 shape.
+    mark = h.updates.length;
+    h.emu.systemEventEx1("Pause_EX1", [2]);
+    await waitFor(() => events(h.updates, "sim.paused", mark).length > 0, "EX1 pause");
+    assert.deepEqual(events(h.updates, "sim.paused", mark)[0], {
+      paused: true,
+      event: "Pause_EX1",
+      flags: 2,
+    });
+    h.emu.pause(0);
+    await waitFor(() => latest(h.updates, "sim")?.paused === false, "running again");
+
+    // SIM_PAUSE (8, esc menu) is a pause too; the old 0b111 mask read it as running.
+    mark = h.updates.length;
+    h.emu.pause(8);
+    await waitFor(() => events(h.updates, "sim.paused", mark).length > 0, "SIM_PAUSE");
+    assert.deepEqual(events(h.updates, "sim.paused", mark)[0], {
+      paused: true,
+      event: "Pause_EX1",
+      flags: 8,
+    });
+    h.emu.pause(0);
+    await waitFor(() => latest(h.updates, "sim")?.paused === false, "running after SIM_PAUSE");
+
+    mark = h.updates.length;
+    h.emu.set({ "SIMULATION RATE": 4 });
+    await waitFor(() => events(h.updates, "sim.rate", mark).length > 0, "sim.rate");
+    assert.deepEqual(events(h.updates, "sim.rate", mark)[0], { rate: 4 });
+    await waitFor(() => latest(h.updates, "sim", mark)?.simRate === 4, "sim domain rate 4");
+  });
+
+  it("AircraftLoaded re-reads engine and station counts and redefines the slow data", async () => {
+    const h = await harness();
+    await waitFor(() => latest(h.updates, "payload"), "first aircraft");
+    const mark = h.updates.length;
+    h.emu.loadAircraft(
+      {
+        TITLE: "Emulated King Air 350",
+        "NUMBER OF ENGINES": 2,
+        "PAYLOAD STATION COUNT": 3,
+        "ENG FUEL FLOW PPH:2": 70,
+        "GENERAL ENG COMBUSTION:2": 0,
+        "PAYLOAD STATION WEIGHT:3": 250,
+        "PAYLOAD STATION NAME:3": "Aft cargo",
+      },
+      "SimObjects\\Airplanes\\Emulated_KingAir\\aircraft.cfg",
+    );
+    await waitFor(
+      () => h.logs.some((l) => l.message === "Aircraft has 2 engine(s), 3 payload station(s)"),
+      "new counts",
+    );
+    assert.ok(
+      h.logs.some(
+        (l) =>
+          l.message ===
+          "System event AircraftLoaded: SimObjects\\Airplanes\\Emulated_KingAir\\aircraft.cfg",
+      ),
+    );
+    const engines = await waitFor(() => {
+      const e = latest(h.updates, "engines", mark);
+      return e?.running?.length === 2 ? e : undefined;
+    }, "two engines");
+    assert.deepEqual(engines, { running: [true, false] });
+    const payload = await waitFor(() => latest(h.updates, "payload", mark), "three stations");
+    assert.equal(payload.stations?.length, 3);
+    assert.deepEqual(payload.stations?.[2], { name: "Aft cargo", weightLb: 250 });
+    assert.deepEqual(latest(h.updates, "fuel", mark)?.flowPph, [62.5, 70]);
+    assert.equal(latest(h.updates, "aircraft", mark)?.title, "Emulated King Air 350");
+    const names = h.emu.definedNames();
+    assert.ok(names.includes("GENERAL ENG COMBUSTION:2"));
+    assert.ok(names.includes("PAYLOAD STATION WEIGHT:3"));
+    // The old slow definition was cleared and its request stopped.
+    assert.ok(h.emu.packets.some((p) => p.fn === FN.CLEAR_DATA_DEFINITION));
+    assert.ok(
+      h.emu.packets.some((p) => p.fn === FN.REQUEST_DATA_ON_SIM_OBJECT && p.fields["period"] === 0),
+    );
+
+    // FlightLoaded does the same (a different aircraft may come with the flight).
+    const before = h.emu.packets.filter((p) => p.fn === FN.REQUEST_DATA_ON_SIM_OBJECT).length;
+    h.emu.systemEvent("FlightLoaded", 0, "flights\\other\\emulated.FLT");
+    await waitFor(
+      () => h.emu.packets.filter((p) => p.fn === FN.REQUEST_DATA_ON_SIM_OBJECT).length > before,
+      "counts re-requested",
+    );
+  });
+
+  it("Crashed emits the crash event", async () => {
+    const h = await harness();
+    await waitFor(() => connectedUpdates(h.updates)[0], "connected");
+    await waitFor(
+      () =>
+        h.emu.packets.some(
+          (p) => p.fn === FN.SUBSCRIBE_TO_SYSTEM_EVENT && p.fields["name"] === "Crashed",
+        ),
+      "subscribed",
+    );
+    const mark = h.updates.length;
+    assert.equal(h.emu.systemEvent("Crashed"), 1);
+    await waitFor(() => events(h.updates, "crash", mark).length > 0, "crash event");
+    assert.ok(h.logs.some((l) => l.level === "warn" && l.message === "System event Crashed"));
+  });
+});
+
+describe("SimConnect emulator: connection loss (PC-13 logic)", () => {
+  it("drop → offline → simulator back → live again without a restart", async () => {
+    const h = await harness();
+    await waitFor(() => latest(h.updates, "sim"), "first session data");
+    const mark = h.updates.length;
+    h.emu.setAccepting(false); // the simulator is gone for a while
+    h.emu.drop();
+    const lost = await waitFor(
+      () => h.updates.slice(mark).find((u) => u.type === "disconnected"),
+      "disconnected",
+    );
+    assert.deepEqual(lost, { type: "disconnected", reason: "SimConnect connection closed" });
+    assert.equal(h.source.link().connected, false);
+    assert.deepEqual(events(h.updates, "sim.disconnected", mark), [
+      { reason: "SimConnect connection closed" },
+    ]);
+    await waitFor(
+      () => h.logs.some((l) => /Simulator not reachable/.test(l.message)),
+      "a failed reconnect attempt",
+    );
+    const accepted = h.emu.connectionsAccepted;
+    h.emu.setAccepting(true);
+    await waitFor(() => connectedUpdates(h.updates.slice(mark))[0], "reconnected");
+    assert.equal(h.source.link().connected, true);
+    assert.ok(h.emu.connectionsAccepted > accepted);
+    // The new session redefines everything and data flows again.
+    const mark2 = h.updates.length;
+    await waitFor(() => latest(h.updates, "payload", mark2), "slow data again");
+    await waitFor(() => latest(h.updates, "position", mark2), "fast data again");
+    assert.equal(h.emu.openConnections, 1);
+  });
+
+  it("RECV_QUIT → offline with reason 'simulator quit', then reconnects", async () => {
+    const h = await harness();
+    await waitFor(() => latest(h.updates, "position"), "data");
+    const mark = h.updates.length;
+    h.emu.quit();
+    const lost = await waitFor(
+      () => h.updates.slice(mark).find((u) => u.type === "disconnected"),
+      "disconnected",
+    );
+    assert.deepEqual(lost, { type: "disconnected", reason: "simulator quit" });
+    await waitFor(() => connectedUpdates(h.updates.slice(mark))[0], "reconnected");
+    await waitFor(() => latest(h.updates, "position", mark), "data again");
+  });
+});
+
+describe("SimConnect emulator: AI traffic by type (PC-38 logic)", () => {
+  const KMEM = { fboId: "fbo-1", icao: "KMEM", lat: 35.0424, lon: -89.9767 };
+  const ai = (
+    objectId: number,
+    lat: number,
+    lon: number,
+    onGround: number,
+    gs: number,
+    atc: string,
+  ) => ({
+    objectId,
+    values: {
+      "PLANE LATITUDE": lat,
+      "PLANE LONGITUDE": lon,
+      "SIM ON GROUND": onGround,
+      "GROUND VELOCITY": gs,
+      "ATC ID": atc,
+    },
+  });
+  const traffic = [
+    ai(201, 35.06, -89.98, 0, 140, "FDX123"),
+    ai(202, 35.04, -89.97, 1, 12, "DAL456"),
+    ai(203, 40.64, -73.78, 1, 0, "JBU1"), // JFK: outside the request radius
+  ];
+
+  for (const first of [1, 0] as const) {
+    it(`requests AIRCRAFT within 200 km, reads every entry (numbering from ${first}), skips the user aircraft`, async () => {
+      const h = await harness(
+        { aiObjects: traffic, byTypeFirstEntry: first },
+        { aiSampleIntervalMs: 100 },
+      );
+      h.source.setAiTargetsProvider(() => [KMEM]);
+      const batch = await waitFor(
+        () =>
+          h.updates.find(
+            (u): u is Extract<SimUpdate, { type: "aiTraffic" }> => u.type === "aiTraffic",
+          ),
+        "an AI batch",
+      );
+      const req = h.emu.packets.find((p) => p.fn === FN.REQUEST_DATA_ON_SIM_OBJECT_TYPE);
+      assert.ok(req);
+      assert.equal(req.fields["type"], 2, "SIMCONNECT_SIMOBJECT_TYPE_AIRCRAFT");
+      assert.ok(Number(req.fields["radius"]) <= 200_000);
+      assert.deepEqual(
+        batch.samples.sort((a, b) => a.objectId - b.objectId),
+        [
+          { objectId: 201, lat: 35.06, lon: -89.98, onGround: false, gsKt: 140, atcId: "FDX123" },
+          { objectId: 202, lat: 35.04, lon: -89.97, onGround: true, gsKt: 12, atcId: "DAL456" },
+        ],
+      );
+      assert.ok(
+        !batch.samples.some((s) => s.objectId === h.emu.userObjectId),
+        "user aircraft excluded",
+      );
+      assert.equal(h.logs.filter((l) => /exception/i.test(l.message)).length, 0);
+      // A second sample is taken on the next interval (the first one completed).
+      await waitFor(
+        () => h.updates.filter((u) => u.type === "aiTraffic").length >= 2,
+        "a second AI batch",
+      );
+    });
+  }
+
+  it("an empty area gives an empty batch; no FBO in reach sends no request", async () => {
+    const h = await harness(
+      { aiObjects: [], includeUserInTypeRequests: false },
+      { aiSampleIntervalMs: 100 },
+    );
+    let targets: (typeof KMEM)[] = [];
+    h.source.setAiTargetsProvider(() => targets);
+    await waitFor(() => latest(h.updates, "position"), "position");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(
+      h.emu.packets.filter((p) => p.fn === FN.REQUEST_DATA_ON_SIM_OBJECT_TYPE).length,
+      0,
+    );
+    targets = [KMEM];
+    const batch = await waitFor(
+      () =>
+        h.updates.find(
+          (u): u is Extract<SimUpdate, { type: "aiTraffic" }> => u.type === "aiTraffic",
+        ),
+      "an empty batch",
+    );
+    assert.deepEqual(batch.samples, []);
+  });
+});
+
+describe("SimConnect emulator: real connector CLI end to end", () => {
+  let child: ChildProcess | null = null;
+  let emu: SimConnectEmulator | null = null;
+  const tmp = tempDir();
+
+  after(async () => {
+    if (child && child.exitCode === null) {
+      const exited = new Promise((r) => child?.once("exit", r));
+      child.kill();
+      await exited;
+    }
+    await emu?.close();
+    tmp.cleanup();
+  });
+
+  it("CLI with --simconnect-host/--simconnect-port: welcome is live MSFS 2024, frames are source 'sim'", async () => {
+    emu = await SimConnectEmulator.start({ values: CARAVAN, secondMs: 200 });
+    child = spawn(
+      process.execPath,
+      [
+        "--disable-warning=ExperimentalWarning",
+        MAIN,
+        "--port",
+        "0",
+        "--data-dir",
+        tmp.dir,
+        "--simconnect-host",
+        "127.0.0.1",
+        "--simconnect-port",
+        String(emu.port),
+      ],
+      { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+    );
+    let out = "";
+    child.stdout?.setEncoding("utf8").on("data", (s: string) => (out += s));
+    child.stderr?.setEncoding("utf8").on("data", (s: string) => (out += s));
+    const port = await waitFor(
+      () => /Cargo Ops is running at http:\/\/127\.0\.0\.1:(\d+)\//.exec(out)?.[1],
+      "the connector to listen",
+      15_000,
+    ).catch((err: Error) => {
+      throw new Error(`${err.message}\n--- connector output ---\n${out}`);
+    });
+    // The connector itself connected to the emulator.
+    await waitFor(() => emu?.openConnections === 1, "SimConnect session", 10_000);
+    await waitFor(() => /Connected to SunRise \(MSFS 2024\)/.test(out), "connected log line");
+
+    const token = (JSON.parse(readFileSync(configPath(tmp.dir), "utf8")) as { token: string })
+      .token;
+    const client = await connectClient(`ws://127.0.0.1:${port}/ws`, `http://127.0.0.1:${port}`);
+    // Every failure below carries the connector's output and what the client received.
+    const diag = () =>
+      `\n--- received: ${client.messages.map((m) => m.type).join(", ") || "nothing"}` +
+      `\n--- connector output ---\n${out}`;
+    const onlyFrames = (m: ServerMessage) =>
+      (m.type === "snapshot" || m.type === "delta") && "source" in m && m.source === "sim";
+    try {
+      client.send(hello(token));
+      const welcome = await client
+        .next((m) => m.type === "welcome", 10_000)
+        .catch((err: Error) => {
+          throw new Error(`welcome: ${err.message}${diag()}`);
+        });
+      assert.equal(welcome.type, "welcome");
+      if (welcome.type !== "welcome") return;
+      assert.equal(welcome.mode, "live", diag());
+      assert.deepEqual(
+        welcome.sim,
+        { connected: true, name: "MSFS 2024", version: "12.1.282174.999", protocol: "SunRise" },
+        diag(),
+      );
+      // Telemetry from the emulator reaches the browser side. Deltas only carry what changed,
+      // so the position is in the snapshot when the connector had it before the hello (as on
+      // a slower Windows runner) and in a later delta otherwise: look at every frame received.
+      await waitFor(
+        () =>
+          client.messages.some(
+            (m) =>
+              onlyFrames(m) &&
+              ((m.type === "snapshot" && m.state.position?.lat === 35.0424) ||
+                (m.type === "delta" && m.patch.position?.lat === 35.0424)),
+          ),
+        "a sim frame with the emulated position",
+        10_000,
+      ).catch((err: Error) => {
+        throw new Error(`${err.message}${diag()}`);
+      });
+      for (const m of client.messages) {
+        if ("source" in m) assert.equal(m.source, "sim", `${m.type} frame source${diag()}`);
+      }
+    } finally {
+      client.ws.close();
+    }
+  });
+});
