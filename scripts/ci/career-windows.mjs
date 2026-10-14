@@ -8,7 +8,7 @@
 //   1. a P3 install's cargo-ops.db (schema 3) migrates to the current schema on start
 //   2. a P4 install's cargo-ops.db (schema 4) migrates on start; its aircraft get P5 systems
 //   3. a fresh career: export → import → export is identical (except exportedAt)
-//   4. version 3, 2 and 1 exports derived from it (as older builds wrote them) import, and the
+//   4. version 4, 3, 2 and 1 exports derived from it (as older builds wrote them) import, and the
 //      next export is the current version
 //
 // Not covered here: "import refused during a flight" needs an active flight (real sim or a
@@ -205,7 +205,7 @@ run("career-windows", async () => {
   await withConnector("career-roundtrip", dataDir, port, async (c, token) => {
     const e1 = await exportJson(c, token);
     assertEqual(e1.format, "cargo-ops-career", "export format");
-    assertEqual(e1.version, 4, "export is version 4");
+    assertEqual(e1.version, 5, "export is version 5");
     assertEqual(e1.database, "live", "export comes from the live database");
     assert(e1.company !== null, "a company exists");
 
@@ -213,6 +213,21 @@ run("career-windows", async () => {
     assertEqual(imported.status, 200, "POST /api/import of the export");
     const e2 = await exportJson(c, token);
     assertEqual(withoutStamp(e2), withoutStamp(e1), "export → import → export is identical");
+
+    // Version 4 (P5 part 2, before transit cargo): no long-haul or in-transit jobs.
+    const v4 = {
+      ...e1,
+      version: 4,
+      company: { ...e1.company, name: "Imported V4 Co" },
+      jobs: e1.jobs
+        .filter((j) => j.status !== "in_transit")
+        .map(({ longHaul: _lh, transit: _t, ...j }) => j),
+      missions: e1.missions.map(({ transitJobIds: _tj, startedGameMs: _sg, ...m }) => m),
+    };
+    const r4 = await api(c.base, token, "POST", "/api/import", v4);
+    assertEqual(r4.status, 200, "POST /api/import of a version 4 export");
+    const after4 = await exportJson(c, token);
+    assertEqual([after4.version, after4.company?.name], [5, "Imported V4 Co"], "v4 → current");
 
     // Version 3 (P5 part 1): no FBO keys; company and fleet without P5-part-2 fields.
     const {
@@ -238,7 +253,7 @@ run("career-windows", async () => {
     const r3 = await api(c.base, token, "POST", "/api/import", v3);
     assertEqual(r3.status, 200, "POST /api/import of a version 3 export");
     const after3 = await exportJson(c, token);
-    assertEqual([after3.version, after3.company?.name], [4, "Imported V3 Co"], "v3 → current");
+    assertEqual([after3.version, after3.company?.name], [5, "Imported V3 Co"], "v3 → current");
     const fleet3 = await api(c.base, token, "GET", "/api/fleet");
     assertEqual(
       fleet3.body.aircraft?.[0]?.insurance?.insured,
@@ -265,7 +280,7 @@ run("career-windows", async () => {
     const r2 = await api(c.base, token, "POST", "/api/import", v2);
     assertEqual(r2.status, 200, "POST /api/import of a version 2 export");
     const after2 = await exportJson(c, token);
-    assertEqual([after2.version, after2.company?.name], [4, "Imported V2 Co"], "v2 → current");
+    assertEqual([after2.version, after2.company?.name], [5, "Imported V2 Co"], "v2 → current");
     const fleet2 = await api(c.base, token, "GET", "/api/fleet");
     assertEqual(fleet2.body.aircraft?.[0]?.systems?.length, 10, "v2 aircraft get the P5 systems");
 
@@ -295,7 +310,7 @@ run("career-windows", async () => {
     const r1 = await api(c.base, token, "POST", "/api/import", v1);
     assertEqual(r1.status, 200, "POST /api/import of a version 1 export");
     const after1 = await exportJson(c, token);
-    assertEqual([after1.version, after1.company?.name], [4, "Imported V1 Co"], "v1 → current");
+    assertEqual([after1.version, after1.company?.name], [5, "Imported V1 Co"], "v1 → current");
     assertEqual(after1.company?.cash, 251_000, "v1 cash kept");
     assertEqual(after1.ledger[0]?.category, "mission_payout", "v1 job_payout → mission_payout");
     const fleet1 = await api(c.base, token, "GET", "/api/fleet");
