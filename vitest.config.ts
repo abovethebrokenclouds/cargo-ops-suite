@@ -15,6 +15,7 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
       "@cargo-ops/protocol": path.resolve(__dirname, "./packages/protocol/src/index.ts"),
       "@cargo-ops/economy": path.resolve(__dirname, "./packages/economy/src/index.ts"),
+      "@cargo-ops/weather": path.resolve(__dirname, "./packages/weather/src/index.ts"),
     },
   },
 });
