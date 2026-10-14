@@ -1,7 +1,7 @@
 // Authenticated /api routes for cargo operations (the server checks the bearer
 // token before any of these run):
 //
-//   GET  /api/jobs                 → jobs domain (boards, available, accepted, aircraft)
+//   GET  /api/jobs                 → jobs domain (boards, available, accepted, inTransit, aircraft)
 //   GET  /api/missions             → { missions } newest first (≤ 50)
 //   GET  /api/ledger?limit&before&category → { entries (newest first), months, cash,
 //                                    startingCash, sum, count, balanced }
