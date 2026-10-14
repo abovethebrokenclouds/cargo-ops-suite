@@ -138,6 +138,19 @@ place where you switch aircraft).
   hangar, maintenance shop, cargo terminal, ramp), set fuel and handling prices. Income comes from
   your own arrivals (fuel at cost, no landing fee), a modelled traffic stream, and — live only —
   a bonus for AI aircraft the sim shows landing there.
+- **Hired pilots** (Fleet page, "Hired pilots" tab), labelled **Hired pilot (simulated)**: hire
+  a turboprop ($7,500 a month) or jet ($14,000) pilot, then give one of your owned, airworthy
+  aircraft a route from where it is parked to an airport you serve (your base, fleet and FBO
+  airports, the job board's airports, recent deliveries). The pilot flies it back and forth on
+  the company clock, departing between 06:00 and 20:00 in-game, and earns half of what the job
+  board would pay you for a similar load; fuel, landing fees and wear are booked as for your own
+  flights, and the tab shows each pilot's monthly P&L. This is a simulated economy model, not
+  your flying: nothing appears in the logbook, no landing is graded, and it never counts toward
+  your hours or landing streak. The aircraft is not yours to fly until you unassign the pilot
+  (a mission load on it is refused with that reason). A defect that grounds it stops the route;
+  repair it and assign again. At hiring you pay the wage for the rest of the in-game month (pro-rated), then the
+  full wage each month; nothing is refunded when you let a pilot go. While a pilot flies it, the
+  aircraft cannot be sold, repaired, insured or pledged for a loan either.
 
 Formulas and worked examples: `docs/ECONOMY.md`.
 

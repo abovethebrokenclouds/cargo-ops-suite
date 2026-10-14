@@ -416,6 +416,24 @@ test.describe("demo mode (no connector)", () => {
     await expect(page.getByTestId("market-refresh")).toBeDisabled();
   });
 
+  test("/fleet hired pilots: a DEMO pilot labelled simulated, every action disabled", async ({
+    page,
+  }) => {
+    await page.goto("/fleet");
+    await expect(page.getByTestId("fleet-card")).toHaveCount(3, { timeout: 30_000 });
+    await page.getByTestId("tab-hired-pilots").click();
+    await expect(page.getByTestId("pilots-disabled-note")).toBeVisible();
+    const card = page.getByTestId("pilot-card");
+    await expect(card).toHaveCount(1);
+    await expect(card.getByTestId("simulated-tag")).toHaveText("Hired pilot (simulated)");
+    await expect(card.getByText("DEMO")).toBeVisible();
+    await expect(card.getByTestId("pilot-route")).toContainText("KMEM ⇄ KBNA");
+    await expect(card.getByTestId("pilot-pnl")).toBeVisible();
+    await expect(page.getByTestId("hire-pilot")).toBeDisabled();
+    await expect(card.getByTestId("unassign-pilot")).toBeDisabled();
+    await expect(card.getByTestId("fire-pilot")).toBeDisabled();
+  });
+
   test("/fbo shows the DEMO FBO with modules, chart and P&L; every action disabled", async ({
     page,
   }) => {

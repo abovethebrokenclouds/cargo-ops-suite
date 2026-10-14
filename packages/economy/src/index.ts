@@ -28,5 +28,7 @@ export * from "./fbo";
 export * from "./demand";
 export * from "./insurance";
 export * from "./milestones";
+// Hired pilots: simulated operations on fixed routes (never telemetry).
+export * from "./hired-pilots";
 // Transit cargo: jobs carried over several legs, paid on the final delivery.
 export * from "./transit";

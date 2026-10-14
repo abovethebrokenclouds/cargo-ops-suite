@@ -9,6 +9,7 @@ import type {
   LedgerState,
   LoansState,
   MarketState,
+  PilotsState,
 } from "@cargo-ops/protocol";
 import { buildDemoCompany, reputationTier, type AirportLookup } from "@cargo-ops/economy";
 
@@ -20,6 +21,7 @@ export interface DemoDomains {
   market: MarketState;
   fbos: FbosState;
   demand: DemandState;
+  pilots: PilotsState;
 }
 
 /** The seeded DEMO company's domains (deterministic for the bundled airport list). */
@@ -41,5 +43,6 @@ export function demoDomains(lookup: AirportLookup): DemoDomains {
     market: book.marketDomain(),
     fbos: book.fbosDomain(),
     demand: book.demandDomain(),
+    pilots: book.pilotsDomain(),
   };
 }

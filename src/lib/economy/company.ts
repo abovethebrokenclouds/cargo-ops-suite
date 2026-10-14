@@ -12,6 +12,7 @@ import type {
   LedgerState,
   LoansState,
   MarketState,
+  PilotsState,
   Source,
 } from "@cargo-ops/protocol";
 import type { AirportLookup } from "@cargo-ops/economy";
@@ -33,6 +34,8 @@ export interface CompanyView {
   /** P5 part 2: owned FBOs and local demand. */
   fbos: FbosState | null;
   demand: DemandState | null;
+  /** Hired pilots (simulated operations, never telemetry). */
+  pilots: PilotsState | null;
   /** True when commands go to a real connector. */
   connector: boolean;
   demo: boolean;
@@ -112,6 +115,7 @@ export function useCompanyView(state: ClientSimState, lookup: AirportLookup | nu
       market: demoData?.market ?? null,
       fbos: demoData?.fbos ?? null,
       demand: demoData?.demand ?? null,
+      pilots: demoData?.pilots ?? null,
       connector: false,
       demo: true,
     };
@@ -126,6 +130,7 @@ export function useCompanyView(state: ClientSimState, lookup: AirportLookup | nu
     market: state.sim.market ?? null,
     fbos: state.sim.fbos ?? null,
     demand: state.sim.demand ?? null,
+    pilots: state.sim.pilots ?? null,
     connector: connected,
     demo: false,
   };
@@ -153,6 +158,8 @@ export const LEDGER_LABELS: Record<string, string> = {
   fbo_purchase: "FBO purchase",
   fbo_construction: "FBO construction",
   insurance_claim: "Insurance claim",
+  pilot_wage: "Hired pilot wage",
+  hired_income: "Hired pilot income (simulated)",
 };
 
 export const OWNERSHIP_LABELS = {

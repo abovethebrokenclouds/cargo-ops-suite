@@ -3,6 +3,7 @@ import { fleetDomainSchema, ledgerDomainSchema, loansDomainSchema } from "./comp
 import { companyDomainSchema, jobsDomainSchema, missionSchema } from "./economy";
 import { demandDomainSchema, fbosDomainSchema } from "./fbo";
 import { marketDomainSchema } from "./maintenance";
+import { pilotsDomainSchema } from "./pilots";
 
 // Simulator state domains carried in `snapshot.state` and `delta.patch`.
 // Units live in field names (Ft, Kt, Fpm, Deg, Lb, Gal, Pph, Nm, Sec) so no
@@ -230,6 +231,7 @@ export const simDomainSchemas = {
   market: marketDomainSchema,
   fbos: fbosDomainSchema,
   demand: demandDomainSchema,
+  pilots: pilotsDomainSchema,
 } as const;
 
 export type SimDomain = keyof typeof simDomainSchemas;
@@ -259,6 +261,7 @@ export const simStateSchema = z.object({
   market: marketDomainSchema.nullable().optional(),
   fbos: fbosDomainSchema.nullable().optional(),
   demand: demandDomainSchema.nullable().optional(),
+  pilots: pilotsDomainSchema.nullable().optional(),
 });
 
 /**
@@ -288,6 +291,7 @@ export const simStatePatchSchema = z.object({
   market: marketDomainSchema.partial().nullable().optional(),
   fbos: fbosDomainSchema.partial().nullable().optional(),
   demand: demandDomainSchema.partial().nullable().optional(),
+  pilots: pilotsDomainSchema.partial().nullable().optional(),
 });
 
 export type SimDomainState = z.infer<typeof simDomainSchema>;

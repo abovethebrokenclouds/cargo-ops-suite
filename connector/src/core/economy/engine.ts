@@ -59,8 +59,13 @@ import {
   fboSellArgsSchema,
   insuranceBuyArgsSchema,
   insuranceCancelArgsSchema,
+  pilotAssignArgsSchema,
+  pilotFireArgsSchema,
+  pilotHireArgsSchema,
+  pilotUnassignArgsSchema,
   type DemandState,
   type FbosState,
+  type PilotsState,
   type MarketState,
   loanPayoffArgsSchema,
   loanQuoteArgsSchema,
@@ -392,6 +397,7 @@ export class EconomyEngine {
       market: this.persistRead(() => this.repo?.listListings() ?? []) ?? [],
       ...(this.maintenance ? { maintenance: this.maintenance } : {}),
       fbos: this.persistRead(() => this.repo?.listFbos() ?? []) ?? [],
+      pilots: this.persistRead(() => this.repo?.listPilots() ?? []) ?? [],
       demandEvents:
         this.persistRead(
           () => this.repo?.listDemandEvents(Math.max(0, company.gameMs - 30 * 86_400_000)) ?? [],
@@ -504,6 +510,24 @@ export class EconomyEngine {
   }
 
   /**
+   * Airports the company serves besides what the book knows (base, fleet, FBOs, recent
+   * deliveries): the job board airports and their jobs' destinations.
+   */
+  private servedExtra(): string[] {
+    const out = new Set<string>(this.company.boards.map((b) => b.origin));
+    for (const j of this.jobs.values()) {
+      out.add(j.origin);
+      out.add(j.destination);
+    }
+    return [...out];
+  }
+
+  /** Hired pilots (simulated operations; never telemetry). */
+  pilotsDomain(): PilotsState {
+    return this.book.pilotsDomain(this.servedExtra());
+  }
+
+  /**
    * P5 part 2: a batch of AI aircraft from the connected simulator. New arrivals at an
    * own FBO airport are credited as a labelled bonus (source sim_ai).
    */
@@ -555,6 +579,7 @@ export class EconomyEngine {
     market: MarketState;
     fbos: FbosState;
     demand: DemandState;
+    pilots: PilotsState;
     mission?: Mission;
   } {
     return {
@@ -566,6 +591,7 @@ export class EconomyEngine {
       market: this.marketDomain(),
       fbos: this.fbosDomain(),
       demand: this.demandDomain(),
+      pilots: this.pilotsDomain(),
       ...(this.mission ? { mission: this.mission } : {}),
     };
   }
@@ -587,6 +613,7 @@ export class EconomyEngine {
       market: this.marketDomain(),
       fbos: this.fbosDomain(),
       demand: this.demandDomain(),
+      pilots: this.pilotsDomain(),
       ...(this.mission ? { mission: this.mission } : {}),
     });
   }
@@ -1413,6 +1440,7 @@ export class EconomyEngine {
       name.startsWith("market.") ||
       name.startsWith("fbo.") ||
       name.startsWith("insurance.") ||
+      name.startsWith("pilot.") ||
       name === "settings.update"
     );
   }
@@ -1423,7 +1451,8 @@ export class EconomyEngine {
       cmd.name.startsWith("loan.") ||
       cmd.name.startsWith("market.") ||
       cmd.name.startsWith("fbo.") ||
-      cmd.name.startsWith("insurance.")
+      cmd.name.startsWith("insurance.") ||
+      cmd.name.startsWith("pilot.")
         ? this.runCompany(cmd)
         : this.run(cmd);
     if (!r.ok) {
@@ -1800,6 +1829,39 @@ export class EconomyEngine {
         if (!p.success) return bad(p.error);
         return done(this.book.cancelInsurance(p.data.aircraftId));
       }
+      // ---- hired pilots (simulated operations) ----
+      case "pilot.hire": {
+        const p = pilotHireArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.hirePilot(p.data.rating));
+      }
+      case "pilot.fire": {
+        const p = pilotFireArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.firePilot(p.data.pilotId));
+      }
+      case "pilot.assign": {
+        const p = pilotAssignArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        // An aircraft with a loaded or flying mission stays with the player.
+        return (
+          onMission(p.data.aircraftId) ??
+          done(
+            this.book.assignPilot({
+              pilotId: p.data.pilotId,
+              aircraftId: p.data.aircraftId,
+              destination: p.data.destination,
+              ...(p.data.origin ? { origin: p.data.origin } : {}),
+              served: this.servedExtra(),
+            }),
+          )
+        );
+      }
+      case "pilot.unassign": {
+        const p = pilotUnassignArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return done(this.book.unassignPilot(p.data.pilotId));
+      }
       default:
         return fail(
           "not_implemented",
@@ -1947,6 +2009,16 @@ export class EconomyEngine {
     if (a.status === "maintenance") {
       const at = a.readyAtGameMs !== null ? ` until ${formatGameTime(a.readyAtGameMs)}` : "";
       return fail("aircraft_in_maintenance", `${a.registration} is in maintenance${at}`);
+    }
+    if (a.status === "hired") {
+      const pilot = this.book.pilotOf(a.id);
+      const route = pilot?.assignment
+        ? ` on ${pilot.assignment.origin}–${pilot.assignment.destination}`
+        : "";
+      return fail(
+        "aircraft_with_hired_pilot",
+        `${a.registration} is flown by hired pilot ${pilot?.name ?? ""}${route} (simulated): unassign the pilot on the Fleet page to fly it yourself`,
+      );
     }
     if (a.status !== "available") return fail("aircraft_busy", `${a.registration} is ${a.status}`);
     if (a.ferryPermit) {

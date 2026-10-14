@@ -132,6 +132,7 @@ interface list is re-read at most every 5 s when an unknown IP Host arrives (DHC
 | `GET /api/fbos?fbo&limit`               | Bearer token                                                    | P5 part 2 `fbos` domain + the last `limit` (≤ 5,000, default 200) `transactions` (`fboId`, `kind`, `amount`, `source`: own / modelled / sim_ai), optionally of one FBO                                                                                             |
 | `GET /api/fbos/quote?icao=`             | Bearer token                                                    | buy price, build cost, land lease, build days and modelled movements/day at an airport (404 unknown airport)                                                                                                                                                       |
 | `GET /api/demand`                       | Bearer token                                                    | `demand` domain: airports whose index differs from 1 and the active events                                                                                                                                                                                         |
+| `GET /api/pilots`                       | Bearer token                                                    | `pilots` domain (`simulated: true`): hired pilots, their routes, monthly P&L and last legs, the served airports and the route options; simulated economy, never telemetry                                                                                          |
 | `GET /api/logbook`                      | Bearer token                                                    | `{ flights: [...] }` joined with mission, payout, landing grade (≤ 200)                                                                                                                                                                                            |
 | `GET /api/export/csv`                   | Bearer token                                                    | logbook CSV download (`text/csv`)                                                                                                                                                                                                                                  |
 | `GET /api/export/gpx?flight=<id>`       | Bearer token                                                    | GPX 1.1 track of one flight from the telemetry table                                                                                                                                                                                                               |
@@ -325,6 +326,28 @@ sim AI), `fbo.built` (construction or module done), `demand.event`, `milestone.r
 `insurance.claim`. Domains: `fbos`, `demand` (new), `insurance` on owned fleet aircraft,
 `milestones` on the company. Storage: migration 6 (`fbos`, `fbo_modules`,
 `fbo_transactions`, `demand_events`, `demand_index`, `insurance_policies`, `milestones`).
+
+## Hired pilots (P6, optional; simulated)
+
+A hired pilot flies one owned aircraft back and forth on a fixed route on the company clock
+(docs/ECONOMY.md "Hired pilots"). It is a simulated economy model: it never produces flight
+frames or telemetry domains, never writes logbook flights, never grades a landing and never
+counts toward the player's own hours or landing streak. Legs are booked by the company book
+when they complete (`hired_income`, `fuel`, `landing_fee` with `refType: "pilot"`; wages as
+`pilot_wage`). The aircraft has the fleet status `hired` and `mission.load` refuses it with
+`aircraft_with_hired_pilot` until the pilot is unassigned. Commands use the same WebSocket
+token and Origin rules as every other command.
+
+| Command          | Args                                            | Refusal codes                                                                                                                                                                                                                                                                                                                             |
+| ---------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pilot.hire`     | `{ rating: "turboprop" \| "jet" }`              | `bad_args`, `pilot_limit`, `insufficient_cash`                                                                                                                                                                                                                                                                                            |
+| `pilot.fire`     | `{ pilotId }`                                   | `unknown_pilot`                                                                                                                                                                                                                                                                                                                           |
+| `pilot.assign`   | `{ pilotId, aircraftId, origin?, destination }` | `unknown_pilot`, `pilot_assigned`, `unknown_aircraft`, `not_owned`, `aircraft_in_maintenance`, `aircraft_busy`, `aircraft_on_mission`, `ferry_only`, `rating_mismatch`, `aircraft_unairworthy`, `aircraft_not_at_origin`, `same_airport`, `airport_not_served`, `route_too_short`, `out_of_range`, `runway_unsuitable`, `payload_too_low` |
+| `pilot.unassign` | `{ pilotId }`                                   | `unknown_pilot`, `not_assigned`                                                                                                                                                                                                                                                                                                           |
+
+Event: `pilot.route_stopped` (`simulated: true`; aircraft grounded or unairworthy at a
+departure, or no longer available). Domain: `pilots`. Storage: migration 9 (`hired_pilots`);
+the career export carries `pilots` as an optional field of version 5.
 
 ## Backups, SimBrief and packaging (P6)
 

@@ -61,6 +61,7 @@ const statusTone = {
   returned: "text-muted-foreground",
   repossessed: "text-destructive",
   written_off: "text-destructive",
+  hired: "text-accent",
 } as const;
 
 const statusLabel = {
@@ -71,6 +72,7 @@ const statusLabel = {
   returned: "Returned",
   repossessed: "Repossessed",
   written_off: "Written off",
+  hired: "Hired pilot (simulated)",
 } as const;
 
 export function FleetCard({
@@ -165,7 +167,10 @@ export function FleetCard({
         </div>
         <div>
           <dt className="label-eyebrow">Status</dt>
-          <dd className={cn("mt-1 flex items-center gap-2", statusTone[a.status])}>
+          <dd
+            className={cn("mt-1 flex items-center gap-2", statusTone[a.status])}
+            data-testid="aircraft-status"
+          >
             <span className="status-dot" aria-hidden="true" />
             {grounded && a.status === "available" ? gateLabel : statusLabel[a.status]}
           </dd>

@@ -142,6 +142,25 @@ import {
   type Incident,
 } from "./insurance";
 import { milestoneList, type MilestoneRecord } from "./milestones";
+import {
+  AVERAGE_LOAD_SHARE,
+  HIRED_PILOTS,
+  addPilotPnl,
+  firstMonthWage,
+  legFuelBurnKg,
+  legIncome,
+  legLoadShare,
+  legTimes,
+  nextDutyDeparture,
+  pilotName,
+  pilotWage,
+  ratingFor,
+  type HiredPilotRecord,
+} from "./hired-pilots";
+import type { HiredPilot, PilotLeg, PilotRating, PilotsState } from "../../protocol/src/pilots";
+import { runwaySuitability } from "./airports";
+import { MIN_JOB_NM } from "./constants";
+import { maxJobDistanceNm, payloadLimitKg } from "./rules";
 import { companyClock, gameMonthIndex } from "./clock";
 import {
   GAME_DAY_MS,
@@ -180,7 +199,7 @@ import {
   type Selection,
   type WearResult,
 } from "./fleet-rules";
-import { round2 } from "./geo";
+import { greatCircleNm, round1, round2 } from "./geo";
 import { reputationTier } from "./payout";
 import { clampReputation } from "./rules";
 
@@ -224,6 +243,9 @@ export interface CompanyCore {
   /** Used aircraft whose every known defect was repaired. */
   restorations: number;
   milestones: MilestoneRecord[];
+  // ---- hired pilots (absent in older records = 0) ----
+  /** Pilots hired so far (pilot ids). */
+  pilotCounter?: number | undefined;
 }
 
 export interface BookAircraft {
@@ -384,6 +406,8 @@ export interface BookChanges {
   /** The demand activity map changed (company.activity). */
   activity: boolean;
   milestones: MilestoneRecord[];
+  // ---- hired pilots ----
+  pilots: HiredPilotRecord[];
 }
 
 export interface Reason {
@@ -420,7 +444,16 @@ const ACTIVE: ReadonlySet<AircraftStatus> = new Set<AircraftStatus>([
   "available",
   "in_flight",
   "maintenance",
+  // Assigned to a hired pilot (simulated route): still in the fleet, not available.
+  "hired",
 ]);
+
+/** Why an aircraft cannot be used right now (status other than available). */
+function busyMessage(a: Pick<BookAircraft, "registration" | "status">): string {
+  return a.status === "hired"
+    ? `${a.registration} is assigned to a hired pilot (simulated route): unassign the pilot first`
+    : `${a.registration} is ${a.status}`;
+}
 
 export interface FlightSettlement {
   /** Fuel burned, kg (billed unless wet-leased). */
@@ -440,6 +473,11 @@ export interface FlightSettlement {
   memo: string;
   /** P5: the tanks ran dry in flight (fuel quantity reached ~0). */
   tanksDry?: boolean;
+  /**
+   * A hired pilot's simulated leg: never counts toward the player's flight hours, gets no
+   * own-FBO arrival benefits, and its aircraft event is `pilot_leg`, not `flight`.
+   */
+  hired?: boolean;
 }
 
 export interface SettlementResult {
@@ -469,6 +507,8 @@ export interface BookOptions<C extends CompanyCore> {
   /** P5 part 2: FBOs (every status) and recent demand events. */
   fbos?: readonly FboRecord[];
   demandEvents?: readonly DemandEventRecord[];
+  /** Hired pilots (every status). */
+  pilots?: readonly HiredPilotRecord[];
 }
 
 export class CompanyBook<C extends CompanyCore = CompanyCore> {
@@ -502,8 +542,10 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       landingStreak: c.landingStreak ?? 0,
       restorations: c.restorations ?? 0,
       milestones: c.milestones ?? [],
+      pilotCounter: c.pilotCounter ?? 0,
     };
     for (const f of options.fbos ?? []) this.fbos.set(f.id, f);
+    for (const p of options.pilots ?? []) this.pilots.set(p.id, p);
     this.events = [...(options.demandEvents ?? [])];
     for (const a of options.fleet ?? []) {
       this.fleet.set(a.id, normalizeAircraft(a, this.company.gameMs));
@@ -518,6 +560,44 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       isMaintenanceCapable: (icao) =>
         this.baseMaintenance.isMaintenanceCapable(icao) || this.ownShopLevel(icao) > 0,
     };
+    // Imports are repaired, never trusted: a pilot assigned to an aircraft that is not marked
+    // hired, or a second pilot on an aircraft another pilot already flies, is unassigned
+    // (`stopped.code` "assignment_invalid"); the first pilot in hiring order keeps it.
+    const claimed = new Set<string>();
+    for (const p of this.activePilots()) {
+      const as = p.assignment;
+      if (!as) continue;
+      const a = this.fleet.get(as.aircraftId);
+      const why =
+        !a || a.status !== "hired"
+          ? `${a?.registration ?? as.aircraftId} is not marked as flown by a hired pilot`
+          : claimed.has(a.id)
+            ? `${a.registration} is already flown by another hired pilot`
+            : null;
+      if (why) {
+        this.touchPilot({
+          ...p,
+          assignment: null,
+          stopped: {
+            code: "assignment_invalid",
+            message: `Assignment dropped when loading: ${why}`,
+            gameMs: Math.floor(this.company.gameMs),
+          },
+        });
+        continue;
+      }
+      claimed.add(as.aircraftId);
+    }
+    // An aircraft marked hired without a pilot assigned to it (an inconsistent import) is
+    // available again.
+    const assigned = new Set(
+      this.activePilots().flatMap((p) => (p.assignment ? [p.assignment.aircraftId] : [])),
+    );
+    for (const a of this.fleet.values()) {
+      if (a.status === "hired" && !assigned.has(a.id)) {
+        this.touchAircraft({ ...a, status: "available" });
+      }
+    }
   }
 
   /** Changes since the last drain (to persist), then reset. */
@@ -542,7 +622,8 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       p.fboTransactions.length > 0 ||
       p.demandEvents.length > 0 ||
       p.activity ||
-      p.milestones.length > 0
+      p.milestones.length > 0 ||
+      p.pilots.length > 0
     );
   }
 
@@ -802,6 +883,11 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     if (this.company.marketGeneration > 0) {
       next = Math.min(next, this.company.marketRefreshedGameMs + MARKET_REFRESH_MS);
     }
+    // Hired pilots: the next departure or arrival of every assigned pilot.
+    for (const p of this.activePilots()) {
+      const as = p.assignment;
+      if (as) next = Math.min(next, as.leg ? as.leg.arriveGameMs : as.nextDepartureGameMs);
+    }
     // P5 part 2: day boundaries (demand, FBO day close), FBO hours, constructions, modules.
     next = Math.min(next, (this.dayProcessed + 1) * GAME_DAY_MS);
     for (const f of this.fbos.values()) {
@@ -822,6 +908,8 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     // P5 part 2: FBO constructions and module installs, traffic hours, day boundaries.
     this.processFbos(t);
     this.processDays(t);
+    // Hired pilots: legs that end and depart now (simulated).
+    this.processPilots(t);
     // Maintenance orders that are done (in completion order per aircraft).
     for (const a of this.activeFleet()) {
       if (a.orders.some((o) => o.readyAtGameMs <= t)) this.completeOrders(a, t);
@@ -870,6 +958,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
         );
       }
       this.monthlyFbosAndInsurance();
+      this.monthlyPilots();
     }
     // Loan auto-debits.
     for (const loan of this.activeLoans()) {
@@ -955,6 +1044,15 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       if (a) {
         this.touchAircraft({ ...a, status: "repossessed", loanId: null, readyAtGameMs: null });
         this.event(a.id, "repossessed", { loanId: loan.id, balance: loan.balance });
+        // A hired pilot flying it loses the aircraft now, not at its next departure.
+        const pilot = this.pilotOf(a.id);
+        if (pilot) {
+          this.stopRoute(
+            pilot,
+            "aircraft_repossessed",
+            `${a.registration} was repossessed by the lender`,
+          );
+        }
         if (this.company.selectedAircraftId === a.id) {
           this.company = { ...this.company, selectedAircraftId: null };
         }
@@ -1039,7 +1137,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     const a = this.aircraft(aircraftId);
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
     if (a.ownership !== "owned") return fail("not_owned", "Leased aircraft are returned, not sold");
-    if (a.status !== "available") return fail("aircraft_busy", `${a.registration} is ${a.status}`);
+    if (a.status !== "available") return fail("aircraft_busy", busyMessage(a));
     const type = aircraftTypeByKey(a.typeKey);
     if (!type) return fail("unknown_type", a.typeKey);
     // Resale uses the used-market value (P4 value for a new airframe) × 90 %.
@@ -1108,7 +1206,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     const a = this.aircraft(aircraftId);
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
     if (a.ownership === "owned") return fail("not_leased", "Owned aircraft are sold, not returned");
-    if (a.status !== "available") return fail("aircraft_busy", `${a.registration} is ${a.status}`);
+    if (a.status !== "available") return fail("aircraft_busy", busyMessage(a));
     const type = aircraftTypeByKey(a.typeKey);
     const charge = type ? repairCost(type, a.condition) : 0;
     if (charge > 0 && this.company.cash < charge) {
@@ -1130,7 +1228,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   repair(aircraftId: string): BookResult<{ cost: number; hours: number; readyAtGameMs: number }> {
     const a = this.aircraft(aircraftId);
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
-    if (a.status !== "available") return fail("aircraft_busy", `${a.registration} is ${a.status}`);
+    if (a.status !== "available") return fail("aircraft_busy", busyMessage(a));
     if (a.condition >= 100) return fail("no_wear", `${a.registration} needs no repair`);
     const type = aircraftTypeByKey(a.typeKey);
     if (!type) return fail("unknown_type", a.typeKey);
@@ -1189,7 +1287,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     // and the player's own FBO where the aircraft parks (fuel at cost, waived fees, lounge).
     const valueBefore = this.aircraftValue(a);
     const own =
-      f.landingAirport && f.landings > 0 && !f.crashed
+      f.landingAirport && f.landings > 0 && !f.crashed && f.hired !== true
         ? this.activeFboAt(f.landingAirport.ident)
         : null;
     const savings: Array<{ kind: string; amount: number; memo: string }> = [];
@@ -1325,10 +1423,13 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     else if (f.peakG !== null && f.peakG > INSURANCE.hardLandingG) {
       incidents.push({ gameMs: at, kind: "hard_landing" });
     }
-    this.company = {
-      ...this.company,
-      flightHours: round2(this.company.flightHours + Math.max(0, f.airborneMin) / 60),
-    };
+    // The 100-hour milestone counts the player's own flying only (never hired legs).
+    if (f.hired !== true) {
+      this.company = {
+        ...this.company,
+        flightHours: round2(this.company.flightHours + Math.max(0, f.airborneMin) / 60),
+      };
+    }
     const next: BookAircraft = {
       ...a,
       systems,
@@ -1343,7 +1444,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     };
     this.touchAircraft(next);
     const found = [...rolls.escalated, ...rolls.added];
-    this.event(a.id, "flight", {
+    this.event(a.id, f.hired === true ? "pilot_leg" : "flight", {
       ref: f.refId,
       wear,
       condition,
@@ -1546,6 +1647,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     const a = this.aircraft(aircraftId);
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
     if (a.status === "in_flight") return fail("aircraft_busy", `${a.registration} is flying`);
+    if (a.status === "hired") return fail("aircraft_busy", busyMessage(a));
     return { ok: true, data: a };
   }
 
@@ -1656,6 +1758,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   defer(aircraftId: string, defectId: string): BookResult<{ defect: Defect }> {
     const a = this.aircraft(aircraftId);
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
+    if (a.status === "hired") return fail("aircraft_busy", busyMessage(a));
     const d = a.defects.find((x) => x.id === defectId && !x.hidden);
     if (!d) return fail("unknown_defect", `No known defect ${defectId} on ${a.registration}`);
     if (d.severity !== "minor") {
@@ -1682,7 +1785,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     const a0 = this.aircraft(aircraftId);
     if (!a0) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
     if (a0.status !== "available") {
-      return fail("aircraft_busy", `${a0.registration} is ${a0.status}`);
+      return fail("aircraft_busy", busyMessage(a0));
     }
     if (a0.ferryPermit) return fail("permit_active", `${a0.registration} already has a permit`);
     const type = aircraftTypeByKey(a0.typeKey);
@@ -1969,6 +2072,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     }
     const a = this.aircraft(collateral.id);
     if (!a) return fail("unknown_aircraft", `No aircraft ${collateral.id} in the fleet`);
+    if (a.status === "hired") return fail("aircraft_busy", busyMessage(a));
     if (a.ownership !== "owned") return fail("not_owned", "Leased aircraft cannot be pledged");
     if (a.loanId && this.loans.get(a.loanId)?.status === "active") {
       return fail("collateral_encumbered", `${a.registration} already secures a loan`);
@@ -2290,7 +2394,10 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
 
   /** Fleet aircraft parked at an airport (not flying), oldest first. */
   private parkedAt(icao: string): BookAircraft[] {
-    return this.activeFleet().filter((a) => a.location === icao && a.status !== "in_flight");
+    // Aircraft operated by a hired pilot are not parked (they come and go on their route).
+    return this.activeFleet().filter(
+      (a) => a.location === icao && a.status !== "in_flight" && a.status !== "hired",
+    );
   }
 
   // ---- FBO acquisition and modules ----
@@ -2905,6 +3012,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   buyInsurance(aircraftId: string): BookResult<{ premium: number }> {
     const a = this.aircraft(aircraftId);
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
+    if (a.status === "hired") return fail("aircraft_busy", busyMessage(a));
     if (a.ownership !== "owned") return fail("not_owned", "Only owned aircraft can be insured");
     if (a.insurance) return fail("already_insured", `${a.registration} is already insured`);
     const premium = this.premiumFor(a);
@@ -2935,6 +3043,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   cancelInsurance(aircraftId: string): BookResult<{ aircraftId: string }> {
     const a = this.aircraft(aircraftId);
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
+    if (a.status === "hired") return fail("aircraft_busy", busyMessage(a));
     if (!a.insurance) return fail("not_insured", `${a.registration} is not insured`);
     this.touchAircraft({ ...a, insurance: null });
     this.event(a.id, "insurance.cancelled", {});
@@ -3025,6 +3134,593 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       amount: claim,
       loanPaid,
     });
+  }
+
+  // ==== Hired pilots (simulated operations, plan §7.4) ====
+  //
+  // A hired pilot flies one owned aircraft origin → destination → origin … on the company
+  // clock. Nothing here produces telemetry, logbook flights or landing grades: each leg is
+  // booked when it completes (income, fuel, landing fee, wear) and the aircraft is
+  // unavailable to the player (status "hired") until the pilot is unassigned.
+
+  readonly pilots = new Map<string, HiredPilotRecord>();
+
+  private touchPilot(p: HiredPilotRecord): void {
+    this.pilots.set(p.id, p);
+    const i = this.pending.pilots.findIndex((x) => x.id === p.id);
+    if (i >= 0) this.pending.pilots[i] = p;
+    else this.pending.pilots.push(p);
+    this.pending.company = true;
+  }
+
+  /** Pilots on the payroll, in hiring order. */
+  activePilots(): HiredPilotRecord[] {
+    return [...this.pilots.values()]
+      .filter((p) => p.status === "hired")
+      .sort((a, b) => a.hiredGameMs - b.hiredGameMs || pilotOrder(a.id) - pilotOrder(b.id));
+  }
+
+  private hiredPilot(pilotId: string): BookResult<HiredPilotRecord> {
+    const p = this.pilots.get(pilotId);
+    if (!p || p.status !== "hired") return fail("unknown_pilot", `No hired pilot ${pilotId}`);
+    return { ok: true, data: p };
+  }
+
+  /** The pilot flying an aircraft, if any. */
+  pilotOf(aircraftId: string): HiredPilotRecord | null {
+    return this.activePilots().find((p) => p.assignment?.aircraftId === aircraftId) ?? null;
+  }
+
+  /**
+   * Hire a pilot: the rest of this in-game month's wage is paid now, pro-rated by the time
+   * left in the month (`firstMonthWage`); no refund when fired.
+   */
+  hirePilot(rating: PilotRating): BookResult<{ pilot: HiredPilotRecord }> {
+    if (this.activePilots().length >= HIRED_PILOTS.maxPilots) {
+      return fail("pilot_limit", `At most ${HIRED_PILOTS.maxPilots} hired pilots`);
+    }
+    const wage = pilotWage(rating);
+    const first = firstMonthWage(wage, this.company.gameMs);
+    if (this.company.cash < first) {
+      return fail(
+        "insufficient_cash",
+        `The first (pro-rated) month's wage is $${first.toLocaleString("en-US")}`,
+      );
+    }
+    const n = (this.company.pilotCounter ?? 0) + 1;
+    this.company = { ...this.company, pilotCounter: n };
+    const id = `HP-${n}`;
+    const name = pilotName(this.company.seed, n);
+    this.post(
+      "pilot_wage",
+      -first,
+      "pilot",
+      id,
+      `${name} (hired pilot) wage, rest of month ${gameMonthIndex(this.company.gameMs) + 1}`,
+    );
+    const pilot: HiredPilotRecord = {
+      id,
+      name,
+      rating,
+      wageMonthly: wage,
+      status: "hired",
+      hiredGameMs: Math.floor(this.company.gameMs),
+      hiredAt: this.now(),
+      firedGameMs: null,
+      assignment: null,
+      stopped: null,
+      legsFlown: 0,
+      pnl: addPilotPnl([], gameMonthIndex(this.company.gameMs), { wages: first }),
+      recent: [],
+    };
+    this.touchPilot(pilot);
+    return { ok: true, data: { pilot } };
+  }
+
+  /** Let a pilot go: an assigned aircraft is released where it is; wages stop. */
+  firePilot(pilotId: string): BookResult<{ pilotId: string }> {
+    const r = this.hiredPilot(pilotId);
+    if (!r.ok) return r;
+    let p = r.data;
+    if (p.assignment) {
+      this.releaseAircraft(p, "pilot.fired", null);
+      p = { ...p, assignment: null };
+    }
+    this.touchPilot({ ...p, status: "fired", firedGameMs: Math.floor(this.company.gameMs) });
+    return { ok: true, data: { pilotId } };
+  }
+
+  /** Airports the company serves: base, fleet locations, FBOs, recent activity, `extra`. */
+  servedAirports(extra: readonly string[] = []): string[] {
+    const set = new Set<string>([this.company.base, ...extra.map((x) => x.toUpperCase())]);
+    for (const a of this.activeFleet()) set.add(a.location);
+    for (const f of this.fbos.values()) {
+      if (f.status === "active" || f.status === "building") set.add(f.icao);
+    }
+    for (const icao of Object.keys(this.company.activity)) set.add(icao);
+    for (const p of this.activePilots()) {
+      if (p.assignment) {
+        set.add(p.assignment.origin);
+        set.add(p.assignment.destination);
+      }
+    }
+    return [...set].filter((i) => !this.airports || this.airports.get(i) !== undefined).sort();
+  }
+
+  /** A route the type can fly both ways: 20 nm to 80 % of range, runways, a payload. */
+  private routeCheck(
+    type: AircraftType,
+    origin: EconomyAirport,
+    dest: EconomyAirport,
+  ): BookResult<{ distanceNm: number }> {
+    const distanceNm = round1(greatCircleNm(origin, dest));
+    if (distanceNm < MIN_JOB_NM) {
+      return fail("route_too_short", `${origin.ident}–${dest.ident} is under ${MIN_JOB_NM} nm`);
+    }
+    if (distanceNm > maxJobDistanceNm(type)) {
+      return fail(
+        "out_of_range",
+        `${distanceNm} nm is beyond 80 % of the ${type.name}'s ${type.rangeNm} nm range`,
+      );
+    }
+    for (const end of [origin, dest]) {
+      const rwy = runwaySuitability(end, type);
+      if (!rwy.ok) {
+        return fail(
+          "runway_unsuitable",
+          `${end.ident} runway does not suit the ${type.name} (${rwy.issues.join(", ")})`,
+        );
+      }
+    }
+    if (payloadLimitKg(type, distanceNm) < 50) {
+      return fail("payload_too_low", `The ${type.name} carries no useful load that far`);
+    }
+    return { ok: true, data: { distanceNm } };
+  }
+
+  /**
+   * Assign a pilot to an owned, available, airworthy aircraft on a route from where it is
+   * parked to a served airport. The first leg departs at the next duty-window time.
+   */
+  assignPilot(args: {
+    pilotId: string;
+    aircraftId: string;
+    origin?: string;
+    destination: string;
+    served?: readonly string[];
+  }): BookResult<{ pilot: HiredPilotRecord }> {
+    const r = this.hiredPilot(args.pilotId);
+    if (!r.ok) return r;
+    const p = r.data;
+    if (p.assignment) {
+      return fail("pilot_assigned", `${p.name} already flies a route: unassign first`);
+    }
+    const a0 = this.aircraft(args.aircraftId);
+    if (!a0) return fail("unknown_aircraft", `No aircraft ${args.aircraftId} in the fleet`);
+    if (a0.ownership !== "owned") {
+      return fail("not_owned", "Hired pilots fly owned aircraft only (not leased ones)");
+    }
+    if (a0.status === "maintenance") {
+      return fail("aircraft_in_maintenance", `${a0.registration} is in maintenance`);
+    }
+    if (a0.status !== "available") return fail("aircraft_busy", busyMessage(a0));
+    if (a0.ferryPermit) {
+      return fail("ferry_only", `${a0.registration} holds a ferry permit: fly the ferry first`);
+    }
+    const type = aircraftTypeByKey(a0.typeKey);
+    if (!type) return fail("unknown_type", a0.typeKey);
+    if (ratingFor(type.category) !== p.rating) {
+      return fail(
+        "rating_mismatch",
+        `${p.name} holds a ${p.rating} rating; the ${type.name} needs ${ratingFor(type.category) ?? "another"}`,
+      );
+    }
+    const gate = this.dispatchCheck(a0.id);
+    if (!gate.ok) return gate;
+    const a = this.fleet.get(a0.id) ?? a0;
+    const originId = (args.origin ?? a.location).toUpperCase();
+    if (originId !== a.location) {
+      return fail(
+        "aircraft_not_at_origin",
+        `${a.registration} is parked at ${a.location}: the route starts there`,
+      );
+    }
+    const destId = args.destination.toUpperCase();
+    if (destId === originId) return fail("same_airport", "The route needs two airports");
+    if (!this.servedAirports(args.served ?? []).includes(destId)) {
+      return fail(
+        "airport_not_served",
+        `${destId} is not an airport the company serves (base, fleet, FBOs, boards, recent deliveries)`,
+      );
+    }
+    const origin = this.airportOf(originId);
+    const dest = this.airportOf(destId);
+    if (!origin || !dest) return fail("unknown_airport", `Unknown airport ${destId}`);
+    const route = this.routeCheck(type, origin, dest);
+    if (!route.ok) return route;
+    const now = Math.floor(this.company.gameMs);
+    const pilot: HiredPilotRecord = {
+      ...p,
+      stopped: null,
+      assignment: {
+        aircraftId: a.id,
+        origin: originId,
+        destination: destId,
+        sinceGameMs: now,
+        legs: 0,
+        nextDepartureGameMs: nextDutyDeparture(now),
+        leg: null,
+      },
+    };
+    this.touchAircraft({ ...a, status: "hired" });
+    this.event(a.id, "pilot.assigned", {
+      pilotId: p.id,
+      origin: originId,
+      destination: destId,
+      simulated: true,
+    });
+    this.touchPilot(pilot);
+    return { ok: true, data: { pilot } };
+  }
+
+  /**
+   * Take a pilot off the route: the aircraft is available again where it is parked. A leg
+   * in progress is cancelled (the aircraft stays at the leg's departure airport; nothing is
+   * booked for it).
+   */
+  unassignPilot(pilotId: string): BookResult<{ pilot: HiredPilotRecord }> {
+    const r = this.hiredPilot(pilotId);
+    if (!r.ok) return r;
+    if (!r.data.assignment) return fail("not_assigned", `${r.data.name} has no route`);
+    this.releaseAircraft(r.data, "pilot.unassigned", null);
+    const pilot = { ...r.data, assignment: null };
+    this.touchPilot(pilot);
+    return { ok: true, data: { pilot } };
+  }
+
+  private releaseAircraft(
+    p: HiredPilotRecord,
+    kind: string,
+    reason: { code: string; message: string } | null,
+  ): void {
+    const as = p.assignment;
+    if (!as) return;
+    const a = this.fleet.get(as.aircraftId);
+    if (a && a.status === "hired") this.touchAircraft({ ...a, status: "available" });
+    if (a) {
+      this.event(a.id, kind, {
+        pilotId: p.id,
+        legs: as.legs,
+        ...(as.leg ? { cancelledLeg: { from: as.leg.from, to: as.leg.to } } : {}),
+        ...(reason ? { reason } : {}),
+        simulated: true,
+      });
+    }
+  }
+
+  /** The route stops (grounded aircraft, defect found, aircraft gone): the pilot stays hired. */
+  private stopRoute(
+    p: HiredPilotRecord,
+    code: string,
+    message: string,
+    reasons?: Reason[],
+  ): HiredPilotRecord {
+    const a = p.assignment ? this.fleet.get(p.assignment.aircraftId) : undefined;
+    this.releaseAircraft(p, "pilot.route_stopped", { code, message });
+    const next: HiredPilotRecord = {
+      ...p,
+      assignment: null,
+      stopped: { code, message, gameMs: Math.floor(this.company.gameMs) },
+    };
+    this.touchPilot(next);
+    this.notice("pilot.route_stopped", {
+      pilotId: p.id,
+      name: p.name,
+      ...(a ? { aircraftId: a.id, registration: a.registration } : {}),
+      code,
+      message,
+      ...(reasons?.length ? { reasons } : {}),
+      simulated: true,
+    });
+    return next;
+  }
+
+  /** Legs that arrive and depart at `t` (called in time order by `advance`). */
+  private processPilots(t: number): void {
+    for (const p0 of this.activePilots()) {
+      let p = p0;
+      for (let guard = 0; guard < 8 && p.assignment; guard++) {
+        const as: NonNullable<HiredPilotRecord["assignment"]> = p.assignment;
+        const a = this.fleet.get(as.aircraftId);
+        if (!a || a.status !== "hired") {
+          p = this.stopRoute(
+            p,
+            "aircraft_unavailable",
+            `${a?.registration ?? as.aircraftId} is no longer available to the pilot`,
+          );
+          break;
+        }
+        if (as.leg) {
+          if (as.leg.arriveGameMs > t) break;
+          p = this.pilotArrive(p, a, as.leg);
+        } else {
+          if (as.nextDepartureGameMs > t) break;
+          p = this.pilotDepart(p, a, t);
+        }
+      }
+    }
+  }
+
+  private pilotDepart(p: HiredPilotRecord, a0: BookAircraft, t: number): HiredPilotRecord {
+    const as = p.assignment;
+    if (!as) return p;
+    // Same dispatch rule as the player's: hidden defects surface, then the gate runs.
+    this.revealHidden(a0.id, "dispatch");
+    const a = this.fleet.get(a0.id) ?? a0;
+    const g = this.gate(a);
+    if (!g.ok) {
+      return this.stopRoute(
+        p,
+        "aircraft_unairworthy",
+        `${a.registration} is not airworthy: ${g.reasons.map((x) => x.message).join("; ")}`,
+        g.reasons.map((x) => ({ code: x.code, message: x.message })),
+      );
+    }
+    const to =
+      a.location === as.origin ? as.destination : a.location === as.destination ? as.origin : null;
+    const type = aircraftTypeByKey(a.typeKey);
+    const from = this.airportOf(a.location);
+    const dest = to ? this.airportOf(to) : null;
+    if (!to || !type || !from || !dest) {
+      return this.stopRoute(
+        p,
+        "off_route",
+        `${a.registration} is at ${a.location}, not on the route ${as.origin}–${as.destination}`,
+      );
+    }
+    const times = legTimes(type, round1(greatCircleNm(from, dest)));
+    const next: HiredPilotRecord = {
+      ...p,
+      assignment: {
+        ...as,
+        leg: {
+          from: a.location,
+          to,
+          departGameMs: Math.floor(t),
+          arriveGameMs: Math.floor(t) + times.blockMin * 60_000,
+        },
+      },
+    };
+    this.touchPilot(next);
+    return next;
+  }
+
+  private pilotArrive(
+    p: HiredPilotRecord,
+    a: BookAircraft,
+    leg: NonNullable<NonNullable<HiredPilotRecord["assignment"]>["leg"]>,
+  ): HiredPilotRecord {
+    const as = p.assignment;
+    const type = aircraftTypeByKey(a.typeKey);
+    const from = this.airportOf(leg.from);
+    const dest = this.airportOf(leg.to);
+    if (!as || !type || !from || !dest) {
+      return this.stopRoute(p, "off_route", `Unknown route ${leg.from}–${leg.to}`);
+    }
+    const n = p.legsFlown + 1;
+    const distanceNm = round1(greatCircleNm(from, dest));
+    const times = legTimes(type, distanceNm);
+    const inc = legIncome({
+      type,
+      distanceNm,
+      reputation: this.company.reputation,
+      share: legLoadShare(this.company.seed, p.id, n),
+      payloadPenaltyPct: this.gate(a).payloadPenaltyPct,
+    });
+    const memo = `Hired pilot ${p.name} (simulated) ${a.registration} ${leg.from}→${leg.to}`;
+    if (inc.income > 0) {
+      this.post("hired_income", inc.income, "pilot", p.id, `${memo}, ${inc.loadKg} kg`);
+    }
+    const settled = this.settleFlight(a.id, {
+      fuelKg: legFuelBurnKg(type, times.blockMin),
+      fuelAirport: dest,
+      landingAirport: dest,
+      blockMin: times.blockMin,
+      airborneMin: times.airborneMin,
+      peakG: null,
+      overspeedEvents: 0,
+      crashed: false,
+      landings: 1,
+      refType: "pilot",
+      refId: p.id,
+      memo,
+      hired: true,
+    });
+    if (!settled.ok) return this.stopRoute(p, settled.code, settled.message);
+    const s = settled.data;
+    const fuel = s.costs.find((c) => c.key === "fuel")?.amount ?? 0;
+    const fee = s.costs.find((c) => c.key === "landing_fee")?.amount ?? 0;
+    const wear = s.wear.total;
+    const wearValue = repairCost(type, 100 - wear);
+    const record: PilotLeg = {
+      n,
+      aircraftId: a.id,
+      registration: a.registration,
+      from: leg.from,
+      to: leg.to,
+      departGameMs: leg.departGameMs,
+      arriveGameMs: leg.arriveGameMs,
+      distanceNm,
+      loadKg: inc.loadKg,
+      boardPayout: inc.boardPayout,
+      income: inc.income,
+      fuel,
+      landingFee: fee,
+      wear,
+      defects: s.defects.length,
+    };
+    let next: HiredPilotRecord = {
+      ...p,
+      legsFlown: n,
+      recent: [record, ...p.recent].slice(0, HIRED_PILOTS.recentLegs),
+      pnl: addPilotPnl(p.pnl, gameMonthIndex(this.company.gameMs), {
+        income: inc.income,
+        fuel,
+        fees: fee,
+        legs: 1,
+        wear,
+        wearValue,
+      }),
+      assignment: {
+        ...as,
+        legs: as.legs + 1,
+        leg: null,
+        nextDepartureGameMs: nextDutyDeparture(
+          leg.arriveGameMs + HIRED_PILOTS.turnaroundMin * 60_000,
+        ),
+      },
+    };
+    this.touchPilot(next);
+    // A defect found on the leg that grounds the aircraft stops the route at once.
+    const after = this.fleet.get(a.id);
+    const g = after ? this.gate(after) : null;
+    if (g && !g.ok) {
+      next = this.stopRoute(
+        next,
+        "aircraft_grounded",
+        `${a.registration} was grounded after a hired leg: ${g.reasons.map((x) => x.message).join("; ")}`,
+        g.reasons.map((x) => ({ code: x.code, message: x.message })),
+      );
+    }
+    return next;
+  }
+
+  /** Month boundary: every hired pilot's wage for the coming month (cash may go negative). */
+  private monthlyPilots(): void {
+    const label = this.company.monthBilled + 1;
+    for (const p of this.activePilots()) {
+      this.post("pilot_wage", -p.wageMonthly, "pilot", p.id, `${p.name} wage, month ${label}`);
+      const cur = this.pilots.get(p.id) ?? p;
+      this.touchPilot({
+        ...cur,
+        pnl: addPilotPnl(cur.pnl, gameMonthIndex(this.company.gameMs), { wages: p.wageMonthly }),
+      });
+    }
+  }
+
+  private pilotState(p: HiredPilotRecord): HiredPilot {
+    const as = p.assignment;
+    const a = as ? this.fleet.get(as.aircraftId) : undefined;
+    const type = a ? aircraftTypeByKey(a.typeKey) : null;
+    const o = as ? this.airportOf(as.origin) : null;
+    const d = as ? this.airportOf(as.destination) : null;
+    return {
+      id: p.id,
+      name: p.name,
+      rating: p.rating,
+      wageMonthly: p.wageMonthly,
+      hiredGameMs: p.hiredGameMs,
+      status: p.status === "fired" ? "fired" : !as ? "unassigned" : as.leg ? "flying" : "scheduled",
+      ...(p.firedGameMs !== null ? { firedGameMs: p.firedGameMs } : {}),
+      assignment: as
+        ? {
+            aircraftId: as.aircraftId,
+            registration: a?.registration ?? as.aircraftId,
+            typeName: type?.name ?? a?.typeKey ?? "",
+            origin: as.origin,
+            destination: as.destination,
+            distanceNm: o && d ? round1(greatCircleNm(o, d)) : 0,
+            sinceGameMs: as.sinceGameMs,
+            legs: as.legs,
+            ...(as.leg ? { leg: as.leg } : { nextDepartureGameMs: as.nextDepartureGameMs }),
+          }
+        : null,
+      ...(p.stopped ? { stopped: p.stopped } : {}),
+      legsFlown: p.legsFlown,
+      pnl: p.pnl.slice(-12),
+      recent: p.recent.slice(0, HIRED_PILOTS.recentLegs),
+      simulated: true,
+    };
+  }
+
+  /** `pilots` domain; `extra` adds served airports the book does not know (board origins). */
+  pilotsDomain(extra: readonly string[] = []): PilotsState {
+    const served = this.servedAirports(extra);
+    const month = gameMonthIndex(this.company.gameMs);
+    // Hired pilots, then pilots let go who still have a P&L row this month (shown as fired).
+    const pilots = [
+      ...this.activePilots(),
+      ...this.pilotRecords().filter(
+        (p) => p.status === "fired" && p.pnl.some((m) => m.month === month),
+      ),
+    ];
+    // This month's totals over every pilot record (a pilot let go keeps the wage paid).
+    let monthIncome = 0;
+    let monthCosts = 0;
+    for (const p of this.pilots.values()) {
+      const row = p.pnl.find((m) => m.month === month);
+      monthIncome += row?.income ?? 0;
+      monthCosts += (row?.wages ?? 0) + (row?.fuel ?? 0) + (row?.fees ?? 0);
+    }
+    const options: PilotsState["options"] = [];
+    for (const a of this.activeFleet()) {
+      if (a.ownership !== "owned" || a.status !== "available" || a.ferryPermit) continue;
+      const type = aircraftTypeByKey(a.typeKey);
+      const rating = type ? ratingFor(type.category) : null;
+      const origin = this.airportOf(a.location);
+      if (!type || !rating || !origin || !this.gate(a).ok) continue;
+      const destinations: PilotsState["options"][number]["destinations"] = [];
+      for (const icao of served) {
+        const dest = icao === a.location ? null : this.airportOf(icao);
+        if (!dest) continue;
+        const route = this.routeCheck(type, origin, dest);
+        if (!route.ok) continue;
+        const nm = route.data.distanceNm;
+        const times = legTimes(type, nm);
+        const inc = legIncome({
+          type,
+          distanceNm: nm,
+          reputation: this.company.reputation,
+          share: AVERAGE_LOAD_SHARE,
+        });
+        const costs = round2(
+          fuelCost(legFuelBurnKg(type, times.blockMin), this.fuelPriceAt(dest)) +
+            landingFee(dest, type),
+        );
+        destinations.push({
+          icao,
+          distanceNm: nm,
+          blockMin: times.blockMin,
+          boardPayout: inc.boardPayout,
+          income: inc.income,
+          costs,
+        });
+      }
+      options.push({
+        aircraftId: a.id,
+        registration: a.registration,
+        typeName: type.name,
+        rating,
+        origin: a.location,
+        destinations,
+      });
+    }
+    return {
+      simulated: true,
+      pilots: pilots.map((p) => this.pilotState(p)),
+      servedAirports: served,
+      options,
+      wages: { ...HIRED_PILOTS.wages },
+      payoutShare: HIRED_PILOTS.payoutShare,
+      maxPilots: HIRED_PILOTS.maxPilots,
+      monthIncome: round2(monthIncome),
+      monthCosts: round2(monthCosts),
+    };
+  }
+
+  /** Every pilot record (persistence and export). */
+  pilotRecords(): HiredPilotRecord[] {
+    return [...this.pilots.values()].sort((a, b) => pilotOrder(a.id) - pilotOrder(b.id));
   }
 
   // ---- milestones ----
@@ -3199,6 +3895,10 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
 
 const INSPECTION_MS = INSPECTION_HOURS * 3_600_000;
 
+function pilotOrder(id: string): number {
+  return Number(id.split("-").at(-1)) || 0;
+}
+
 function listingOrder(id: string): number {
   return Number(id.split("-").at(-1)) || 0;
 }
@@ -3221,6 +3921,7 @@ function emptyChanges(): BookChanges {
     demandEvents: [],
     activity: false,
     milestones: [],
+    pilots: [],
   };
 }
 
@@ -3260,7 +3961,7 @@ export function ledgerState(e: BookLedgerEntry): LedgerEntryState {
 /** Fresh company core fields (merged into a new company record). */
 export function newCompanyCore(
   startingCash: number,
-): Omit<CompanyCore, "name" | "base" | "seed" | "cash" | "reputation"> {
+): Omit<CompanyCore, "name" | "base" | "seed" | "cash" | "reputation"> & { pilotCounter: number } {
   return {
     startingCash,
     gameMs: 0,
@@ -3282,5 +3983,6 @@ export function newCompanyCore(
     landingStreak: 0,
     restorations: 0,
     milestones: [],
+    pilotCounter: 0,
   };
 }

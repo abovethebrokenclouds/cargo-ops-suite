@@ -279,4 +279,22 @@ export const MIGRATIONS: readonly Migration[] = [
       INSERT OR REPLACE INTO settings (key, json) VALUES ('economy.phase', '8');
     `,
   },
+  {
+    // Hired pilots (docs/ECONOMY.md "Hired pilots"): simulated operations on fixed routes.
+    // One row per pilot ever hired (status hired | fired, the assigned aircraft) with the
+    // record as JSON (route, leg in progress, monthly P&L, last legs). The company row gains
+    // `pilotCounter` (JSON, default 0) and fleet rows may carry the status 'hired'; neither
+    // needs a column change. Idempotent (IF NOT EXISTS / OR REPLACE).
+    version: 9,
+    sql: `
+      CREATE TABLE IF NOT EXISTS hired_pilots (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL CHECK (status IN ('hired', 'fired')),
+        aircraft_id TEXT,
+        json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS hired_pilots_status ON hired_pilots (status);
+      INSERT OR REPLACE INTO settings (key, json) VALUES ('economy.phase', '9');
+    `,
+  },
 ];

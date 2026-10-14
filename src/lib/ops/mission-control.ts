@@ -438,6 +438,7 @@ const TONE: Partial<Record<string, LoopTone>> = {
   "defect.found": "hold",
   "demand.event": "hold",
   "insurance.claim": "hold",
+  "pilot.route_stopped": "hold",
   "sim.connected": "go",
   touchdown: "go",
   "flight.started": "go",
@@ -505,6 +506,12 @@ export function describeEvent(ev: ReceivedEvent): LoopLine {
     case "crash":
       text = "CRASH REPORTED BY THE SIMULATOR";
       break;
+    case "pilot.route_stopped": {
+      // A modelled operation, never telemetry: say so on the loop line.
+      const reg = str(d["registration"]);
+      text = `HIRED PILOT (SIMULATED) ROUTE STOPPED${reg ? ` · ${reg}` : ""}`;
+      break;
+    }
     default: {
       const label = msg.name.replace(/[._]/g, " ").toUpperCase();
       const r = route(d);

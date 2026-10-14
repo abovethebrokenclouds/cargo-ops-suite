@@ -12,6 +12,7 @@ import {
   fboRecordSchema,
   fboTransactionSchema,
   fleetRecordSchema,
+  hiredPilotRecordSchema,
   listingRecordSchema,
   loanRecordSchema,
   type EconomyRepo,
@@ -198,6 +199,14 @@ export const CAREER_FORMAT = "cargo-ops-career";
  * set it and the transit chain's ends) and each transit leg's `weather`. On import a
  * weather check claiming eligibility without sim telemetry and a live METAR is not trusted
  * (`eligible` is cleared, see `trustedWeather`). An older connector refuses a version 5 file instead of misreading it.
+ * Version 5 files may also carry hired pilots (`pilots`, optional, no format bump: absent in
+ * older files). A career that ever hired a pilot cannot move to an older connector: its
+ * ledger has `pilot_wage` (and usually `hired_income`) rows and an assigned aircraft has the
+ * fleet status `hired`, none of which an older connector knows, so it refuses the file as
+ * invalid instead of misreading it — whether or not pilots are still assigned. On import the
+ * book repairs what it cannot trust: an aircraft marked hired without a pilot is available
+ * again, and a pilot on an aircraft not marked hired (or a second pilot on one aircraft) is
+ * unassigned.
  * Version 4 (P5 part 2) adds FBOs, FBO transactions and demand events (the company carries
  * demand activity, counters and milestones; fleet rows carry insurance and incidents);
  * version 3 (P5) adds the used market's listings (and fleet rows carry systems, defects,
@@ -224,6 +233,8 @@ export const careerExportSchema = z.object({
   fbos: z.array(fboRecordSchema).default([]),
   fboTransactions: z.array(fboTransactionSchema).default([]),
   demandEvents: z.array(demandEventRecordSchema).default([]),
+  // Hired pilots (optional in version 5; absent in older files).
+  pilots: z.array(hiredPilotRecordSchema).default([]),
 });
 export type CareerExport = z.infer<typeof careerExportSchema>;
 export type CareerExportInput = z.input<typeof careerExportSchema>;
@@ -298,6 +309,7 @@ export function exportCareer(
     fbos: repo.listFbos(),
     fboTransactions: repo.listFboTransactions().map(({ id: _id, ...t }) => t),
     demandEvents: repo.listDemandEvents(0),
+    pilots: repo.listPilots(),
   };
 }
 
@@ -313,6 +325,7 @@ export type ImportResult =
         loans: number;
         market: number;
         fbos: number;
+        pilots: number;
       };
       version: 1 | 2 | 3 | 4 | 5;
     }
@@ -364,7 +377,7 @@ export function importCareer(
   const db = repo.db;
   repo.transaction(() => {
     db.exec(
-      "DELETE FROM mission_jobs; DELETE FROM missions; DELETE FROM jobs; DELETE FROM ledger; DELETE FROM company; DELETE FROM fleet; DELETE FROM loans; DELETE FROM aircraft_events; DELETE FROM market_listings; DELETE FROM fbos; DELETE FROM fbo_modules; DELETE FROM fbo_transactions; DELETE FROM demand_events; DELETE FROM demand_index; DELETE FROM insurance_policies; DELETE FROM milestones;",
+      "DELETE FROM mission_jobs; DELETE FROM missions; DELETE FROM jobs; DELETE FROM ledger; DELETE FROM company; DELETE FROM fleet; DELETE FROM loans; DELETE FROM aircraft_events; DELETE FROM market_listings; DELETE FROM fbos; DELETE FROM fbo_modules; DELETE FROM fbo_transactions; DELETE FROM demand_events; DELETE FROM demand_index; DELETE FROM insurance_policies; DELETE FROM milestones; DELETE FROM hired_pilots;",
     );
     if (data.company) {
       // Version 1 companies get the P4 defaults from the schema; the ledger counter is the
@@ -404,6 +417,7 @@ export function importCareer(
     for (const l of data.loans) repo.saveLoan(l);
     for (const e of data.aircraftEvents) repo.addAircraftEvent(e);
     for (const l of data.market) repo.saveListing(l);
+    for (const p of data.pilots) repo.savePilot(p);
     const keep = new Set(data.flights.map((f) => f.id));
     const existing = db.prepare("SELECT id FROM flights").all() as Array<{ id: string }>;
     const del = db.prepare("DELETE FROM flights WHERE id = ?");
@@ -429,6 +443,7 @@ export function importCareer(
       loans: data.loans.length,
       market: data.market.length,
       fbos: data.fbos.length,
+      pilots: data.pilots.length,
     },
     version: data.version,
   };
