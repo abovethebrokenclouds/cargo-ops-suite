@@ -97,6 +97,16 @@ export class PhaseFsm {
     for (const s of [this.taxi, this.climb, this.level, this.descent, this.approach]) s.reset();
   }
 
+  /**
+   * The simulator link dropped during a flight: keep the phase (the flight resumes after a
+   * reconnect) but forget the on-ground state and every sustained condition, so nothing
+   * is believed until real samples arrive again.
+   */
+  suspend(): void {
+    this.ground.reset();
+    for (const s of [this.taxi, this.climb, this.level, this.descent, this.approach]) s.reset();
+  }
+
   /** Explicit flight start: back to Boarding without forgetting the ground state. */
   restart(): PhaseTransition | null {
     const from = this.current;

@@ -112,6 +112,15 @@ export class SimClock {
     this.lastRecvMs = null;
     this.lastSimTimeSec = null;
   }
+
+  /**
+   * The simulator link dropped: keep the clock where it is but forget the last receive
+   * time, so the first sample after a reconnect adds nothing for the time the sim was gone.
+   */
+  suspend(): void {
+    this.lastRecvMs = null;
+    this.lastSimTimeSec = null;
+  }
 }
 
 /**

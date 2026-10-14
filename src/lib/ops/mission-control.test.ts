@@ -205,6 +205,31 @@ describe("goNoGoLamps", () => {
     expect(wx(null)?.state).toBe("nodata");
   });
 
+  it("live with the simulator offline: no FRESH, no telemetry lamps, no payload preview", () => {
+    const preview = {
+      stage: "preview",
+      status: "ok",
+      source: "sim",
+      cargoKg: 840,
+      toleranceKg: 84,
+      checkedAt: "2026-10-14T12:00:00.000Z",
+      message: "Sim payload matches the cargo",
+    } as const;
+    const s = withSnapshot(
+      {
+        ...FULL,
+        mission: { payloadCheck: preview } as unknown as NonNullable<Snapshot["state"]["mission"]>,
+      },
+      { mode: "live", source: "sim", connected: false },
+    );
+    const l = lamps(s);
+    expect(l["link"]).toMatchObject({ state: "nogo", value: "SIM OFF" });
+    expect(l["fresh"]).toMatchObject({ state: "nodata", value: "SIM OFF", source: null });
+    for (const id of ["brake", "ground", "fuel", "rate", "weight", "payload"]) {
+      expect(l[id]?.state, id).toBe("nodata");
+    }
+  });
+
   it("drops telemetry lamps to NO DATA once the session ends", () => {
     const s = simReducer(withSnapshot(FULL), { type: "status", status: "disconnected" });
     const l = lamps(s);

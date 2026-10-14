@@ -9,6 +9,8 @@ import { defineConfig, devices } from "@playwright/test";
 //  - replay: the real connector with `--sim fake` serving the CARGO_OPS_LOCAL SPA build. Every
 //    replay spec file starts its OWN connector on a free port with a fresh data dir
 //    (e2e/replay-fixtures.ts), so the specs are independent of each other and of their order.
+//  - live: the real connector in SimConnect mode against the test-only SimConnect protocol
+//    emulator (emulated evidence about our code, never about MSFS).
 // PW_CHROMIUM_PATH lets cloud containers use a preinstalled Chromium.
 // E2E_PORT moves the demo server off the default so parallel runs (other worktrees, the gate)
 // never collide on one port. A server already listening there is reused only when
@@ -48,6 +50,12 @@ export default defineConfig({
       // baseURL comes from the per-file connector fixture (e2e/replay-fixtures.ts).
       name: "replay",
       testMatch: /replay\.spec\.ts/,
+    },
+    {
+      // Live mode: the real connector against the test-only SimConnect emulator
+      // (connector/test/support/simconnect-emulator.ts); the spec starts both itself.
+      name: "live",
+      testMatch: /live\.spec\.ts/,
     },
   ],
   webServer: [

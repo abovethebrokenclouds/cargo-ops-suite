@@ -115,10 +115,12 @@ WebSocket session (`packages/protocol`): the client sends `hello` with the token
 is true only after node-simconnect's `open()` resolved) → `snapshot` → `delta`/`event`
 frames sharing one monotonic `seq`. `resync` returns a fresh snapshot. The server
 pings every 15 s. Commands: `flight.start` (needs the aircraft on the ground with the
-parking brake set; errors `flight_active`, `no_data`, `not_on_ground`, `brake_not_set`;
+parking brake set; errors `sim_offline` while the simulator link is down, `flight_active`,
+`no_data`, `not_on_ground`, `brake_not_set`;
 with a loaded mission also `not_at_origin` beyond 3 nm, `insufficient_fuel`, `over_mtow`)
 and `flight.end` (completed when Arrived; otherwise `not_arrived` unless
-`args.abort === true`, which ends it as `aborted`; `no_flight` without one). Cargo
+`args.abort === true`, which ends it as `aborted`; `no_flight` without one; `sim_offline`
+without abort while the simulator link is down). Cargo
 commands (P3, see `docs/ECONOMY.md`): `jobs.list`, `jobs.refresh {airport?, destination?}`,
 `job.accept {jobId}`, `job.release {jobId}` (an in-transit job is abandoned: failed, −3
 reputation), `mission.load {jobIds, destination?}` (a `destination` other than the jobs' final
@@ -128,8 +130,12 @@ one makes a transit leg), `mission.unload`,
 `mixed_route`, `same_airport`, `no_progress`, `payload_exceeded`, `runway_unsuitable`, `out_of_range`, `mission_active`,
 `no_mission`, `mission_in_progress`, `unknown_type`. Every other command is answered with
 `ok: false, error.code: "not_implemented"`. When the simulator connects or disconnects, every client receives a
-new `welcome` + `snapshot`, and simulator-derived domains are cleared on disconnect so
-stale values never look live. Close codes: `4401` bad/missing token, `4400` invalid
+new `welcome` + `snapshot`, and simulator-derived domains (including `phase` and `flight`) are
+cleared on disconnect so stale values never look live. A running flight survives a drop: it
+is suspended (no flight domain, no offline time counted, its phase kept) and resumes on the
+first real sample after the reconnect, where a moved aircraft sets the teleport flag; without
+a flight the phase and a half-begun leg are forgotten. The economy forgets the last parked
+position and its payload preview turns `unknown` until the sim reports stations again. Close codes: `4401` bad/missing token, `4400` invalid
 first message, `4408` no hello within 5 s.
 
 ## Flight tracking (plan §6.2–§6.4)

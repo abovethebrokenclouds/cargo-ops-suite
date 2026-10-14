@@ -35,7 +35,12 @@ import {
   formatLon,
   formatMinutes,
 } from "@/lib/format";
-import { currentPhase, fuelEnduranceMin, type ClientSimState } from "@/lib/sim-state";
+import {
+  currentPhase,
+  fuelEnduranceMin,
+  isSimOfflineSession,
+  type ClientSimState,
+} from "@/lib/sim-state";
 import { useTelemetryHistory } from "@/lib/sim-state/history";
 import { useNow } from "@/lib/sim-state/hooks";
 import { useSimConnection } from "@/lib/transport/useSimConnection";
@@ -103,17 +108,20 @@ function annunciators(state: ClientSimState, stale: boolean): AnnunciatorProps[]
           }
         : { label: "Sim rate", state: "off", value: "×1" }
       : { label: "Sim rate", state: "unknown" },
-    stale
-      ? { label: "Data", state: "on", tone: "destructive", value: "STALE" }
-      : source
-        ? {
-            label: "Data",
-            state: "on",
-            tone: source === "sim" ? "success" : source === "demo" ? "warning" : "accent",
-            value: source === "sim" ? "SIM" : source === "demo" ? "DEMO" : "REPLAY",
-            pulse: true,
-          }
-        : { label: "Data", state: "unknown" },
+    // Live, but the simulator is gone: whatever still arrives is not telemetry.
+    isSimOfflineSession(state)
+      ? { label: "Data", state: "off", value: "SIM OFF" }
+      : stale
+        ? { label: "Data", state: "on", tone: "destructive", value: "STALE" }
+        : source
+          ? {
+              label: "Data",
+              state: "on",
+              tone: source === "sim" ? "success" : source === "demo" ? "warning" : "accent",
+              value: source === "sim" ? "SIM" : source === "demo" ? "DEMO" : "REPLAY",
+              pulse: true,
+            }
+          : { label: "Data", state: "unknown" },
   ];
 }
 
