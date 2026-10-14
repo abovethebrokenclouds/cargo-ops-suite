@@ -167,7 +167,10 @@ export function FleetCard({
         </div>
         <div>
           <dt className="label-eyebrow">Status</dt>
-          <dd className={cn("mt-1 flex items-center gap-2", statusTone[a.status])}>
+          <dd
+            className={cn("mt-1 flex items-center gap-2", statusTone[a.status])}
+            data-testid="aircraft-status"
+          >
             <span className="status-dot" aria-hidden="true" />
             {grounded && a.status === "available" ? gateLabel : statusLabel[a.status]}
           </dd>
