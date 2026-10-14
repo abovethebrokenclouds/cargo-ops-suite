@@ -351,5 +351,7 @@ pages disconnect at once and show **Pair this device** again. `--reset-token` un
 device.
 
 Notes: plain `http` on your own network (no certificate); the browser may say "Not secure",
-and the installable app (PWA) only works on this PC. IPv4 only. Do not forward the port on your
-router: LAN access is for your home network, never the internet.
+and the installable app (PWA) only works on this PC. IPv4 only. On this PC keep using
+<http://127.0.0.1:4311>: opening the LAN address on the PC itself counts as a LAN device and
+asks for a code. Do not forward the port on your router: LAN access is for your home network,
+never the internet.
