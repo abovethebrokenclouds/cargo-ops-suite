@@ -1031,6 +1031,66 @@ describe("SimConnect emulator: payload check against the sim (PC-49 logic)", () 
       true,
     );
   });
+
+  it("no payload stations + a payload entered by you: unknown (bonuses kept), TOTAL WEIGHT cross-check", async () => {
+    // 7,417.9 − 4,600 empty − 2,247.9 fuel = 570 lb = 258.5 kg on board besides fuel.
+    const r = await payloadRig({ ...CARAVAN, "PAYLOAD STATION COUNT": 0 });
+    await loadKatlMission(r);
+    await waitFor(() => r.mission()?.payloadCheck?.status === "unknown", "unknown preview");
+    const set = ok<Mission>(r, "mission.payload", { kg: 181 });
+    assert.equal(set.enteredPayloadKg, 181);
+    const preview = await waitFor(
+      () => (r.mission()?.payloadCheck?.impliedKg !== undefined ? r.mission() : null),
+      "an implied payload from TOTAL WEIGHT",
+    );
+    assert.equal(preview.payloadCheck?.status, "unknown");
+    assert.equal(preview.payloadCheck?.source, "sim");
+    assert.equal(preview.payloadCheck?.enteredKg, 181);
+    assert.equal(preview.payloadCheck?.enteredRole, "used");
+    assert.equal(preview.payloadCheck?.impliedKg, 258.5);
+    assert.equal(preview.payloadCheck?.crossCheck, "match");
+    assert.equal(preview.payloadCheck?.simPayloadKg, undefined);
+
+    // An entered payload that cannot fit under MAX GROSS WEIGHT: a warning, not a refusal
+    // (only the sim's TOTAL WEIGHT can refuse a start).
+    ok(r, "mission.payload", { kg: 1500 });
+    assert.equal(r.mission()?.payloadCheck?.status, "overloaded");
+    assert.equal(r.mission()?.payloadCheck?.overBasis, "entered");
+    ok(r, "mission.payload", { kg: 181 });
+
+    ok(r, "flight.start");
+    const m = r.mission();
+    assert.equal(m?.payloadCheck?.stage, "departure");
+    assert.equal(m?.payloadCheck?.status, "unknown");
+    assert.equal(m?.payloadCheck?.enteredRole, "used");
+    const ev = r.frames.find((f) => f.type === "event" && f.name === "mission.payload_check");
+    assert.ok(ev && ev.type === "event");
+    assert.equal(ev.source, "sim");
+    assert.equal((ev.data as { payoutBonuses: boolean }).payoutBonuses, true);
+  });
+
+  it("a contradicting sim value is never overridden by the payload entered by you", async () => {
+    // Pilot 170 lb + 400 lb cargo: 181.4 kg loaded, below the cargo.
+    const r = await payloadRig(CARAVAN);
+    const m0 = await loadKatlMission(r);
+    await waitFor(() => r.mission()?.payloadCheck?.status === "underloaded", "underloaded");
+    const set = ok<Mission>(r, "mission.payload", { kg: m0.payloadKg });
+    assert.equal(set.payloadCheck?.status, "underloaded");
+    assert.equal(set.payloadCheck?.enteredRole, "contradicts");
+    assert.equal(set.payloadCheck?.loadedKg, 181.4);
+    assert.equal(set.payloadCheck?.crossCheck, "match", "stations agree with TOTAL WEIGHT");
+    ok(r, "flight.start");
+    const flying = r.mission();
+    assert.equal(flying?.payloadCheck?.stage, "departure");
+    assert.equal(flying?.payloadCheck?.status, "underloaded");
+    const ev = r.frames.find((f) => f.type === "event" && f.name === "mission.payload_check");
+    assert.equal(
+      ev?.type === "event" && (ev.data as { payoutBonuses: boolean }).payoutBonuses,
+      false,
+    );
+    const late = r.cmd("mission.payload", { kg: 1 });
+    assert.equal(!late.ok && late.error.code, "mission_in_progress");
+  });
 });
 
 describe("SimConnect emulator: GPS flight plan and destination (PC-55 logic)", () => {

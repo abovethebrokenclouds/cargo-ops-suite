@@ -214,6 +214,9 @@ sim-stamped test frames and hand-made live reports):
   `mission.unload` returns the jobs to accepted before departure.
 - **payload check**: cargo vs the sim's payload stations, previewed while loaded and frozen at
   the start; an underloaded departure pays without bonuses (see "Payload check").
+  `mission.load {enteredPayloadKg?}` or `mission.payload {kg | null}` (before departure;
+  `mission_in_progress` after it) records a payload entered by you (see "Payload entered by
+  you").
 - **start**: with a loaded mission an explicit `flight.start` additionally needs the
   aircraft within **3 nm** of the origin airport (`not_at_origin`), fuel ≥ leg fuel
   - 45 min (`insufficient_fuel`, when the sim reports fuel) and total weight ≤ max
@@ -304,6 +307,51 @@ tolerance   = max(25 kg, 10 % of the cargo)
 - **Logbook.** The departure check is stored with the mission; the logbook row shows it and
   the CSV export has a `payload_check` column (`ok`, `underloaded`, `overloaded`, `unknown`,
   empty without a mission).
+
+### Payload entered by you
+
+Legacy `PAYLOAD STATION*` SimVars can be missing or wrong on MSFS 2024 aircraft (plan §14.2).
+The player may type the payload for the loaded mission (kg, the cargo loaded, crew excluded;
+0–200,000): `mission.load {jobIds, enteredPayloadKg}` at load or `mission.payload {kg}` before
+departure (`kg: null` clears it; frozen at departure). It is stored on the mission
+(`enteredPayloadKg`) and shown everywhere as **entered by you** (tag `YOURS`, source
+`player`), never as a sim value. The rule never pays for a player number:
+
+| Station readout              | Entered value                                                     | Status                                                  | `enteredRole` |
+| ---------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------- | ------------- |
+| reported (ok or underloaded) | same verdict as the sim                                           | the sim's                                               | `agrees`      |
+| reported (ok or underloaded) | other verdict                                                     | the sim's: the entered value is **ignored**             | `contradicts` |
+| none (`unknown`)             | any                                                               | `unknown`: bonuses kept, no penalty (the existing rule) | `used`        |
+| none (`unknown`)             | EMPTY WEIGHT + fuel + (entered + crew setting) > MAX GROSS WEIGHT | `overloaded`, `overBasis: "entered"`: a warning only    | `used`        |
+
+- An entered value can only stand in for an `unknown` readout. It can never turn an
+  underloaded sim reading into a bonus-eligible `ok`, and it can never make a check
+  `underloaded` (no penalty from the player's own number either), so `payloadMismatch` depends
+  on the sim alone.
+- The entered-value overload is a caution: an explicit start is refused only by the sim's own
+  TOTAL WEIGHT (`over_mtow`, `overBasis: "total_weight"`), never by an entered number.
+- "Verdict" uses the same tolerance: short = below cargo − max(25 kg, 10 % of the cargo).
+
+### TOTAL WEIGHT cross-check
+
+```
+implied   = TOTAL WEIGHT − EMPTY WEIGHT − FUEL TOTAL QUANTITY WEIGHT   (pounds → kg)
+compared  = Σ PAYLOAD STATION WEIGHT (crew included)
+            or, with no stations, the entered value + the crew setting (else 0 kg)
+tolerance = max(100 kg, 10 % of implied)
+```
+
+Only when the sim reports all three weights and implied ≥ 0 (a negative remainder means the
+sim's numbers disagree; nothing is shown instead of a made-up 0). The check records
+`impliedKg`, `emptyLb`, `fuelLb`, `crossCheck` (`match` / `mismatch`), `crossCheckWith`
+(`stations` / `entered`) and `crossCheckToleranceKg`; a mismatch is appended to the message
+and flagged in the UI. It is informational: it never changes the status or the payout. The
+100 kg floor covers a pilot the sim does not list as a station, oil and unusable fuel. Replay
+fixture: 8,430 − 4,730 − 1,700 = 2,000 lb = 907.2 kg = the station sum → `match`.
+
+The logbook row and detail show both sources; the CSV export adds `payload_entered_kg` and
+`payload_implied_kg` after `payload_check`. Both live inside the mission and its payload check,
+so the career export stays version 5 (optional fields; older files import unchanged).
 
 Worked examples (`packages/economy/test/payload-check.test.ts`), stations of the replay
 fixture (Pilot 170 lb + 450 + 520 + 480 + 380 lb = 2,000 lb):

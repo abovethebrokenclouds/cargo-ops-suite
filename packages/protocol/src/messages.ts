@@ -75,6 +75,7 @@ export const KNOWN_COMMANDS = [
   "mission.load",
   "mission.unload",
   "mission.abort",
+  "mission.payload",
   // P4 fleet and finance.
   "fleet.sell",
   "fleet.lease",

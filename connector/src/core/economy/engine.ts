@@ -12,7 +12,9 @@
 // - payload check: while the mission is loaded the cargo is compared with the payload
 //   stations the sim reports (minus a crew allowance) as a live preview; at the start
 //   the check is frozen on the mission. An underloaded departure removes the payout
-//   bonuses (like noBonus); no stations reported → unknown, never a penalty.
+//   bonuses (like noBonus); no stations reported → unknown, never a penalty. A payload the
+//   player entered (mission.load / mission.payload) only stands in for an unknown readout;
+//   TOTAL WEIGHT − EMPTY WEIGHT − fuel is shown as a second source (cross-check).
 // - weather: the METAR flight category the connector already holds is frozen for the
 //   origin at the start and for the destination at arrival; a live, current IFR/LIFR
 //   report under sim telemetry adds the weather bonus (sample/unknown → none).
@@ -70,6 +72,7 @@ import {
   jobIdArgsSchema,
   jobsRefreshArgsSchema,
   missionLoadArgsSchema,
+  missionPayloadArgsSchema,
   resolveAircraftType,
   settingsUpdateArgsSchema,
   aircraftTypeByKey,
@@ -750,11 +753,14 @@ export class EconomyEngine {
   private payloadCheckNow(m: Mission, stage: PayloadCheck["stage"]): PayloadCheck {
     const payload = this.store.getDomain("payload") as PayloadState | null | undefined;
     const weights = this.store.getDomain("weights") as WeightsState | null | undefined;
+    const fuel = this.store.getDomain("fuel") as FuelState | null | undefined;
     const check = checkPayload({
       cargoKg: m.payloadKg,
       stations: payload?.stations ?? null,
       weights: weights ?? null,
+      fuelLb: fuel?.totalLb ?? null,
       crewAllowanceKg: this.company.crewAllowanceKg,
+      enteredPayloadKg: m.enteredPayloadKg ?? null,
       source: this.store.source,
       stage,
       checkedAt: new Date(this.now()).toISOString(),
@@ -762,7 +768,11 @@ export class EconomyEngine {
     if (this.simOffline && check.status === "unknown") {
       return {
         ...check,
-        message: "The simulator is not connected: the cargo cannot be compared (no penalty)",
+        message: `The simulator is not connected: the cargo cannot be compared (no penalty)${
+          check.enteredKg !== undefined
+            ? `; payload entered by you ${Math.round(check.enteredKg)} kg`
+            : ""
+        }`,
       };
     }
     return check;
@@ -848,20 +858,12 @@ export class EconomyEngine {
     if (!m || m.status !== "loaded") return false;
     const next = this.payloadCheckNow(m, "preview");
     const prev = m.payloadCheck;
-    const key = (c: PayloadCheck | undefined) =>
-      c
-        ? [
-            c.stage,
-            c.status,
-            c.source,
-            c.simPayloadKg,
-            c.crewKg,
-            c.loadedKg,
-            c.totalLb,
-            c.maxGrossLb,
-            c.message,
-          ].join("|")
-        : "";
+    // Everything but the wall clock: a new number or flag is a change worth publishing.
+    const key = (c: PayloadCheck | undefined) => {
+      if (!c) return "";
+      const { checkedAt: _t, ...rest } = c;
+      return JSON.stringify(rest);
+    };
     if (key(prev) === key(next)) return false;
     this.mission = { ...m, payloadCheck: next };
     return true;
@@ -1499,7 +1501,32 @@ export class EconomyEngine {
       case "mission.load": {
         const p = missionLoadArgsSchema.safeParse(args);
         if (!p.success) return fail("bad_args", "jobIds is required");
-        return this.load(p.data.jobIds, p.data.destination?.toUpperCase());
+        return this.load(p.data.jobIds, p.data.destination?.toUpperCase(), p.data.enteredPayloadKg);
+      }
+      case "mission.payload": {
+        // docs/ECONOMY.md "Payload entered by you": before departure only (frozen after).
+        const p = missionPayloadArgsSchema.safeParse(args);
+        if (!p.success) return fail("bad_args", "kg must be a number from 0 to 200,000 or null");
+        const m = this.mission;
+        if (!m || (m.status !== "loaded" && m.status !== "in_progress"))
+          return fail("no_mission", "No mission is loaded");
+        if (m.status === "in_progress")
+          return fail(
+            "mission_in_progress",
+            "The payload check was frozen at departure; the entered payload can no longer change",
+          );
+        const kg = p.data.kg === null ? null : round1(p.data.kg);
+        const next: Mission = { ...m, enteredPayloadKg: kg };
+        this.mission = { ...next, payloadCheck: this.payloadCheckNow(next, "preview") };
+        this.log(
+          "info",
+          kg === null
+            ? `Mission ${m.id}: payload entered by you cleared`
+            : `Mission ${m.id}: payload entered by you ${kg} kg (player value, not sim)`,
+        );
+        this.persistMission();
+        this.publish();
+        return { ok: true, data: this.mission };
       }
       case "mission.unload": {
         const m = this.mission;
@@ -1781,7 +1808,11 @@ export class EconomyEngine {
     }
   }
 
-  private load(ids: string[], legDestination?: string): Ok<Mission> | Fail {
+  private load(
+    ids: string[],
+    legDestination?: string,
+    enteredPayloadKg?: number,
+  ): Ok<Mission> | Fail {
     if (
       this.mission &&
       (this.mission.status === "loaded" || this.mission.status === "in_progress")
@@ -1895,6 +1926,7 @@ export class EconomyEngine {
       ...missionLegTerms(loaded, first.destination, gameMs, this.company.reputation),
       createdAt: new Date(this.now()).toISOString(),
       ...(transitIds.length ? { transitJobIds: transitIds } : {}),
+      ...(enteredPayloadKg !== undefined ? { enteredPayloadKg: round1(enteredPayloadKg) } : {}),
     };
     mission.payloadCheck = this.payloadCheckNow(mission, "preview");
     this.repoTx(() => {

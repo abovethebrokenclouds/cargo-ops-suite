@@ -197,7 +197,10 @@ function payloadLamp(state: ClientSimState, up: boolean, simUp: boolean): Lamp {
     case "underloaded":
       return { ...base, state: "nogo", value: "UNDER" };
     case "overloaded":
-      return { ...base, state: "nogo", value: "OVER MTOW" };
+      // Over max gross only by the payload you entered: a caution, the start is not blocked.
+      return check.overBasis === "entered"
+        ? { ...base, state: "hold", value: "OVER (YOURS)" }
+        : { ...base, state: "nogo", value: "OVER MTOW" };
     case "unknown":
       return { ...base, state: "nodata", value: "UNKNOWN", source: null };
   }

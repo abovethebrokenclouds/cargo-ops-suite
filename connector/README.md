@@ -123,8 +123,9 @@ and `flight.end` (completed when Arrived; otherwise `not_arrived` unless
 without abort while the simulator link is down). Cargo
 commands (P3, see `docs/ECONOMY.md`): `jobs.list`, `jobs.refresh {airport?, destination?}`,
 `job.accept {jobId}`, `job.release {jobId}` (an in-transit job is abandoned: failed, −3
-reputation), `mission.load {jobIds, destination?}` (a `destination` other than the jobs' final
-one makes a transit leg), `mission.unload`,
+reputation), `mission.load {jobIds, destination?, enteredPayloadKg?}` (a `destination` other than the jobs' final
+one makes a transit leg), `mission.payload {kg: number | null}` (the payload entered by you,
+before departure only), `mission.unload`,
 `mission.abort`, `settings.update {aircraftType?: key | null, base?, crewAllowanceKg?: kg | null}`; errors include
 `bad_args`, `unknown_airport`, `job_unavailable`, `job_not_accepted`, `job_loaded`,
 `mixed_route`, `same_airport`, `no_progress`, `payload_exceeded`, `runway_unsuitable`, `out_of_range`, `mission_active`,
