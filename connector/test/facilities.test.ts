@@ -122,7 +122,9 @@ afterEach(async () => {
     await r.source.stop();
     await r.emu.close();
   }
-  for (const c of cleanups.splice(0)) await c();
+  // Last registered, first run: storage closes before its temp dir is removed (Windows
+  // refuses to delete an open SQLite file).
+  for (const c of cleanups.splice(0).reverse()) await c();
 });
 
 async function rig(options: EmulatorOptions = {}, facilityTimeoutMs?: number): Promise<Rig> {
