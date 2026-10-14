@@ -36,7 +36,11 @@ jobs:
         with:
           node-version: 24
 
-      - name: W-01 start scripts\start-cargo-ops.cmd -NoOpen --sim fake --loop
+      # One step on purpose: the runner ends the processes a step leaves behind when the step
+      # finishes, so a launcher started in its own step dies before the checks run (seen as a
+      # launcher log that stops mid `npm ci`). The launcher lives for exactly this step.
+      - name: W-01 start-cargo-ops.cmd -NoOpen --sim fake --loop, SPA + welcome; W-40 PWA installability
+        timeout-minutes: 40
         run: |
           New-Item -ItemType Directory -Force -Path $env:CARGO_OPS_CI_LOGS | Out-Null
           Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "CargoOps") -ErrorAction SilentlyContinue
@@ -46,28 +50,32 @@ jobs:
             -ArgumentList "/d", "/c", "scripts\start-cargo-ops.cmd", "-NoOpen", "--sim", "fake", "--loop" `
             -WorkingDirectory $env:GITHUB_WORKSPACE `
             -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow -PassThru
-          "LAUNCHER_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "launcher pid $($p.Id)"
-
-      - name: W-01 SPA on 127.0.0.1:4311, WebSocket welcome (replay)
-        timeout-minutes: 30
-        run: node scripts/ci/check-launcher.mjs --port 4311 --timeout-ms 1500000 --pid $env:LAUNCHER_PID --log (Join-Path $env:CARGO_OPS_CI_LOGS "launcher.out.log") --err-log (Join-Path $env:CARGO_OPS_CI_LOGS "launcher.err.log")
-
-      - name: W-40 install Playwright Chromium (CI runner only)
-        timeout-minutes: 10
-        run: npx playwright install chromium
-
-      - name: W-40 PWA installability over CDP
-        timeout-minutes: 5
-        run: node scripts/ci/pwa-installability.mjs --url http://127.0.0.1:4311/
-
-      - name: Stop the launcher
-        if: always()
-        run: |
-          if ($env:LAUNCHER_PID) { taskkill /T /F /PID $env:LAUNCHER_PID 2>&1 | Write-Host }
-          Start-Sleep -Seconds 2
-          $still = Get-NetTCPConnection -LocalPort 4311 -State Listen -ErrorAction SilentlyContinue
-          if ($still) { Write-Host "port 4311 still listening (pid $($still.OwningProcess))"; exit 1 }
+          $failure = $null
+          try {
+            Write-Host "::group::W-01 SPA on 127.0.0.1:4311, WebSocket welcome (replay)"
+            node scripts/ci/check-launcher.mjs --port 4311 --timeout-ms 1500000 --pid $p.Id --log $out --err-log $err
+            if ($LASTEXITCODE -ne 0) { throw "W-01 check-launcher.mjs failed (exit $LASTEXITCODE)" }
+            Write-Host "::endgroup::"
+            Write-Host "::group::W-40 install Playwright Chromium (CI runner only)"
+            npx playwright install chromium
+            if ($LASTEXITCODE -ne 0) { throw "W-40 playwright install failed (exit $LASTEXITCODE)" }
+            Write-Host "::endgroup::"
+            Write-Host "::group::W-40 PWA installability over CDP"
+            node scripts/ci/pwa-installability.mjs --url http://127.0.0.1:4311/
+            if ($LASTEXITCODE -ne 0) { throw "W-40 pwa-installability.mjs failed (exit $LASTEXITCODE)" }
+            Write-Host "::endgroup::"
+          } catch {
+            $failure = $_
+          } finally {
+            Write-Host "::group::Stop the launcher"
+            taskkill /T /F /PID $p.Id 2>&1 | Write-Host
+            Start-Sleep -Seconds 2
+            $still = Get-NetTCPConnection -LocalPort 4311 -State Listen -ErrorAction SilentlyContinue
+            Write-Host "::endgroup::"
+          }
+          if ($failure) { Write-Host "::error::$failure"; exit 1 }
+          if ($still) { Write-Host "::error::port 4311 still listening (pid $($still.OwningProcess)) after taskkill /T"; exit 1 }
           exit 0
 
       - name: Collect logs
