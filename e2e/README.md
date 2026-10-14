@@ -43,7 +43,14 @@ Playwright specs, two projects:
   a replay's connector serves SAMPLE METARs and TAFs, never live ones. No spec reaches
   aviationweather.gov.
 
-Neither project talks to a simulator. A real SimConnect session is only checked on the owner's
+- `live` — `sim-offline.live.spec.ts` starts the real connector in SimConnect mode
+  (`--simconnect-host/--simconnect-port`, `--weather off`) against the TEST-ONLY SimConnect
+  protocol emulator (`connector/test/support/simconnect-emulator.ts`): `/flight` shows LIVE and
+  Cruise; when the emulated simulator quits the chip reads SIM OFFLINE, the phase and every
+  readout are empty and the data light reads SIM OFF (never SIM); after it is back the phase
+  returns from new frames. Emulated evidence about our code, not about MSFS.
+
+No project talks to a real simulator. A real SimConnect session is only checked on the owner's
 Windows PC (see `docs/VERIFICATION.md`).
 
 ```sh
