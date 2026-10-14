@@ -34,7 +34,6 @@ const fastRaw: RawValues = {
   hdgTrueDeg: 105.5,
   vsFpm: -500,
   gForce: 1.02,
-  isOnGround: 0,
   simOnGround: 0,
 };
 
@@ -92,7 +91,7 @@ describe("SimVar table", () => {
       "PAYLOAD STATION COUNT",
       "PAYLOAD STATION WEIGHT",
       "PAYLOAD STATION NAME",
-      "IS ON GROUND",
+      "SIM ON GROUND",
       "GENERAL ENG COMBUSTION",
       "BRAKE PARKING POSITION",
       "SIMULATION RATE",
@@ -181,10 +180,10 @@ describe("raw → domain mapping", () => {
     assert.ok(names.includes("PLANE TOUCHDOWN NORMAL VELOCITY"));
   });
 
-  it("uses SIM ON GROUND when IS ON GROUND is unavailable", () => {
-    const { isOnGround: _drop, ...raw } = fastRaw;
-    assert.equal(mapMotion({ ...raw, simOnGround: 1 })?.onGround, true);
-    const { simOnGround: _drop2, ...none } = raw;
+  it("reads on-ground from SIM ON GROUND only (IS ON GROUND is not a documented SimVar)", () => {
+    assert.equal(mapMotion({ ...fastRaw, simOnGround: 1 })?.onGround, true);
+    assert.ok(!SIMVARS.some((s) => s.name === "IS ON GROUND"));
+    const { simOnGround: _drop, ...none } = fastRaw;
     assert.equal(mapMotion(none), undefined);
   });
 
@@ -279,6 +278,8 @@ describe("raw → domain mapping", () => {
     assert.equal(pausedFromEx1(1), true);
     assert.equal(pausedFromEx1(2), true);
     assert.equal(pausedFromEx1(4), true);
-    assert.equal(pausedFromEx1(8), false);
+    assert.equal(pausedFromEx1(8), true, "SIM_PAUSE (esc menu) is a pause");
+    assert.equal(pausedFromEx1(5), true);
+    assert.equal(pausedFromEx1(Number.NaN), false);
   });
 });

@@ -65,7 +65,6 @@ const CARAVAN: Record<string, SimValue> = {
   "PLANE TOUCHDOWN NORMAL VELOCITY": 0,
   "PLANE TOUCHDOWN BANK DEGREES": 0,
   "PLANE TOUCHDOWN PITCH DEGREES": 0,
-  "IS ON GROUND": 1,
   "SIM ON GROUND": 1,
 };
 
@@ -376,7 +375,6 @@ describe("SimConnect emulator: data definitions and decoding (PC-07/08/09 decode
       "AIRSPEED TRUE": 124,
       "GROUND VELOCITY": 130,
       "VERTICAL SPEED": 700,
-      "IS ON GROUND": 0,
       "SIM ON GROUND": 0,
     });
     const motion = await waitFor(() => {
@@ -399,7 +397,7 @@ describe("SimConnect emulator: rejected SimVars", () => {
   it("logs 'SimConnect rejected', drops the datum and keeps everything else working", async () => {
     // One fast and one slow SimVar rejected: their exceptions land in the same 250 ms rebuild
     // window. Before the fix only the last group was rebuilt and fast data never came back.
-    const h = await harness({ reject: ["IS ON GROUND", "PAYLOAD STATION NAME"] });
+    const h = await harness({ reject: ["PLANE TOUCHDOWN PITCH DEGREES", "PAYLOAD STATION NAME"] });
     await waitFor(
       () => h.logs.filter((l) => /SimConnect rejected/.test(l.message)).length >= 2,
       "two rejections",
@@ -409,7 +407,8 @@ describe("SimConnect emulator: rejected SimVars", () => {
     assert.ok(
       rejected.some((l) =>
         l.message.startsWith(
-          'SimConnect rejected "IS ON GROUND" (bool): NAME_UNRECOGNIZED. Dropping IS ON GROUND;',
+          'SimConnect rejected "PLANE TOUCHDOWN PITCH DEGREES" (degrees): NAME_UNRECOGNIZED. ' +
+            "Dropping PLANE TOUCHDOWN PITCH DEGREES;",
         ),
       ),
     );
@@ -419,12 +418,14 @@ describe("SimConnect emulator: rejected SimVars", () => {
       ),
     );
     const mark = h.updates.length;
-    // Fast data comes back with SIM ON GROUND as the on-ground fallback.
+    // Fast data comes back without the rejected touchdown pitch (never guessed).
     const motion = await waitFor(
       () => latest(h.updates, "motion", mark),
       "fast data after rebuild",
     );
     assert.equal(motion.onGround, true);
+    assert.equal(motion.touchdownPitchDeg, undefined);
+    assert.equal(motion.touchdownBankDeg, 0);
     assert.ok(latest(h.updates, "position", mark));
     // Slow data comes back; stations without a name get the "Station i" label.
     const payload = await waitFor(
@@ -442,8 +443,8 @@ describe("SimConnect emulator: rejected SimVars", () => {
       (p) => p.fn === FN.ADD_TO_DATA_DEFINITION && p.fields["name"] === "PLANE LATITUDE",
     );
     assert.ok(lastFast.length >= 2, "fast definition rebuilt");
-    const isOnGround = h.emu.definedNames().filter((n) => n === "IS ON GROUND");
-    assert.equal(isOnGround.length, 1, "IS ON GROUND not requested again");
+    const pitch = h.emu.definedNames().filter((n) => n === "PLANE TOUCHDOWN PITCH DEGREES");
+    assert.equal(pitch.length, 1, "PLANE TOUCHDOWN PITCH DEGREES not requested again");
   });
 
   it("an unknown SIMULATION RATE leaves the sim domain unreported (nothing guessed)", async () => {
@@ -463,7 +464,7 @@ describe("SimConnect emulator: system events (PC-11/14/21/22 logic)", () => {
     const h = await harness();
     await waitFor(() => latest(h.updates, "sim"), "sim domain");
     let mark = h.updates.length;
-    h.emu.pause(4); // SIM pause (ESC menu)
+    h.emu.pause(4); // ACTIVE_PAUSE
     await waitFor(() => events(h.updates, "sim.paused", mark).length > 0, "paused");
     assert.deepEqual(events(h.updates, "sim.paused", mark)[0], {
       paused: true,
@@ -489,6 +490,19 @@ describe("SimConnect emulator: system events (PC-11/14/21/22 logic)", () => {
       flags: 2,
     });
     h.emu.pause(0);
+    await waitFor(() => latest(h.updates, "sim")?.paused === false, "running again");
+
+    // SIM_PAUSE (8, esc menu) is a pause too; the old 0b111 mask read it as running.
+    mark = h.updates.length;
+    h.emu.pause(8);
+    await waitFor(() => events(h.updates, "sim.paused", mark).length > 0, "SIM_PAUSE");
+    assert.deepEqual(events(h.updates, "sim.paused", mark)[0], {
+      paused: true,
+      event: "Pause_EX1",
+      flags: 8,
+    });
+    h.emu.pause(0);
+    await waitFor(() => latest(h.updates, "sim")?.paused === false, "running after SIM_PAUSE");
 
     mark = h.updates.length;
     h.emu.set({ "SIMULATION RATE": 4 });
