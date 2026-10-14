@@ -19,6 +19,13 @@ const ONLINE_MAPS_KEY = "cargo-ops.map.online";
 
 test.describe("demo mode (no connector)", () => {
   test.beforeEach(async ({ page }) => {
+    // E2E_CPU_THROTTLE=6 slows the page's CPU like a loaded CI runner (Chromium's own
+    // throttling), to reproduce timing problems locally.
+    const throttle = Number(process.env["E2E_CPU_THROTTLE"] ?? 1);
+    if (throttle > 1) {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: throttle });
+    }
     await page.addInitScript((key) => {
       try {
         window.localStorage.setItem(key, "off");
@@ -279,7 +286,7 @@ test.describe("demo mode (no connector)", () => {
   test("keyboard shortcuts: g + letter navigates, ? opens the list, typing is ignored", async ({
     page,
   }) => {
-    // Eleven page loads on the dev server: allow for a slow CI runner.
+    // Eleven route renders (one of them the map, on software WebGL): allow for a slow runner.
     test.setTimeout(120_000);
     await page.goto("/");
     await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
@@ -302,12 +309,9 @@ test.describe("demo mode (no connector)", () => {
       await page.keyboard.press("g");
       await page.keyboard.press(key);
       await expect(page).toHaveURL(new RegExp(`${path === "/" ? "/$" : path}$`));
+      // No waiting for the page to settle before the next chord: a route still rendering
+      // (the map initialising on software WebGL) must not expire a `g` (see shortcuts.ts).
       await expect(page.getByRole("heading", { level: 1 }).first()).toHaveText(heading);
-      if (path === "/map") {
-        // Let the map finish initialising first: on a software-WebGL CI runner its start-up
-        // blocks the page for over 1.5 s, which genuinely expires a `g` chord in progress.
-        await expect(page.getByTestId("basemap-badge")).toHaveText("Offline outline");
-      }
     }
     await page.keyboard.press("?");
     const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });

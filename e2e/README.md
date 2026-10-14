@@ -2,8 +2,12 @@
 
 Playwright specs, two projects:
 
-- `demo` — Vite dev server with no connector. Every route must show the DEMO DATA chip and make
-  no non-localhost requests.
+- `demo` — the production SSR build (`bun run build` → `.output`, what Lovable publishes) served
+  by `e2e/serve-ssr.mjs` (plain Node running the worker's own `fetch` handler), no connector.
+  Every route must show the DEMO DATA chip and make no non-localhost requests.
+  `E2E_DEMO_DEV=1` runs the same specs on the Vite dev server instead; it is much slower to
+  hydrate (about 240 unbundled module requests after the load event against about 30), which
+  is why CI does not use it.
 - `replay` — the real connector (`connector/`, `--sim fake --loop`) serving the
   `CARGO_OPS_LOCAL=1` build. **Each replay spec file starts its own connector** on a free port
   with a fresh temporary data dir (`e2e/replay-fixtures.ts`: import `test`/`expect` from there),
@@ -36,6 +40,7 @@ Neither project talks to a simulator. A real SimConnect session is only checked 
 Windows PC (see `docs/VERIFICATION.md`).
 
 ```sh
+bun run build                    # SSR build for the demo project (rebuild after web changes)
 bun run build:local
 (cd connector && npm ci && npm run build)
 bun run e2e                      # CI installs Chromium with `npx playwright install --with-deps chromium`
@@ -50,3 +55,8 @@ for f in used-aircraft settings replay mission fbo; do
   PW_CHROMIUM_PATH=/opt/pw-browsers/chromium bunx playwright test --project=replay --workers=1 e2e/$f*.spec.ts
 done
 ```
+
+Environment knobs: `E2E_PORT` (demo server port, default 5180; `scripts/gate.sh` picks a free
+one so parallel worktrees never collide), `E2E_REUSE_SERVER=1` (reuse a server already on that
+port, never in CI), `E2E_DEMO_DEV=1` (demo project on the dev server), `E2E_CPU_THROTTLE=6`
+(demo pages run with Chromium's CPU throttling, to reproduce slow-runner timing locally).

@@ -13,7 +13,7 @@ import {
   LANDING_FEE_BASE_USD,
   LANDING_FEE_CATEGORY_FACTOR,
 } from "./company-constants";
-import { greatCircleNm, round2 } from "./geo";
+import { EARTH_RADIUS_NM, greatCircleNm, round2 } from "./geo";
 import { hashString } from "./prng";
 
 export const KG_PER_LB = 0.45359237;
@@ -34,16 +34,61 @@ export function airportNoise(ident: string): number {
   return (hashString(`fuel|${ident.toUpperCase()}`) / 4294967296) * 2 - 1;
 }
 
-/** Distance to the nearest other large airport in `list`, nm. */
+/** Large airports of a list sorted by latitude, built once per list (see below). */
+const largeByLat = new WeakMap<readonly EconomyAirport[], EconomyAirport[]>();
+
+function largeAirportsByLat(list: readonly EconomyAirport[]): EconomyAirport[] {
+  let index = largeByLat.get(list);
+  if (!index) {
+    index = list.filter((a) => a.type === "large").sort((a, b) => a.lat - b.lat);
+    largeByLat.set(list, index);
+  }
+  return index;
+}
+
+// Haversine distances can come out a hair under the exact latitude bound in floating point;
+// only skip a candidate when its bound beats the best by more than this, nm.
+const PRUNE_SLACK_NM = 1e-6;
+
+/**
+ * Distance to the nearest other large airport in `list`, nm.
+ *
+ * Exact, not approximate: the great-circle distance is never shorter than the latitude
+ * difference alone (R × |Δlat|), so walking the large airports outwards in latitude from
+ * `airport` can stop once that bound exceeds the best distance found. Same result as scanning
+ * every large airport, at a fraction of the cost (pricing all ~5 000 bundled airports went
+ * from ~6 M haversines to a small fraction of that). The per-list index is cached by list
+ * identity, so lists are treated as immutable (they are `readonly`).
+ */
 export function nearestLargeAirportNm(
   airport: EconomyAirport,
   list: readonly EconomyAirport[],
 ): number | null {
+  const large = largeAirportsByLat(list);
+  // First index with lat >= airport.lat.
+  let lo = 0;
+  let hi = large.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if ((large[mid] as EconomyAirport).lat < airport.lat) lo = mid + 1;
+    else hi = mid;
+  }
   let best: number | null = null;
-  for (const other of list) {
-    if (other.type !== "large" || other.ident === airport.ident) continue;
-    const d = greatCircleNm(airport, other);
-    if (best === null || d < best) best = d;
+  // Visits one candidate; false once it (and everything beyond it) is provably farther.
+  const visit = (other: EconomyAirport): boolean => {
+    const bound = EARTH_RADIUS_NM * Math.abs(((other.lat - airport.lat) * Math.PI) / 180);
+    if (best !== null && bound > best + PRUNE_SLACK_NM) return false;
+    if (other.ident !== airport.ident) {
+      const d = greatCircleNm(airport, other);
+      if (best === null || d < best) best = d;
+    }
+    return true;
+  };
+  let up = lo;
+  let down = lo - 1;
+  while (up < large.length || down >= 0) {
+    if (up < large.length) up = visit(large[up] as EconomyAirport) ? up + 1 : large.length;
+    if (down >= 0) down = visit(large[down] as EconomyAirport) ? down - 1 : -1;
   }
   return best;
 }
