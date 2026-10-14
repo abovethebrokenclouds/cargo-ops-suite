@@ -56,6 +56,8 @@ export const EVENT_NAMES = [
   "job.abandoned",
   // Connector restart during a mission flight (additive).
   "mission.recovered",
+  // Hired pilots (simulated, additive): a route stopped (grounded aircraft, defect found).
+  "pilot.route_stopped",
 ] as const;
 export const eventNameSchema = z.enum(EVENT_NAMES);
 export type EventName = z.infer<typeof eventNameSchema>;
@@ -105,6 +107,11 @@ export const KNOWN_COMMANDS = [
   "insurance.cancel",
   // Manual destination for the current flight (null clears it).
   "plan.destination",
+  // Hired pilots (simulated operations).
+  "pilot.hire",
+  "pilot.fire",
+  "pilot.assign",
+  "pilot.unassign",
 ] as const;
 export type KnownCommandName = (typeof KNOWN_COMMANDS)[number];
 

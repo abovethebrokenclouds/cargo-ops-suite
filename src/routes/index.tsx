@@ -63,6 +63,7 @@ const fleetStatus = {
   returned: "RETURNED",
   repossessed: "REPOSSESSED",
   written_off: "WRITTEN OFF",
+  hired: "HIRED PILOT (SIM.)",
 } as const;
 
 const fleetTone: Record<string, string> = {
@@ -530,7 +531,7 @@ function Index() {
                 {fleetList.map((a) => {
                   const gate = a.airworthiness?.status;
                   const status =
-                    a.status === "maintenance" || a.status === "in_flight"
+                    a.status === "maintenance" || a.status === "in_flight" || a.status === "hired"
                       ? fleetStatus[a.status]
                       : !a.airworthy
                         ? gate && gate !== "airworthy"

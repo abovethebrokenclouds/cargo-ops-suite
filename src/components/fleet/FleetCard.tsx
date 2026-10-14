@@ -61,6 +61,7 @@ const statusTone = {
   returned: "text-muted-foreground",
   repossessed: "text-destructive",
   written_off: "text-destructive",
+  hired: "text-accent",
 } as const;
 
 const statusLabel = {
@@ -71,6 +72,7 @@ const statusLabel = {
   returned: "Returned",
   repossessed: "Repossessed",
   written_off: "Written off",
+  hired: "Hired pilot (simulated)",
 } as const;
 
 export function FleetCard({

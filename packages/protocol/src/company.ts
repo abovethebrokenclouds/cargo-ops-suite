@@ -55,6 +55,10 @@ export const LEDGER_CATEGORIES = [
   "fbo_purchase",
   "fbo_construction",
   "insurance_claim",
+  // Hired pilots (simulated operations): monthly wages and the hired legs' income. Their
+  // fuel and landing fees use the existing categories with refType "pilot".
+  "pilot_wage",
+  "hired_income",
 ] as const;
 export const ledgerCategorySchema = z.enum(LEDGER_CATEGORIES);
 export type LedgerCategory = z.infer<typeof ledgerCategorySchema>;
@@ -114,6 +118,8 @@ export const AIRCRAFT_STATUSES = [
   "repossessed",
   // P5: destroyed in a crash (leaves the fleet).
   "written_off",
+  // Assigned to a hired pilot's simulated route: unavailable to the player until unassigned.
+  "hired",
 ] as const;
 export const aircraftStatusSchema = z.enum(AIRCRAFT_STATUSES);
 export type AircraftStatus = z.infer<typeof aircraftStatusSchema>;
