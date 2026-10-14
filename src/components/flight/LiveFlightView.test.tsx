@@ -134,6 +134,28 @@ describe("LiveFlightView", () => {
     expect(document.querySelector('[data-annunciator="Data"]')).toHaveTextContent("SIM");
   });
 
+  it("live with the simulator offline: no phase, no telemetry and no SIM data light", () => {
+    // A live session whose welcome says the sim is gone, with frames still tagged "sim".
+    let s = simReducer(initialSimState, {
+      type: "welcome",
+      msg: { type: "welcome", v: 1, session: "t", mode: "live", sim: { connected: false } },
+    });
+    s = simReducer(s, {
+      type: "snapshot",
+      msg: { type: "snapshot", v: 1, seq: 0, source: "sim", state: cruise },
+      at: Date.now(),
+    });
+    renderView(s, "live");
+    expect(screen.getByTestId("phase-label")).toHaveTextContent("—");
+    expect(screen.getByText("No phase data")).toBeInTheDocument();
+    expect(document.querySelector('[aria-current="step"]')).toBeNull();
+    for (const v of values()) expect(v).toHaveAttribute("data-empty");
+    const data = document.querySelector('[data-annunciator="Data"]');
+    expect(data).toHaveTextContent("SIM OFF");
+    expect(data).not.toHaveAttribute("data-state", "on");
+    expect(data?.querySelector('[data-live="true"]')).toBeNull();
+  });
+
   it("shows AGL low, warns on endurance and badges a fast sim rate and pause", () => {
     renderView(
       session("live", "sim", {

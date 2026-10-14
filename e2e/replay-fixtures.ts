@@ -28,6 +28,17 @@ export interface ReplayConnector {
 }
 
 export async function startReplayConnector(label: string): Promise<ReplayConnector> {
+  return startConnector(label, ["--sim", "fake", "--loop", "--speed", SPEED]);
+}
+
+/**
+ * Start the real connector with the given simulator arguments (`--sim fake …` for replays,
+ * `--simconnect-host/--simconnect-port` against the test-only SimConnect emulator).
+ */
+export async function startConnector(
+  label: string,
+  simArgs: readonly string[],
+): Promise<ReplayConnector> {
   for (const [what, path] of [
     ["connector build (cd connector && npm run build)", MAIN],
     ["local web build (bun run build:local)", WEB],
@@ -40,11 +51,7 @@ export async function startReplayConnector(label: string): Promise<ReplayConnect
     [
       "--disable-warning=ExperimentalWarning",
       MAIN,
-      "--sim",
-      "fake",
-      "--loop",
-      "--speed",
-      SPEED,
+      ...simArgs,
       "--port",
       "0",
       "--web",

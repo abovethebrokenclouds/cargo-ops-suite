@@ -206,6 +206,8 @@ export class EconomyEngine {
   private title: string | null = null;
   private lastParked: { lat: number; lon: number } | null = null;
   private lastTMs: number | null = null;
+  /** True between a simulator disconnect and the next sample (see onSimOffline). */
+  private simOffline = false;
   private simMinSinceBoard = 0;
   private lastExpiryCheck = 0;
   /** P5: a ferry flight in progress (aircraft with a permit, no mission). */
@@ -553,6 +555,7 @@ export class EconomyEngine {
         this.lastParked = null;
         this.lastTMs = null;
       },
+      onSimOffline: () => this.onSimOffline(),
       referenceSpeedKt: () => this.activeType().type.approachKt,
     };
   }
@@ -643,7 +646,7 @@ export class EconomyEngine {
   private payloadCheckNow(m: Mission, stage: PayloadCheck["stage"]): PayloadCheck {
     const payload = this.store.getDomain("payload") as PayloadState | null | undefined;
     const weights = this.store.getDomain("weights") as WeightsState | null | undefined;
-    return checkPayload({
+    const check = checkPayload({
       cargoKg: m.payloadKg,
       stations: payload?.stations ?? null,
       weights: weights ?? null,
@@ -652,6 +655,13 @@ export class EconomyEngine {
       stage,
       checkedAt: new Date(this.now()).toISOString(),
     });
+    if (this.simOffline && check.status === "unknown") {
+      return {
+        ...check,
+        message: "The simulator is not connected: the cargo cannot be compared (no penalty)",
+      };
+    }
+    return check;
   }
 
   /** Where the weather comes from (set once the connector's weather service exists). */
@@ -708,6 +718,7 @@ export class EconomyEngine {
             c.loadedKg,
             c.totalLb,
             c.maxGrossLb,
+            c.message,
           ].join("|")
         : "";
     if (key(prev) === key(next)) return false;
@@ -715,7 +726,20 @@ export class EconomyEngine {
     return true;
   }
 
+  /**
+   * The simulator link dropped and the session cleared its domains: forget where the
+   * aircraft was parked (a takeoff after the reconnect must be seen parked again) and
+   * stop previewing the payload against stations the sim no longer reports.
+   */
+  private onSimOffline(): void {
+    this.simOffline = true;
+    this.lastParked = null;
+    this.lastTMs = null;
+    if (this.refreshPayloadPreview()) this.publish();
+  }
+
   private onSample(s: FlightSample, flight: FlightState | null, onGround: boolean | null): void {
+    this.simOffline = false;
     if (onGround === true && s.parkingBrake === true) this.lastParked = { lat: s.lat, lon: s.lon };
     else if (onGround === false) this.lastParked = null;
 
