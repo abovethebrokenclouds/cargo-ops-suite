@@ -344,8 +344,8 @@ export function importCareer(
       "DELETE FROM mission_jobs; DELETE FROM missions; DELETE FROM jobs; DELETE FROM ledger; DELETE FROM company; DELETE FROM fleet; DELETE FROM loans; DELETE FROM aircraft_events; DELETE FROM market_listings; DELETE FROM fbos; DELETE FROM fbo_modules; DELETE FROM fbo_transactions; DELETE FROM demand_events; DELETE FROM demand_index; DELETE FROM insurance_policies; DELETE FROM milestones;",
     );
     if (data.company) {
-      // Version 1 companies get the P4 defaults from the schema; the counter and P&L are
-      // rebuilt from the imported ledger when the engine reloads.
+      // Version 1 companies get the P4 defaults from the schema; the ledger counter is the
+      // imported row count and an empty P&L is rebuilt from the ledger below.
       repo.saveCompany({ ...data.company, ledgerCount: data.ledger.length });
     }
     for (const job of data.jobs) repo.saveJob(job);
@@ -355,6 +355,14 @@ export function importCareer(
     for (const e of data.ledger) {
       running += Math.round(e.amount * 100);
       repo.addLedger({ ...e, balance: e.balance ?? running / 100, gameMs: e.gameMs ?? 0 });
+    }
+    // Exports without a monthly P&L (version 1) get it rebuilt from the imported ledger.
+    if (data.company && data.company.pnl.length === 0 && data.ledger.length > 0) {
+      repo.saveCompany({
+        ...data.company,
+        ledgerCount: data.ledger.length,
+        pnl: repo.pnlFromLedger(),
+      });
     }
     for (const a of data.fleet) {
       repo.saveAircraft(a);
