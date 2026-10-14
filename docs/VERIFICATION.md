@@ -8,7 +8,7 @@ simulator-facing row is marked done.
 
 Status legend: ✅ passed · ⏳ not yet run · ❌ failed · — not applicable yet.
 
-**Summary (2026-10-14, end of P6 + SimConnect emulator + METAR weather + names audit + Windows CI + Node 22 launcher + fill contrast + payload check):** cloud table 81 rows (78 ✅, 3 ⏳
+**Summary (2026-10-14, end of P6 + SimConnect emulator + METAR weather + names audit + Windows CI + Node 22 launcher + fill contrast + payload check + ops room):** cloud table 82 rows (79 ✅, 3 ⏳
 that need the PC or an unreachable host); PC table 49 rows, all ⏳ — work through them with the
 first-run checklist at the end. "Emulated" notes in the PC table mean the connector passed
 that scenario against the test-only SimConnect protocol emulator; they are evidence about our
