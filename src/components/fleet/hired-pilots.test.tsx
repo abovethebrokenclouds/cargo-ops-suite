@@ -140,6 +140,29 @@ describe("HiredPilots", () => {
     expect(screen.getByTestId("pilot-pnl-net").textContent).toBe("-$7,500");
   });
 
+  it("a pilot let go this month stays listed (fired) with its P&L and no actions", () => {
+    const base = unassigned.pilots[0];
+    if (!base) throw new Error("fixture");
+    render(
+      <HiredPilots
+        pilots={{
+          ...unassigned,
+          pilots: [{ ...base, status: "fired", firedGameMs: 3_600_000 }],
+        }}
+        source="sim"
+        enabled
+        disabledNote={undefined}
+        busy={false}
+        run={async () => true}
+      />,
+    );
+    expect(screen.getByTestId("pilot-count").textContent).toBe("0 / 10");
+    expect(screen.getByTestId("pilot-status").textContent).toMatch(/^Let go Month 1 · Day 1/);
+    expect(screen.queryByTestId("fire-pilot")).toBeNull();
+    expect(screen.queryByTestId("assign-pilot")).toBeNull();
+    expect(screen.getByTestId("pilot-pnl-net").textContent).toBe("-$7,500");
+  });
+
   it("no aircraft for the rating: assigning is disabled", () => {
     render(
       <HiredPilots

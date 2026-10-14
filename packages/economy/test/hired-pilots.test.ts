@@ -403,7 +403,10 @@ describe("hire, assign, operate", () => {
     const log = collect(book);
     expect(book.firePilot(pilotId).ok).toBe(true);
     expect(book.aircraft(starter.id)?.status).toBe("available");
-    expect(book.pilotsDomain().pilots).toEqual([]);
+    // Still listed this month (marked fired) for its P&L; gone once the month is over.
+    expect(book.pilotsDomain().pilots.map((p) => [p.id, p.status, p.assignment])).toEqual([
+      [pilotId, "fired", null],
+    ]);
     book.advance(2 * GAME_MONTH_MS);
     log.drain();
     expect(log.ledger.filter((e) => e.category === "pilot_wage")).toHaveLength(1);
@@ -493,5 +496,156 @@ describe("hire, assign, operate", () => {
     const katl = opt?.destinations.find((x) => x.icao === "KATL");
     expect(katl).toMatchObject({ distanceNm: 287.7, blockMin: 132, income: 2_803 });
     expect(d.wages).toEqual({ turboprop: 7_500, jet: 14_000 });
+  });
+});
+
+describe("verifier fixes", () => {
+  it("a hired aircraft refuses deferrals, insurance buy/cancel and loan collateral", () => {
+    const book = newBook({ cash: 5_000_000 });
+    const starter = book.ensureStarter();
+    if (!starter) throw new Error("no starter");
+    expect(book.buyInsurance(starter.id).ok).toBe(true);
+    book.hirePilot("turboprop");
+    const assigned = book.assignPilot({
+      pilotId: "HP-1",
+      aircraftId: starter.id,
+      destination: "KATL",
+      served: ["KATL"],
+    });
+    expect(assigned.ok).toBe(true);
+    const code = (r: { ok: boolean; code?: string }) => (r.ok ? "ok" : r.code);
+    book.updateAircraft(starter.id, { defects: [defect("minor", "avionics")] });
+    expect(code(book.defer(starter.id, "D-minor-avionics"))).toBe("aircraft_busy");
+    expect(code(book.cancelInsurance(starter.id))).toBe("aircraft_busy");
+    expect(
+      code(
+        book.takeLoan({
+          lenderId: "jetwash",
+          principal: 100_000,
+          termMonths: 24,
+          collateral: { type: "aircraft", id: starter.id },
+        }),
+      ),
+    ).toBe("aircraft_busy");
+    // Uninsured and hired: buying a policy is refused too.
+    expect(book.unassignPilot("HP-1").ok).toBe(true);
+    expect(book.cancelInsurance(starter.id).ok).toBe(true);
+    book.updateAircraft(starter.id, { defects: [] });
+    expect(
+      book.assignPilot({
+        pilotId: "HP-1",
+        aircraftId: starter.id,
+        destination: "KATL",
+        served: ["KATL"],
+      }).ok,
+    ).toBe(true);
+    expect(code(book.buyInsurance(starter.id))).toBe("aircraft_busy");
+  });
+
+  it("the first month's wage is pro-rated by the time left in the in-game month (cents)", () => {
+    // Day 20 of 30: a third of the month is left → $7,500 × 1/3 = $2,500.00.
+    const book = newBook();
+    const log = collect(book);
+    book.advance(20 * GAME_DAY_MS);
+    log.drain();
+    expect(book.hirePilot("turboprop").ok).toBe(true);
+    // One minute before the boundary: 7,500 × 60,000 / 2,592,000,000 = $0.17.
+    book.advance(10 * GAME_DAY_MS - 60_000);
+    expect(book.hirePilot("turboprop").ok).toBe(true);
+    book.advance(2 * 60_000);
+    log.drain();
+    const wages = log.ledger.filter((e) => e.category === "pilot_wage");
+    expect(wages.map((e) => e.amount)).toEqual([-2_500, -0.17, -7_500, -7_500]);
+    const pilots = book.pilotsDomain().pilots;
+    expect(pilots[1]?.pnl.map((m) => [m.month, m.wages])).toEqual([
+      [0, 0.17],
+      [1, 7_500],
+    ]);
+    expectBalanced(book, log.ledger);
+  });
+
+  it("repossession stops the route at once with pilot.route_stopped", () => {
+    const book = newBook();
+    const starter = book.ensureStarter();
+    if (!starter) throw new Error("no starter");
+    const loan = book.takeLoan({
+      lenderId: "jetwash",
+      principal: 500_000,
+      termMonths: 24,
+      collateral: { type: "aircraft", id: starter.id },
+    });
+    if (!loan.ok) throw new Error(loan.message);
+    book.hirePilot("turboprop");
+    // No cash: every payment is missed; the third miss (month 3) repossesses.
+    book.post("adjustment", -book.company.cash);
+    book.advance(3 * GAME_MONTH_MS - HOUR);
+    const assigned = book.assignPilot({
+      pilotId: "HP-1",
+      aircraftId: starter.id,
+      destination: "KATL",
+      served: ["KATL"],
+    });
+    expect(assigned.ok).toBe(true);
+    const log = collect(book);
+    log.drain();
+    book.advance(2 * HOUR);
+    log.drain();
+    expect(log.notices.map((n) => n.name)).toContain("aircraft.repossessed");
+    const stop = log.notices.find((n) => n.name === "pilot.route_stopped");
+    expect(stop?.data).toMatchObject({ pilotId: "HP-1", code: "aircraft_repossessed" });
+    const p = book.pilotsDomain().pilots[0];
+    expect(p?.status).toBe("unassigned");
+    expect(p?.stopped?.gameMs).toBe(3 * GAME_MONTH_MS);
+  });
+
+  it("the domain sums this month over every pilot and keeps a fired pilot's month visible", () => {
+    const book = newBook();
+    book.hirePilot("turboprop");
+    book.hirePilot("jet");
+    expect(book.firePilot("HP-2").ok).toBe(true);
+    const d = book.pilotsDomain();
+    expect(d.monthCosts).toBe(21_500);
+    expect(d.pilots.map((p) => [p.id, p.status])).toEqual([
+      ["HP-1", "unassigned"],
+      ["HP-2", "fired"],
+    ]);
+    // Next month the fired pilot has no row any more and leaves the list.
+    book.advance(GAME_MONTH_MS);
+    const next = book.pilotsDomain();
+    expect(next.pilots.map((p) => p.id)).toEqual(["HP-1"]);
+    expect(next.monthCosts).toBe(7_500);
+  });
+
+  it("load repairs invalid assignments: a pilot on a non-hired aircraft or a second pilot on one aircraft is unassigned", () => {
+    const { book, starter } = routeBook();
+    book.hirePilot("turboprop");
+    book.drain();
+    const [first, other] = book.pilotRecords();
+    if (!first?.assignment || !other) throw new Error("no assignment");
+    const second = { ...other, assignment: { ...first.assignment } };
+    const plane = book.aircraft(starter.id);
+    if (!plane) throw new Error("no aircraft");
+    const reload = (status: "hired" | "available") =>
+      new CompanyBook({
+        company: book.company,
+        fleet: [{ ...plane, status }],
+        pilots: [first, second],
+        airports: lookup,
+        now: () => NOW,
+      });
+    // Two pilots on one aircraft: the first keeps it, the second is unassigned.
+    const two = reload("hired");
+    const d = two.pilotsDomain();
+    expect(d.pilots.map((p) => [p.id, p.status])).toEqual([
+      ["HP-1", "scheduled"],
+      ["HP-2", "unassigned"],
+    ]);
+    expect(d.pilots[1]?.stopped?.code).toBe("assignment_invalid");
+    expect(two.aircraft(starter.id)?.status).toBe("hired");
+    // A pilot on an aircraft that is not marked hired: unassigned, the aircraft stays available.
+    const none = reload("available");
+    expect(none.pilotsDomain().pilots.map((p) => p.status)).toEqual(["unassigned", "unassigned"]);
+    expect(none.aircraft(starter.id)?.status).toBe("available");
+    expect(none.drain().pilots).toHaveLength(2);
   });
 });

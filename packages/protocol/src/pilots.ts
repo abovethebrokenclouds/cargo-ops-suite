@@ -92,7 +92,8 @@ export const pilotAssignmentSchema = z.object({
 });
 export type PilotAssignment = z.infer<typeof pilotAssignmentSchema>;
 
-export const PILOT_STATUSES = ["unassigned", "scheduled", "flying"] as const;
+/** `fired`: let go this month; listed only while the month's P&L row is current. */
+export const PILOT_STATUSES = ["unassigned", "scheduled", "flying", "fired"] as const;
 
 export const hiredPilotSchema = z.object({
   id: z.string().min(1),
@@ -101,6 +102,8 @@ export const hiredPilotSchema = z.object({
   wageMonthly: finite().nonnegative(),
   hiredGameMs: finite().nonnegative(),
   status: z.enum(PILOT_STATUSES),
+  /** When the pilot was let go (fired pilots only). */
+  firedGameMs: finite().nonnegative().optional(),
   assignment: pilotAssignmentSchema.nullable(),
   /** Why the last route stopped (grounded aircraft, defect found, …). */
   stopped: z

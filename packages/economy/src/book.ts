@@ -146,6 +146,7 @@ import {
   AVERAGE_LOAD_SHARE,
   HIRED_PILOTS,
   addPilotPnl,
+  firstMonthWage,
   legFuelBurnKg,
   legIncome,
   legLoadShare,
@@ -559,6 +560,34 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       isMaintenanceCapable: (icao) =>
         this.baseMaintenance.isMaintenanceCapable(icao) || this.ownShopLevel(icao) > 0,
     };
+    // Imports are repaired, never trusted: a pilot assigned to an aircraft that is not marked
+    // hired, or a second pilot on an aircraft another pilot already flies, is unassigned
+    // (`stopped.code` "assignment_invalid"); the first pilot in hiring order keeps it.
+    const claimed = new Set<string>();
+    for (const p of this.activePilots()) {
+      const as = p.assignment;
+      if (!as) continue;
+      const a = this.fleet.get(as.aircraftId);
+      const why =
+        !a || a.status !== "hired"
+          ? `${a?.registration ?? as.aircraftId} is not marked as flown by a hired pilot`
+          : claimed.has(a.id)
+            ? `${a.registration} is already flown by another hired pilot`
+            : null;
+      if (why) {
+        this.touchPilot({
+          ...p,
+          assignment: null,
+          stopped: {
+            code: "assignment_invalid",
+            message: `Assignment dropped when loading: ${why}`,
+            gameMs: Math.floor(this.company.gameMs),
+          },
+        });
+        continue;
+      }
+      claimed.add(as.aircraftId);
+    }
     // An aircraft marked hired without a pilot assigned to it (an inconsistent import) is
     // available again.
     const assigned = new Set(
@@ -1015,6 +1044,15 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       if (a) {
         this.touchAircraft({ ...a, status: "repossessed", loanId: null, readyAtGameMs: null });
         this.event(a.id, "repossessed", { loanId: loan.id, balance: loan.balance });
+        // A hired pilot flying it loses the aircraft now, not at its next departure.
+        const pilot = this.pilotOf(a.id);
+        if (pilot) {
+          this.stopRoute(
+            pilot,
+            "aircraft_repossessed",
+            `${a.registration} was repossessed by the lender`,
+          );
+        }
         if (this.company.selectedAircraftId === a.id) {
           this.company = { ...this.company, selectedAircraftId: null };
         }
@@ -1720,6 +1758,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   defer(aircraftId: string, defectId: string): BookResult<{ defect: Defect }> {
     const a = this.aircraft(aircraftId);
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
+    if (a.status === "hired") return fail("aircraft_busy", busyMessage(a));
     const d = a.defects.find((x) => x.id === defectId && !x.hidden);
     if (!d) return fail("unknown_defect", `No known defect ${defectId} on ${a.registration}`);
     if (d.severity !== "minor") {
@@ -2033,6 +2072,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     }
     const a = this.aircraft(collateral.id);
     if (!a) return fail("unknown_aircraft", `No aircraft ${collateral.id} in the fleet`);
+    if (a.status === "hired") return fail("aircraft_busy", busyMessage(a));
     if (a.ownership !== "owned") return fail("not_owned", "Leased aircraft cannot be pledged");
     if (a.loanId && this.loans.get(a.loanId)?.status === "active") {
       return fail("collateral_encumbered", `${a.registration} already secures a loan`);
@@ -2972,6 +3012,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   buyInsurance(aircraftId: string): BookResult<{ premium: number }> {
     const a = this.aircraft(aircraftId);
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
+    if (a.status === "hired") return fail("aircraft_busy", busyMessage(a));
     if (a.ownership !== "owned") return fail("not_owned", "Only owned aircraft can be insured");
     if (a.insurance) return fail("already_insured", `${a.registration} is already insured`);
     const premium = this.premiumFor(a);
@@ -3002,6 +3043,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   cancelInsurance(aircraftId: string): BookResult<{ aircraftId: string }> {
     const a = this.aircraft(aircraftId);
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
+    if (a.status === "hired") return fail("aircraft_busy", busyMessage(a));
     if (!a.insurance) return fail("not_insured", `${a.registration} is not insured`);
     this.touchAircraft({ ...a, insurance: null });
     this.event(a.id, "insurance.cancelled", {});
@@ -3129,23 +3171,33 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     return this.activePilots().find((p) => p.assignment?.aircraftId === aircraftId) ?? null;
   }
 
-  /** Hire a pilot: the first month's wage is paid now (no refund when fired). */
+  /**
+   * Hire a pilot: the rest of this in-game month's wage is paid now, pro-rated by the time
+   * left in the month (`firstMonthWage`); no refund when fired.
+   */
   hirePilot(rating: PilotRating): BookResult<{ pilot: HiredPilotRecord }> {
     if (this.activePilots().length >= HIRED_PILOTS.maxPilots) {
       return fail("pilot_limit", `At most ${HIRED_PILOTS.maxPilots} hired pilots`);
     }
     const wage = pilotWage(rating);
-    if (this.company.cash < wage) {
+    const first = firstMonthWage(wage, this.company.gameMs);
+    if (this.company.cash < first) {
       return fail(
         "insufficient_cash",
-        `The first month's wage is $${wage.toLocaleString("en-US")}`,
+        `The first (pro-rated) month's wage is $${first.toLocaleString("en-US")}`,
       );
     }
     const n = (this.company.pilotCounter ?? 0) + 1;
     this.company = { ...this.company, pilotCounter: n };
     const id = `HP-${n}`;
     const name = pilotName(this.company.seed, n);
-    this.post("pilot_wage", -wage, "pilot", id, `${name} (hired pilot) wage, first month`);
+    this.post(
+      "pilot_wage",
+      -first,
+      "pilot",
+      id,
+      `${name} (hired pilot) wage, rest of month ${gameMonthIndex(this.company.gameMs) + 1}`,
+    );
     const pilot: HiredPilotRecord = {
       id,
       name,
@@ -3158,7 +3210,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       assignment: null,
       stopped: null,
       legsFlown: 0,
-      pnl: addPilotPnl([], gameMonthIndex(this.company.gameMs), { wages: wage }),
+      pnl: addPilotPnl([], gameMonthIndex(this.company.gameMs), { wages: first }),
       recent: [],
     };
     this.touchPilot(pilot);
@@ -3568,7 +3620,8 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       rating: p.rating,
       wageMonthly: p.wageMonthly,
       hiredGameMs: p.hiredGameMs,
-      status: !as ? "unassigned" : as.leg ? "flying" : "scheduled",
+      status: p.status === "fired" ? "fired" : !as ? "unassigned" : as.leg ? "flying" : "scheduled",
+      ...(p.firedGameMs !== null ? { firedGameMs: p.firedGameMs } : {}),
       assignment: as
         ? {
             aircraftId: as.aircraftId,
@@ -3594,10 +3647,17 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   pilotsDomain(extra: readonly string[] = []): PilotsState {
     const served = this.servedAirports(extra);
     const month = gameMonthIndex(this.company.gameMs);
-    const pilots = this.activePilots();
+    // Hired pilots, then pilots let go who still have a P&L row this month (shown as fired).
+    const pilots = [
+      ...this.activePilots(),
+      ...this.pilotRecords().filter(
+        (p) => p.status === "fired" && p.pnl.some((m) => m.month === month),
+      ),
+    ];
+    // This month's totals over every pilot record (a pilot let go keeps the wage paid).
     let monthIncome = 0;
     let monthCosts = 0;
-    for (const p of pilots) {
+    for (const p of this.pilots.values()) {
       const row = p.pnl.find((m) => m.month === month);
       monthIncome += row?.income ?? 0;
       monthCosts += (row?.wages ?? 0) + (row?.fuel ?? 0) + (row?.fees ?? 0);

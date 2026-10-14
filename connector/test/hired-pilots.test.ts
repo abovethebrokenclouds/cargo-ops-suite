@@ -364,8 +364,11 @@ describe("hired pilots through the connector", () => {
       r.ok("pilot.fire", { pilotId: "HP-2" });
       assert.equal(r.fleet().aircraft.find((a) => a.id === starter.id)?.status, "available");
       assert.deepEqual(
-        r.pilots().pilots.map((p) => p.id),
-        ["HP-1"],
+        r.pilots().pilots.map((p) => [p.id, p.status]),
+        [
+          ["HP-1", "unassigned"],
+          ["HP-2", "fired"],
+        ],
       );
       // The aircraft is the player's again: the mission loads.
       r.ok("mission.load", { jobIds: [job.id] });
@@ -497,6 +500,50 @@ describe("hired pilots storage: migration 9, career export", () => {
       assert.equal(r2.fleet().aircraft[0]?.status, "available");
       assert.equal(r2.ledger().balanced, true);
       r2.close();
+    } finally {
+      a.cleanup();
+      b.cleanup();
+    }
+  });
+
+  it("an imported file with two pilots on one aircraft loads with the extra pilot unassigned", () => {
+    const a = tempDir();
+    const b = tempDir();
+    try {
+      const r = rig(a.dir);
+      const starter = r.fleet().aircraft[0];
+      assert.ok(starter);
+      const dest = r.pilots().options[0]?.destinations[0];
+      assert.ok(dest);
+      r.ok("pilot.hire", { rating: "turboprop" });
+      r.ok("pilot.hire", { rating: "turboprop" });
+      r.ok("pilot.assign", { pilotId: "HP-1", aircraftId: starter.id, destination: dest.icao });
+      const exported = JSON.parse(JSON.stringify(exportCareer(r.repo, "demo", T0))) as {
+        pilots: Array<{ id: string; assignment: unknown }>;
+      };
+      r.close();
+      // Tamper: HP-2 claims the same aircraft.
+      const one = exported.pilots.find((p) => p.id === "HP-1");
+      const two = exported.pilots.find((p) => p.id === "HP-2");
+      assert.ok(one && two);
+      two.assignment = one.assignment;
+      const storage = openStorage(b.dir, "demo");
+      assert.equal(importCareer(new EconomyRepo(storage), "demo", exported).ok, true);
+      storage.close();
+      const again = rig(b.dir);
+      const pilots = again.pilots().pilots;
+      assert.deepEqual(
+        pilots.map((p) => [p.id, p.status]),
+        [
+          ["HP-1", "scheduled"],
+          ["HP-2", "unassigned"],
+        ],
+      );
+      assert.equal(pilots[1]?.stopped?.code, "assignment_invalid");
+      // The repair is persisted.
+      const stored = again.repo.listPilots().find((p) => p.id === "HP-2");
+      assert.equal(stored?.assignment, null);
+      again.close();
     } finally {
       a.cleanup();
       b.cleanup();

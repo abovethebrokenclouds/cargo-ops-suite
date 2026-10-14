@@ -41,6 +41,9 @@ export function SimulatedTag({ className }: { className?: string }) {
 }
 
 function statusLine(p: HiredPilot): string {
+  if (p.status === "fired") {
+    return `Let go${p.firedGameMs !== undefined ? ` ${formatGameTime(p.firedGameMs)}` : ""} · shown for this month's P&L`;
+  }
   const as = p.assignment;
   if (!as) return "Unassigned";
   if (as.leg) {
@@ -79,7 +82,8 @@ export function HiredPilots({
       </p>
     );
   }
-  const full = pilots.pilots.length >= pilots.maxPilots;
+  const onPayroll = pilots.pilots.filter((p) => p.status !== "fired").length;
+  const full = onPayroll >= pilots.maxPilots;
   return (
     <div className="flex flex-col gap-5" data-testid="hired-pilots">
       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -98,7 +102,7 @@ export function HiredPilots({
         <div className="panel-inset px-4 py-3">
           <p className="label-eyebrow">Pilots</p>
           <p className="metric-md" data-testid="pilot-count">
-            {pilots.pilots.length} / {pilots.maxPilots}
+            {onPayroll} / {pilots.maxPilots}
           </p>
         </div>
         <div className="panel-inset px-4 py-3">
@@ -202,6 +206,7 @@ function PilotCard({
   const dest =
     option?.destinations.find((d) => d.icao === destination) ?? option?.destinations[0] ?? null;
   const as = p.assignment;
+  const fired = p.status === "fired";
   const pnl = [...p.pnl].reverse();
   return (
     <article
@@ -242,7 +247,7 @@ function PilotCard({
         ) : null}
       </div>
 
-      {as ? null : (
+      {as || fired ? null : (
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex min-w-40 flex-1 flex-col gap-1 text-xs text-muted-foreground">
             Aircraft (from where it is parked)
@@ -309,32 +314,34 @@ function PilotCard({
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2">
-        {as ? (
+      {fired ? null : (
+        <div className="flex flex-wrap gap-2">
+          {as ? (
+            <button
+              type="button"
+              className={ghostButton}
+              disabled={!enabled || busy}
+              title={disabledNote ?? "A leg in progress is cancelled; the aircraft is yours again"}
+              onClick={() =>
+                void run("pilot.unassign", { pilotId: p.id }, `${p.name} is off the route`)
+              }
+              data-testid="unassign-pilot"
+            >
+              Unassign
+            </button>
+          ) : null}
           <button
             type="button"
-            className={ghostButton}
+            className={cn(ghostButton, "ml-auto")}
             disabled={!enabled || busy}
-            title={disabledNote ?? "A leg in progress is cancelled; the aircraft is yours again"}
-            onClick={() =>
-              void run("pilot.unassign", { pilotId: p.id }, `${p.name} is off the route`)
-            }
-            data-testid="unassign-pilot"
+            title={disabledNote ?? "Wages stop; this month's wage is not refunded"}
+            onClick={() => void run("pilot.fire", { pilotId: p.id }, `${p.name} let go`)}
+            data-testid="fire-pilot"
           >
-            Unassign
+            Let go
           </button>
-        ) : null}
-        <button
-          type="button"
-          className={cn(ghostButton, "ml-auto")}
-          disabled={!enabled || busy}
-          title={disabledNote ?? "Wages stop; this month's wage is not refunded"}
-          onClick={() => void run("pilot.fire", { pilotId: p.id }, `${p.name} let go`)}
-          data-testid="fire-pilot"
-        >
-          Let go
-        </button>
-      </div>
+        </div>
+      )}
 
       <Table data-testid="pilot-pnl">
         <TableHeader>

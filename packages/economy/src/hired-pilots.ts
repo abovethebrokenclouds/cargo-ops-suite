@@ -9,7 +9,7 @@
 import type { AircraftType } from "../../protocol/src/aircraft-types";
 import type { PilotRating } from "../../protocol/src/pilots";
 import type { PilotLeg, PilotPnlMonth } from "../../protocol/src/pilots";
-import { GAME_DAY_MS } from "./company-constants";
+import { GAME_DAY_MS, GAME_MONTH_MS } from "./company-constants";
 import { round2 } from "./geo";
 import { computePayout } from "./payout";
 import { Rng, seedFrom } from "./prng";
@@ -54,6 +54,17 @@ export function ratingFor(category: AircraftType["category"]): PilotRating | nul
 
 export function pilotWage(rating: PilotRating): number {
   return HIRED_PILOTS.wages[rating];
+}
+
+/**
+ * Wage paid at hiring: the monthly wage × the share of the current in-game month still to
+ * come, in cents (the next month boundary bills the full wage). Hiring at the start of a
+ * month pays it all; on day 20 of 30 a third; a minute before the boundary a few cents.
+ */
+export function firstMonthWage(wage: number, gameMs: number): number {
+  const t = Math.max(0, Math.floor(gameMs));
+  const left = (Math.floor(t / GAME_MONTH_MS) + 1) * GAME_MONTH_MS - t;
+  return Math.round((Math.round(wage * 100) * left) / GAME_MONTH_MS) / 100;
 }
 
 const FIRST = [
