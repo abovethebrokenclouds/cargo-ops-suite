@@ -53,6 +53,20 @@ async function command(page: Page, tok: string, name: string, args: unknown = {}
   ) as Promise<Res>;
 }
 
+/**
+ * Full navigation: the page boots, fetches /api/session, opens a new WebSocket and gets the
+ * connector's welcome and snapshot before it can show any company data. Wait for that signal
+ * (the header chip turns REPLAY only after a real welcome) so each data assertion after it gets
+ * its own budget instead of sharing it with the page boot and the handshake.
+ */
+async function openWithConnector(page: Page, path: string): Promise<void> {
+  await page.goto(path);
+  await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
+    "data-status",
+    "replay",
+  );
+}
+
 interface FleetLite {
   aircraft: Array<{
     id: string;
@@ -82,11 +96,7 @@ test("insure, fly the replay for wear, finance the overhaul with the insurer", a
   request,
 }) => {
   test.setTimeout(150_000);
-  await page.goto("/fleet");
-  await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
-    "data-status",
-    "replay",
-  );
+  await openWithConnector(page, "/fleet");
   const tok = await token(request);
   const auth = { Authorization: `Bearer ${tok}` };
   const get = async <T>(path: string) =>
@@ -136,7 +146,7 @@ test("insure, fly the replay for wear, finance the overhaul with the insurer", a
     .toBe(true);
 
   // The repair flow on /fleet: "Finance with insurer" for the selected (first) aircraft.
-  await page.goto("/fleet");
+  await openWithConnector(page, "/fleet");
   const panel = page.getByTestId("repair-financing");
   await expect(panel).toBeVisible();
   await expect(panel).toContainText("never repossesses");
@@ -173,7 +183,7 @@ test("insure, fly the replay for wear, finance the overhaul with the insurer", a
   ).toBe("repair_loan_open");
 
   // /company lists it as a repair loan with no collateral.
-  await page.goto("/company");
+  await openWithConnector(page, "/company");
   const item = page.locator('[data-testid="active-loan"][data-kind="repair"]');
   await expect(item).toBeVisible();
   await expect(item).toContainText(`repair loan, ${starter.registration} (no collateral)`);
