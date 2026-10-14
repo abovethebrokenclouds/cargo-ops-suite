@@ -11,6 +11,7 @@ import {
   destinationEteMin,
   fuelEnduranceMin,
   isSimConnected,
+  isSimOfflineSession,
   type ClientSimState,
   type ReceivedEvent,
 } from "@/lib/sim-state";
@@ -111,6 +112,17 @@ function linkLamp(state: ClientSimState): Lamp {
 function freshLamp(state: ClientSimState, now: number | null): Lamp {
   const id = "fresh";
   const label = "DATA";
+  if (isSimOfflineSession(state)) {
+    // Frames may still arrive (company clock, jobs) but none of them is telemetry.
+    return {
+      id,
+      label,
+      state: "nodata",
+      value: "SIM OFF",
+      detail: "The simulator is not running: no telemetry.",
+      source: null,
+    };
+  }
   if (state.lastFrameAt === null || now === null) {
     return noData(id, label, "No telemetry frame received yet.");
   }
@@ -169,11 +181,15 @@ function groundLamp(state: ClientSimState, up: boolean): Lamp {
   };
 }
 
-function payloadLamp(state: ClientSimState, up: boolean): Lamp {
+function payloadLamp(state: ClientSimState, up: boolean, simUp: boolean): Lamp {
   const id = "payload";
   const label = "PAYLOAD";
   const check = up ? state.sim.mission?.payloadCheck : undefined;
   if (!check) return noData(id, label, "No loaded mission with a payload check.");
+  // A preview compares with what the sim reports now; a departure check is frozen and stays.
+  if (check.stage === "preview" && !simUp) {
+    return noData(id, label, "The simulator is not running: no payload preview.");
+  }
   const base = { id, label, detail: check.message, source: check.source };
   switch (check.status) {
     case "ok":
@@ -306,17 +322,19 @@ function weightLamp(state: ClientSimState, up: boolean): Lamp {
 export function goNoGoLamps(input: GoNoGoInput): Lamp[] {
   const { state, now } = input;
   const up = isSessionUp(state);
+  // Telemetry lamps need the simulator itself, not just the connector session.
+  const simUp = up && !isSimOfflineSession(state);
   return [
     linkLamp(state),
     freshLamp(state, now),
-    brakeLamp(state, up),
-    groundLamp(state, up),
-    payloadLamp(state, up),
+    brakeLamp(state, simUp),
+    groundLamp(state, simUp),
+    payloadLamp(state, up, simUp),
     airworthyLamp(input.fleet, input.fleetSource),
     weatherLamp(input.weather),
-    fuelLamp(state, up),
-    rateLamp(state, up),
-    weightLamp(state, up),
+    fuelLamp(state, simUp),
+    rateLamp(state, simUp),
+    weightLamp(state, simUp),
   ];
 }
 

@@ -19,6 +19,38 @@ export type ConnectionState =
 
 export const MAX_EVENTS = 200;
 
+/**
+ * Domains read from the simulator or computed from it (phase, tracked flight). The
+ * connector clears them when the simulator link drops; while a live welcome says the
+ * simulator is offline the client never holds them either, so nothing stale is shown as
+ * live with a SIM tag. Connector-owned state (company, jobs, mission, fleet, …) stays.
+ */
+export const SIM_TELEMETRY_DOMAINS: readonly SimDomain[] = [
+  "sim",
+  "aircraft",
+  "position",
+  "motion",
+  "fuel",
+  "weights",
+  "payload",
+  "engines",
+  "controls",
+  "plan",
+  "phase",
+  "flight",
+];
+
+/** A live session whose welcome reports the simulator as not connected. */
+export function isSimOfflineSession(state: ClientSimState): boolean {
+  return state.welcome?.mode === "live" && !state.welcome.sim.connected;
+}
+
+function withoutSimTelemetry<T extends Record<string, unknown>>(sim: T): T {
+  const out: Record<string, unknown> = { ...sim };
+  for (const domain of SIM_TELEMETRY_DOMAINS) delete out[domain];
+  return out as T;
+}
+
 export interface ReceivedEvent {
   msg: SimEvent;
   /** Client clock when received, ms. */
@@ -173,7 +205,9 @@ export function simReducer(state: ClientSimState, action: SimAction): ClientSimS
         ...state,
         source: action.msg.source,
         lastSeq: action.msg.seq,
-        sim: { ...action.msg.state },
+        sim: isSimOfflineSession(state)
+          ? withoutSimTelemetry({ ...action.msg.state })
+          : { ...action.msg.state },
         lastFrameAt: action.at,
         needsResync: false,
       };
@@ -185,7 +219,10 @@ export function simReducer(state: ClientSimState, action: SimAction): ClientSimS
       // Stale or duplicate frame: older than what we already applied.
       if (state.lastSeq >= 0 && seq <= state.lastSeq) return state;
       const gap = state.lastSeq < 0 || seq !== state.lastSeq + 1;
-      const { sim, incomplete } = applyPatch(state.sim, action.msg.patch);
+      const patch = isSimOfflineSession(state)
+        ? withoutSimTelemetry(action.msg.patch)
+        : action.msg.patch;
+      const { sim, incomplete } = applyPatch(state.sim, patch);
       return {
         ...state,
         source: action.msg.source,
