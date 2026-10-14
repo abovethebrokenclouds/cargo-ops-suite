@@ -135,7 +135,8 @@ test("f toggles map follow on /map; g + letter navigates the local build", async
   await expect(follow).toHaveAttribute("aria-pressed", "false");
   await page.keyboard.press("f");
   await expect(follow).toHaveAttribute("aria-pressed", "true");
-  await page.keyboard.press("g");
-  await page.keyboard.press("s");
+  // The chord as one action: separate press() calls let the runner's trace snapshot of a
+  // busy page sit between g and s (see the shortcut test in demo.spec.ts).
+  await page.keyboard.type("gs");
   await expect(page).toHaveURL(/\/settings$/);
 });

@@ -3,7 +3,7 @@
 // a seeded company computed in the browser with the SAME book, payout, cost and wear
 // code (packages/economy), every value tagged DEMO, every action disabled.
 
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 import type {
   CompanyState,
   DemandState,
@@ -14,8 +14,12 @@ import type {
   MarketState,
   Source,
 } from "@cargo-ops/protocol";
-import { buildDemoCompany, reputationTier, type AirportLookup } from "@cargo-ops/economy";
+import type { AirportLookup } from "@cargo-ops/economy";
 import type { ClientSimState } from "@/lib/sim-state";
+
+import { demoDomains, type DemoDomains } from "./demo-domains";
+
+export { demoDomains, type DemoDomains };
 
 export interface CompanyView {
   /** sim/replay from the connector, demo from the in-browser seed, null when unknown. */
@@ -34,42 +38,70 @@ export interface CompanyView {
   demo: boolean;
 }
 
-export interface DemoDomains {
-  company: CompanyState;
-  fleet: FleetState;
-  loans: LoansState;
-  ledger: LedgerState;
-  market: MarketState;
-  fbos: FbosState;
-  demand: DemandState;
+let demoPromise: Promise<DemoDomains> | null = null;
+let demoResolved: DemoDomains | null = null;
+
+function computeInWorker(lookup: AirportLookup): Promise<DemoDomains> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./demo-domains.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    const done = () => worker.terminate();
+    worker.onmessage = (
+      ev: MessageEvent<{ ok: true; domains: DemoDomains } | { ok: false; error: string }>,
+    ) => {
+      done();
+      if (ev.data.ok) resolve(ev.data.domains);
+      else reject(new Error(ev.data.error));
+    };
+    worker.onerror = (ev) => {
+      done();
+      ev.preventDefault();
+      reject(new Error(ev.message || "demo company worker failed"));
+    };
+    worker.postMessage({ airports: lookup.list });
+  });
 }
 
-/** The seeded DEMO company's domains (deterministic for the bundled airport list). */
-export function demoDomains(lookup: AirportLookup): DemoDomains {
-  const { book, selection } = buildDemoCompany(lookup);
-  const c = book.company;
-  return {
-    company: {
-      name: c.name,
-      base: c.base,
-      cash: Math.round(c.cash * 100) / 100,
-      reputation: c.reputation,
-      reputationTier: reputationTier(c.reputation),
-      ...book.companyFields(),
-    },
-    fleet: book.fleetDomain(selection),
-    loans: book.loansDomain(),
-    ledger: book.ledgerDomain(),
-    market: book.marketDomain(),
-    fbos: book.fbosDomain(),
-    demand: book.demandDomain(),
-  };
+/**
+ * The DEMO company, computed once per page load (it is deterministic) and off the main
+ * thread when the browser has workers: simulating its months of history blocked the page
+ * for over a second on a slow machine, on every demo page that showed company data.
+ * Without workers (or if the worker fails) it runs on the page after a macrotask.
+ */
+export function loadDemoDomains(lookup: AirportLookup): Promise<DemoDomains> {
+  const onPage = () =>
+    new Promise<DemoDomains>((resolve) => setTimeout(() => resolve(demoDomains(lookup)), 0));
+  demoPromise ??= (typeof Worker === "function" ? computeInWorker(lookup) : onPage())
+    .catch(onPage)
+    .then((d) => (demoResolved = d))
+    .catch((err: unknown) => {
+      demoPromise = null;
+      throw err;
+    });
+  return demoPromise;
+}
+
+/** The DEMO company's domains once `lookup` is known; null until then (and when null). */
+export function useDemoDomains(lookup: AirportLookup | null): DemoDomains | null {
+  const [data, setData] = useState<DemoDomains | null>(() => (lookup ? demoResolved : null));
+  useEffect(() => {
+    if (!lookup) return;
+    let alive = true;
+    loadDemoDomains(lookup)
+      .then((d) => alive && setData(d))
+      .catch(() => alive && setData(null));
+    return () => {
+      alive = false;
+    };
+  }, [lookup]);
+  return lookup ? data : null;
 }
 
 /** Live/replay domains from state, or the DEMO company when no connector exists. */
 export function useCompanyView(state: ClientSimState, lookup: AirportLookup | null): CompanyView {
   const demo = state.connection === "demo";
-  const demoData = useMemo(() => (demo && lookup ? demoDomains(lookup) : null), [demo, lookup]);
+  const demoData = useDemoDomains(demo ? lookup : null);
   if (demo) {
     return {
       source: "demo",

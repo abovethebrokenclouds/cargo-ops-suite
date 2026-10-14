@@ -468,8 +468,11 @@ test.describe("demo mode (no connector)", () => {
       ["o", "/", /Flight Operations/],
     ];
     for (const [key, path, heading] of chords) {
-      await page.keyboard.press("g");
-      await page.keyboard.press(key);
+      // One action for the chord, as a person types it. Two separate press() calls let the
+      // runner pause between g and the letter: with tracing on, Playwright snapshots the DOM
+      // after every action, and on a busy page (the dashboard just hydrated, the map) that
+      // snapshot alone took over 1.5 s, so the chord rightly expired before the letter.
+      await page.keyboard.type(`g${key}`);
       await expect(page).toHaveURL(new RegExp(`${path === "/" ? "/$" : path}$`));
       // No waiting for the page to settle before the next chord: a route still rendering
       // (the map initialising on software WebGL) must not expire a `g` (see shortcuts.ts).
