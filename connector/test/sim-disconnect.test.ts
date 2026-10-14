@@ -10,7 +10,8 @@ import type { FlightState, PhaseState } from "../src/protocol";
 import type { FlightRecord } from "../src/core/flight-tracker";
 import { SimScript } from "./sim-script";
 
-const flight = (s: SimScript) => (s.session.store.getDomain("flight") ?? null) as FlightState | null;
+const flight = (s: SimScript) =>
+  (s.session.store.getDomain("flight") ?? null) as FlightState | null;
 const phase = (s: SimScript) => (s.session.store.getDomain("phase") ?? null) as PhaseState | null;
 const code = (r: ReturnType<SimScript["command"]>) => (r.ok ? "ok" : r.error.code);
 

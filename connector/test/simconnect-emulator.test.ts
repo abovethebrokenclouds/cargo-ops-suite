@@ -863,7 +863,14 @@ describe("SimConnect emulator: payload check against the sim (PC-49 logic)", () 
     await waitFor(() => !r.source.link().connected, "link down");
     assert.equal(r.session.welcome().sim.connected, false);
     const state = r.session.store.snapshot().state;
-    for (const domain of ["position", "motion", "controls", "payload", "phase", "flight"] as const) {
+    for (const domain of [
+      "position",
+      "motion",
+      "controls",
+      "payload",
+      "phase",
+      "flight",
+    ] as const) {
       assert.equal(state[domain] ?? null, null, `${domain} cleared`);
     }
     // The last parked, brake-set sample must not let a flight start while MSFS is gone.

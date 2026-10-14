@@ -303,7 +303,7 @@ describe("simReducer with the simulator offline", () => {
       base: "KMEM",
       cash: 1000,
       reputation: 50,
-      reputationTier: "Regional",
+      reputationTier: 2,
     } as NonNullable<Snapshot["state"]["company"]>,
   };
 
