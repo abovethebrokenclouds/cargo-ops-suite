@@ -51,6 +51,8 @@ export const EVENT_NAMES = [
   "demand.event",
   "milestone.reached",
   "insurance.claim",
+  // Insurer repair loans: the insurer cancelled a policy (three missed repair-loan payments).
+  "insurance.cancelled",
   // Transit cargo (additive).
   "job.in_transit",
   "job.abandoned",
@@ -105,6 +107,7 @@ export const KNOWN_COMMANDS = [
   "fbo.pricing",
   "insurance.buy",
   "insurance.cancel",
+  "insurance.repairLoan",
   // Manual destination for the current flight (null clears it).
   "plan.destination",
   // Hired pilots (simulated operations).
