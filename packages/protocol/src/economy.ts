@@ -149,7 +149,7 @@ export const jobSchema = z.object({
   /** Present once the job has been unloaded in transit at an intermediate airport. */
   transit: jobTransitSchema.optional(),
 });
-export type Job =z.infer<typeof jobSchema>;
+export type Job = z.infer<typeof jobSchema>;
 
 export const activeAircraftSchema = z.object({
   typeKey: z.string().min(1),
@@ -298,7 +298,7 @@ export const missionSchema = z.object({
   /** Company clock (in-game ms) at block-out; transit ground time is counted up to it. */
   startedGameMs: finite().nonnegative().optional(),
 });
-export type Mission =z.infer<typeof missionSchema>;
+export type Mission = z.infer<typeof missionSchema>;
 
 /** `company` state domain. P4 fields are optional so P3 frames still parse. */
 export const companyDomainSchema = z.object({
