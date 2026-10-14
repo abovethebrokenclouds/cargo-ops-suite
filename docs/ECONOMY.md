@@ -113,8 +113,13 @@ applied on the payout's **conditions** line; the connector's engine freezes the 
 - **Which reports count (all must hold).** A **live** aviationweather.gov report (never a
   SAMPLE one); **simulator** telemetry (replays and the demo never earn it); not stale (no
   failed refresh since), fetched at most **15 min** and observed at most **90 min** before
-  the moment it is frozen; a known category. Anything else is **unknown: no bonus and no
-  penalty**.
+  the moment it is frozen, and neither time more than **5 min after** it (a report from the
+  future is not current; small clock skew is tolerated); a known category. Anything else is
+  **unknown: no bonus and no penalty**.
+- **The payout re-checks every end.** An end only counts when its recorded `eligible` flag is
+  true **and** it was recorded under `sim` telemetry with a `live` METAR and a known category;
+  the flag alone is never trusted. A career import also clears `eligible` on any check
+  (mission or transit leg) that claims it without sim telemetry and a live METAR.
 
 | Category at an end | Bonus |
 | ------------------ | ----- |
@@ -133,8 +138,13 @@ conditions    = 1 + weather bonus            (1.00 when bonuses are removed)
   was withheld. Lateness and damage still apply to the larger gross.
 - Board estimates never include it (the weather is not known in advance).
 - The breakdown carries `weatherBonus` (0.05 / 0.10) when it was paid; the mission keeps
-  `weather.bonus`, the fraction actually applied (0 when withheld or none). The logbook
-  shows the category at both ends and the bonus.
+  `weather.bonus`, the fraction actually applied (0 when withheld or none). At a delivered
+  arrival the connector also records `weather.outcome` (`applied`, `withheld_rate`,
+  `withheld_payload`, `no_ifr`, `not_live`, or `in_transit` for a leg that delivered
+  nothing), `weather.bonusFrom` (the counted end that set or would have set the bonus) and,
+  on the final leg of a transit chain, `weather.chain` (the chain's counted ends and its leg
+  count). The logbook shows the category at both ends and the bonus, and explains it from
+  these fields only; older saves without them get no stated reason.
 
 Worked examples (`packages/economy/test/weather-bonus.test.ts`), worked example 1 (500 kg,
 100 nm, general cargo, tier 2, landing B, base $1,266.06) with weather:
