@@ -17,6 +17,7 @@ import { useHydrated } from "../hooks/use-hydrated";
 import { ConnectedStatusChip } from "../components/status/ConnectedStatusChip";
 import { PairDeviceGate } from "../components/settings/PairDevice";
 import { SimConnectionProvider } from "../lib/transport/useSimConnection";
+import { PANEL_PATH, isFrameBlocked, isFramed } from "../lib/framing";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
@@ -80,6 +81,21 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
   );
 }
 
+/** Rendered only after hydration, so `window` exists. */
+function FramedPageBlocked() {
+  return (
+    <main
+      className="flex min-h-screen items-center justify-center bg-background px-4"
+      data-testid="framed-blocked"
+    >
+      <p className="max-w-sm text-center text-sm text-muted-foreground">
+        This Cargo Ops page cannot be shown inside another window. Open Cargo Ops in your browser at{" "}
+        <span className="font-mono text-foreground">{window.location.origin}</span>.
+      </p>
+    </main>
+  );
+}
+
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   head: () => ({
     meta: [
@@ -135,6 +151,25 @@ function RootComponent() {
   // fades in (opacity only, which keeps the fixed map layout intact). Before hydration the
   // key matches the server/shell markup. Reduced motion: no animation.
   const hydrated = useHydrated();
+  // Only /panel may run inside a frame (the in-sim toolbar panel; src/lib/framing.ts). The
+  // connector already refuses to let any other URL be framed; this also covers client-side
+  // navigation inside a framed page.
+  const framed = hydrated && typeof window !== "undefined" && isFramed(window);
+
+  if (isFrameBlocked(pathname, framed)) return <FramedPageBlocked />;
+
+  if (pathname === PANEL_PATH) {
+    // Compact toolbar-panel layout: no navigation, no shortcuts, no page transition.
+    return (
+      <QueryClientProvider client={queryClient}>
+        <SimConnectionProvider>
+          <main id="main-content" tabIndex={-1} className="panel-compact" data-testid="page">
+            <Outlet />
+          </main>
+        </SimConnectionProvider>
+      </QueryClientProvider>
+    );
+  }
 
   return (
     <QueryClientProvider client={queryClient}>

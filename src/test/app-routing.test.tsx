@@ -14,6 +14,7 @@ const paths = [
   "/logbook",
   "/settings",
   "/diagnostics",
+  "/panel",
 ] as const;
 
 // Match routes without running loaders or rendering: loaders may need a server or

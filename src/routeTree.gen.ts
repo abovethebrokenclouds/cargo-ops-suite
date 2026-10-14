@@ -18,6 +18,7 @@ import { Route as FlightRouteImport } from './routes/flight'
 import { Route as JobsRouteImport } from './routes/jobs'
 import { Route as LogbookRouteImport } from './routes/logbook'
 import { Route as MapRouteImport } from './routes/map'
+import { Route as PanelRouteImport } from './routes/panel'
 import { Route as SettingsRouteImport } from './routes/settings'
 
 const IndexRoute = IndexRouteImport.update({
@@ -65,6 +66,11 @@ const MapRoute = MapRouteImport.update({
   path: '/map',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PanelRoute = PanelRouteImport.update({
+  id: '/panel',
+  path: '/panel',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -81,6 +87,7 @@ export interface FileRoutesByFullPath {
   '/jobs': typeof JobsRoute
   '/logbook': typeof LogbookRoute
   '/map': typeof MapRoute
+  '/panel': typeof PanelRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRoutesByTo {
@@ -93,6 +100,7 @@ export interface FileRoutesByTo {
   '/jobs': typeof JobsRoute
   '/logbook': typeof LogbookRoute
   '/map': typeof MapRoute
+  '/panel': typeof PanelRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRoutesById {
@@ -106,6 +114,7 @@ export interface FileRoutesById {
   '/jobs': typeof JobsRoute
   '/logbook': typeof LogbookRoute
   '/map': typeof MapRoute
+  '/panel': typeof PanelRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRouteTypes {
@@ -120,6 +129,7 @@ export interface FileRouteTypes {
     | '/jobs'
     | '/logbook'
     | '/map'
+    | '/panel'
     | '/settings'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -132,6 +142,7 @@ export interface FileRouteTypes {
     | '/jobs'
     | '/logbook'
     | '/map'
+    | '/panel'
     | '/settings'
   id:
     | '__root__'
@@ -144,6 +155,7 @@ export interface FileRouteTypes {
     | '/jobs'
     | '/logbook'
     | '/map'
+    | '/panel'
     | '/settings'
   fileRoutesById: FileRoutesById
 }
@@ -157,6 +169,7 @@ export interface RootRouteChildren {
   JobsRoute: typeof JobsRoute
   LogbookRoute: typeof LogbookRoute
   MapRoute: typeof MapRoute
+  PanelRoute: typeof PanelRoute
   SettingsRoute: typeof SettingsRoute
 }
 
@@ -225,6 +238,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MapRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/panel': {
+      id: '/panel'
+      path: '/panel'
+      fullPath: '/panel'
+      preLoaderRoute: typeof PanelRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -245,6 +265,7 @@ const rootRouteChildren: RootRouteChildren = {
   JobsRoute: JobsRoute,
   LogbookRoute: LogbookRoute,
   MapRoute: MapRoute,
+  PanelRoute: PanelRoute,
   SettingsRoute: SettingsRoute,
 }
 export const routeTree = rootRouteImport

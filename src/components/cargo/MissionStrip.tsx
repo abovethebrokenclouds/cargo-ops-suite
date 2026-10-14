@@ -5,8 +5,8 @@ import type { Mission, Source } from "@cargo-ops/protocol";
 import { KIND_LABELS } from "@cargo-ops/economy";
 import { SourceTag } from "@/components/status/SourceTag";
 import { PayloadCheckLine } from "./PayloadCheck";
-import { missionTimeLeftMin } from "@/lib/economy/format";
-import { formatInt, formatMinutes, formatUsd } from "@/lib/format";
+import { missionDeadline } from "@/lib/economy/format";
+import { formatInt, formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<Mission["status"], string> = {
@@ -28,7 +28,7 @@ export function MissionStrip({
   className?: string;
 }) {
   if (!mission) return null;
-  const left = missionTimeLeftMin(mission);
+  const deadline = missionDeadline(mission);
   const kinds = [...new Set(mission.jobs.map((j) => KIND_LABELS[j.kind]))].join(", ");
   const done = mission.status === "delivered";
   const bad = mission.status === "failed" || mission.status === "aborted";
@@ -94,17 +94,11 @@ export function MissionStrip({
           <p
             className={cn(
               "mt-1 font-mono text-lg font-tabular",
-              (left ?? mission.timeLimitMin) < 0 ? "text-destructive" : "text-foreground",
+              deadline.late ? "text-destructive" : "text-foreground",
             )}
             data-testid="mission-deadline"
           >
-            {left === null
-              ? mission.timeLimitMin < 0
-                ? `${formatMinutes(-mission.timeLimitMin)} late already`
-                : `${formatMinutes(mission.timeLimitMin)} from block-out`
-              : left >= 0
-                ? `${formatMinutes(left)} left`
-                : `${formatMinutes(-left)} late`}
+            {deadline.text}
           </p>
         </div>
         <div className="text-right">
