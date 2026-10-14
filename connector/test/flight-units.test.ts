@@ -42,7 +42,10 @@ describe("SimClock", () => {
     assert.equal(clock.advance(2000, { paused: false, simRate: 1 }), 1000);
     assert.equal(clock.advance(3000, { paused: false, simRate: 4 }), 5000);
     assert.equal(clock.advance(60_000, { paused: true, simRate: 4 }), 5000);
-    assert.equal(clock.advance(61_000, { paused: false, simRate: 0.5 }), 5500);
+    // The interval that ends a pause belongs to the pause (no frames may arrive while
+    // paused, e.g. in the main menu after SimStop); counting resumes from the next update.
+    assert.equal(clock.advance(61_000, { paused: false, simRate: 0.5 }), 5000);
+    assert.equal(clock.advance(62_000, { paused: false, simRate: 0.5 }), 5500);
     assert.equal(clock.advance(60_000, { paused: false, simRate: 1 }), 5500, "never backwards");
   });
 

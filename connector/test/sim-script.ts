@@ -175,6 +175,38 @@ export class SimScript {
     this.source.emit({ type: "connected", simName: "Test", protocol: "SunRise" });
   }
 
+  /**
+   * SimStop (back to the main menu), as SimConnectSource reports it: the link stays up, a
+   * sim.paused event and a sim-domain patch with paused = true, and no motion frames until
+   * simStart(). Stamped with the receive clock `t`.
+   */
+  simStop(): void {
+    this.source.emit({
+      type: "event",
+      name: "sim.paused",
+      data: { paused: true, event: "SimStop" },
+    });
+    this.source.emit({
+      type: "data",
+      at: this.t,
+      patch: { sim: { connected: true, paused: true, simRate: this.ac.simRate } },
+    });
+  }
+
+  /** SimStart: the user is in control again (frames follow with step/run). */
+  simStart(): void {
+    this.source.emit({
+      type: "event",
+      name: "sim.paused",
+      data: { paused: this.ac.paused, event: "SimStart" },
+    });
+    this.source.emit({
+      type: "data",
+      at: this.t,
+      patch: { sim: { connected: true, paused: this.ac.paused, simRate: this.ac.simRate } },
+    });
+  }
+
   command(name: string, args: unknown = {}): Result {
     const cmd: Command = {
       type: "command",

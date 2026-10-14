@@ -569,6 +569,9 @@ class EmulatedConnection {
   /** Send the current frame of a request (ONCE requests end after their first frame). */
   sendFrame(r: ActiveRequest): void {
     if (this.closed || this.requests.get(r.requestId) !== r) return;
+    // ASSUMPTION (not documented): back in the main menu the user aircraft is gone, so
+    // periodic requests deliver nothing until the next SimStart (see simStop()).
+    if (this.emu.framesHalted && r.period !== PERIOD.ONCE) return;
     const datums = this.defs.get(r.defineId);
     if (!datums) return;
     const objectId = r.objectId === OBJECT_ID_USER ? this.emu.userObjectId : r.objectId;
@@ -716,6 +719,8 @@ export class SimConnectEmulator extends EventEmitter {
   values: Record<string, SimValue>;
   aiObjects: AiObject[];
   simRunning: boolean;
+  /** While true, periodic data requests send no frames (main menu after SimStop). */
+  framesHalted = false;
   aircraftPath: string;
   flightPath: string;
   /** Every decoded client packet, in arrival order. */
@@ -843,6 +848,23 @@ export class SimConnectEmulator extends EventEmitter {
   pause(flags: number): void {
     this.systemEvent("Pause_EX1", flags);
     this.systemEvent("Pause", flags !== 0 ? 1 : 0);
+  }
+
+  /**
+   * Back to the main menu: the "Sim" system state reads 0, then SimStop. With `haltFrames`
+   * (default true) periodic requests stop sending frames until simStart().
+   */
+  simStop(options: { haltFrames?: boolean } = {}): void {
+    this.simRunning = false;
+    this.framesHalted = options.haltFrames ?? true;
+    this.systemEvent("SimStop");
+  }
+
+  /** A flight is loaded and the user is in control again: "Sim" = 1, frames resume, SimStart. */
+  simStart(): void {
+    this.simRunning = true;
+    this.framesHalted = false;
+    this.systemEvent("SimStart");
   }
 
   /** Load another aircraft: new values, then AircraftLoaded with its .cfg path. */

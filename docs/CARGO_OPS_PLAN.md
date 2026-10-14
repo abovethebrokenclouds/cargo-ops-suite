@@ -478,7 +478,7 @@ Suggested PR sequence: P0 (one PR), P1 (connector PR + flight page PR), P2 (map 
 1. **MSFS 2024 GPS flight-plan SimVars are deprecated** and may not reflect EFB-made plans. Mitigation: best-effort plan reading, manual destination selection, optional SimBrief import.
 2. **Legacy fuel/payload SimVars on 2024 aircraft** can mismatch the new fuel system. Mitigation: show the source of each number; allow configured payload; validate against `TOTAL WEIGHT`.
 3. **Facilities API regressions in 2024** (list callbacks, VOR/NDB frequencies, ident layout). Mitigation: OurAirports as baseline, SQLite cache, per-ICAO requests.
-4. **`Pause`/`Pause_EX1` reporting bugs** in some builds. Mitigation: combine with `SimStart/SimStop` and `RequestSystemState("Sim")`.
+4. **`Pause`/`Pause_EX1` reporting bugs** in some builds. Mitigation: combine with `SimStart/SimStop` and `RequestSystemState("Sim")`. Implemented: effective pause = pause flag OR sim not running, plus a stuck-pause rule (`docs/SIMVARS.md` "Effective pause"); PC-53 checks it on the sim.
 5. **node-simconnect is community-maintained** (single primary maintainer). Mitigation: pin version, FakeSource for everything else, protocol fallback to KittyHawk.
 6. **LGPL packaging**: never bundle node-simconnect into a single exe; keep it in `node_modules` with its license.
 7. **`node:sqlite` is Stability 1.2 on Node 24**. Mitigation: thin storage adapter; better-sqlite3 (MIT) as fallback.

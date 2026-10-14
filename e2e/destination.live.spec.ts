@@ -6,7 +6,7 @@ import { startConnector, type ReplayConnector } from "./replay-fixtures";
 // Live mode against the TEST-ONLY SimConnect protocol emulator: a free flight with no GPS plan
 // gets a destination from the /flight picker (labelled Manual, distance computed by the
 // connector), an activated GPS plan takes over (labelled GPS plan), and deactivating it falls
-// back to the manual choice. Emulated evidence about our code, never a check of MSFS (PC-53).
+// back to the manual choice. Emulated evidence about our code, never a check of MSFS (PC-55).
 
 /** A Caravan level at 9,500 ft over northern Alabama, no GPS flight plan. */
 const CRUISE = {

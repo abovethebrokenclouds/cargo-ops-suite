@@ -22,6 +22,7 @@ import {
 import type { SimStatePatch } from "../protocol";
 import { AI_SAMPLE_INTERVAL_MS, SimConnectAiSampler, type AiTarget } from "./ai-traffic";
 import { fastIntervalMs, mapFast, mapSlow, pausedFromEx1, simNameFor } from "./mapping";
+import { PauseState } from "./pause-state";
 import {
   MAX_ENGINES,
   MAX_STATIONS,
@@ -127,6 +128,8 @@ export interface SimConnectSourceOptions {
   retryMaxMs?: number;
   /** AI traffic sampling interval, ms (default 30,000). Tests shorten it. */
   aiSampleIntervalMs?: number;
+  /** Stuck-pause rule: continuous movement before a stuck flag is ignored, ms (tests). */
+  stuckPauseMs?: number;
 }
 
 export class SimConnectSource implements SimSource {
@@ -151,7 +154,13 @@ export class SimConnectSource implements SimSource {
   private sendIds = new Map<number, { group: SimVarGroup; datum: DatumSpec }>();
   private disabled = new Set<string>();
   private counts: IndexCounts | null = null;
-  private paused = false;
+  /**
+   * Effective pause: Pause / Pause_EX1 combined with SimStart / SimStop and the "Sim"
+   * system state, plus the stuck-pause rule (sim/pause-state.ts, docs/SIMVARS.md).
+   */
+  private readonly pause: PauseState;
+  /** Latest Pause_EX1 flags (or legacy Pause data), for the sim.paused event detail. */
+  private lastPauseFlags = 0;
   private simRate: number | undefined;
   private lastFastEmit = 0;
   private lastAgl: number | undefined;
@@ -167,7 +176,11 @@ export class SimConnectSource implements SimSource {
   private userPosition: { lat: number; lon: number } | null = null;
   /** Latest values the sim reported but the protocol has no domain for (diagnostics). */
   zulu: string | undefined;
-  simRunning: boolean | undefined;
+
+  /** "Sim" running state from SimStart / SimStop / RequestSystemState; undefined = unknown. */
+  get simRunning(): boolean | undefined {
+    return this.pause.simRunning;
+  }
 
   constructor(options: SimConnectSourceOptions) {
     this.log = options.log;
@@ -176,6 +189,9 @@ export class SimConnectSource implements SimSource {
     this.retryMaxMs = options.retryMaxMs ?? RETRY_MAX_MS;
     this.aiSampleIntervalMs = options.aiSampleIntervalMs ?? AI_SAMPLE_INTERVAL_MS;
     this.retryDelay = this.retryMinMs;
+    this.pause = new PauseState(
+      options.stuckPauseMs !== undefined ? { stuckPauseMs: options.stuckPauseMs } : {},
+    );
   }
 
   link(): SimLinkInfo {
@@ -274,9 +290,11 @@ export class SimConnectSource implements SimSource {
     handle.on("eventEx1", (ev) => this.onSystemEvent(ev.clientEventId, ev.data[0]));
     handle.on("eventFilename", (ev) => this.onSystemEvent(ev.clientEventId, 0, ev.fileName));
     handle.on("systemState", (state) => {
-      if (state.requestID !== SYSTEM_STATE_SIM_REQUEST) return;
-      this.simRunning = state.dataInteger === 1;
+      if (state.requestID !== SYSTEM_STATE_SIM_REQUEST || this.handle !== handle) return;
       this.log("info", `System state "Sim" = ${state.dataInteger}`);
+      if (this.pause.systemState(state.dataInteger === 1)) {
+        this.emitPause({ event: "SimState", sim: state.dataInteger });
+      }
     });
 
     this.emitter.emit({ type: "connected", simName, protocol, version });
@@ -340,9 +358,9 @@ export class SimConnectSource implements SimSource {
     this.disabled.clear();
     this.counts = null;
     this.simRate = undefined;
-    this.paused = false;
+    this.pause.reset();
+    this.lastPauseFlags = 0;
     this.zulu = undefined;
-    this.simRunning = undefined;
     if (this.rebuildTimer) clearTimeout(this.rebuildTimer);
     this.rebuildTimer = null;
     this.rebuildGroups.clear();
@@ -542,6 +560,23 @@ export class SimConnectSource implements SimSource {
     if (mapped.motion) patch.motion = mapped.motion;
     if (Object.keys(patch).length === 0) return;
     this.lastFastEmit = now;
+    // Stuck-pause rule, decided on the same throttled frames the session receives; the
+    // un-paused sim domain goes out before the frame that proved it.
+    if (
+      mapped.position &&
+      mapped.motion &&
+      this.pause.frame(
+        { lat: mapped.position.lat, lon: mapped.position.lon, gsKt: mapped.motion.gsKt },
+        now,
+      )
+    ) {
+      this.log(
+        "warn",
+        `Pause flag ${this.lastPauseFlags} looks stuck: the sim restarted and the aircraft has ` +
+          "been moving since; treating the simulator as running until it reports a pause again",
+      );
+      this.emitPause({ event: "stuck_pause", flags: this.lastPauseFlags });
+    }
     this.emitter.emit({ type: "data", patch });
   }
 
@@ -550,7 +585,7 @@ export class SimConnectSource implements SimSource {
     if (!this.info.connected || this.simRate === undefined) return undefined;
     const sim: NonNullable<SimStatePatch["sim"]> = {
       connected: true,
-      paused: this.paused,
+      paused: this.pause.paused,
       simRate: this.simRate,
     };
     if (this.info.name) sim.name = this.info.name;
@@ -564,16 +599,24 @@ export class SimConnectSource implements SimSource {
     if (!name) return;
     switch (name) {
       case "Pause":
-        this.setPaused(data === 1, { event: name, data });
+        if (this.pause.setFlag(data === 1)) this.emitPause({ event: name, data });
         break;
       case "Pause_EX1":
-        this.setPaused(pausedFromEx1(data), { event: name, flags: data });
+        this.lastPauseFlags = data;
+        if (this.pause.setFlag(pausedFromEx1(data))) this.emitPause({ event: name, flags: data });
+        break;
+      case "SimStop":
+        // Back to the main menu: the flight's clock stops (effective pause); the link stays up
+        // and nothing is sent for the aircraft unless the sim itself sends frames.
+        this.log("info", "System event SimStop");
+        if (this.pause.simStop()) this.emitPause({ event: name });
         break;
       case "SimStart":
-      case "SimStop":
-        this.simRunning = name === "SimStart";
-        this.log("info", `System event ${name}`);
-        if (name === "SimStart") this.requestCounts();
+        this.log("info", "System event SimStart");
+        if (this.pause.simStart()) this.emitPause({ event: name });
+        // Resync with the documented "user in control" state.
+        this.handle?.requestSystemState(SYSTEM_STATE_SIM_REQUEST, SYSTEM_STATES[0]);
+        this.requestCounts();
         break;
       case "FlightLoaded":
       case "AircraftLoaded":
@@ -593,9 +636,9 @@ export class SimConnectSource implements SimSource {
     }
   }
 
-  private setPaused(paused: boolean, detail: Record<string, unknown>): void {
-    if (paused === this.paused) return;
-    this.paused = paused;
+  /** The effective pause changed: the event, then the sim domain (once a sim rate is known). */
+  private emitPause(detail: Record<string, unknown>): void {
+    const paused = this.pause.paused;
     this.emitter.emit({ type: "event", name: "sim.paused", data: { paused, ...detail } });
     const sim = this.simDomain();
     if (sim) this.emitter.emit({ type: "data", patch: { sim } });
