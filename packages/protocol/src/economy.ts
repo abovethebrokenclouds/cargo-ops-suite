@@ -51,12 +51,64 @@ export const JOB_STATUSES = [
   "available",
   "accepted",
   "loaded",
+  /** Unloaded at an intermediate airport; waits there for the onward leg (transit cargo). */
+  "in_transit",
   "delivered",
   "failed",
   "expired",
 ] as const;
 export const jobStatusSchema = z.enum(JOB_STATUSES);
 export type JobStatus = z.infer<typeof jobStatusSchema>;
+
+/** One flown leg of a transit job (docs/ECONOMY.md "Transit cargo"). */
+export const jobTransitLegSchema = z.object({
+  missionId: z.string().min(1),
+  flightId: z.string().optional(),
+  origin: icao(),
+  destination: icao(),
+  /** Block minutes of the leg (simulator time, pauses excluded). */
+  blockMin: finite().nonnegative(),
+  /** Ground minutes before this leg that counted against the deadline. */
+  groundMin: finite().nonnegative(),
+  landingGrade: landingGradeSchema.optional(),
+  /** Peak touchdown G of the leg (fragile damage applies to the whole chain). */
+  peakG: finite().optional(),
+  /** The leg lost its bonuses (sim rate above 1×). */
+  noBonus: z.boolean().optional(),
+  /** The leg departed underloaded (payload check): the final payout has no bonuses. */
+  payloadMismatch: z.boolean().optional(),
+  /** Wall clock of the arrival, ISO 8601. */
+  arrivedAt: z.string(),
+});
+export type JobTransitLeg = z.infer<typeof jobTransitLegSchema>;
+
+export const TRANSIT_STORAGE_KINDS = ["airport", "own_fbo", "own_terminal"] as const;
+export type TransitStorage = (typeof TRANSIT_STORAGE_KINDS)[number];
+
+/**
+ * Where an in-transit job waits and how much of its deadline is used (docs/ECONOMY.md
+ * "Transit cargo"). The deadline covers the whole chain: block minutes of every leg plus the
+ * ground time between legs on the company clock, minus free storage at an own cargo terminal.
+ */
+export const jobTransitSchema = z.object({
+  /** Airport the cargo is stored at now. */
+  location: icao(),
+  locationName: z.string().optional(),
+  /** Wall clock of the arrival there, ISO 8601. */
+  arrivedAt: z.string(),
+  /** Company clock (in-game ms) of the arrival there. */
+  arrivedGameMs: finite().nonnegative(),
+  /** Chain minutes counted against the time limit up to the arrival. */
+  elapsedMin: finite().nonnegative(),
+  /** Stored at a public ramp, at an own FBO, or in an own cargo terminal (free storage). */
+  storage: z.enum(TRANSIT_STORAGE_KINDS),
+  /** Ground minutes here that do not count against the deadline (own cargo terminal). */
+  freeStorageMin: finite().nonnegative(),
+  /** Company clock at which the time limit runs out if the cargo stays here. */
+  deadlineGameMs: finite(),
+  legs: z.array(jobTransitLegSchema).min(1),
+});
+export type JobTransit = z.infer<typeof jobTransitSchema>;
 
 export const jobSchema = z.object({
   id: z.string().min(1),
@@ -89,6 +141,13 @@ export const jobSchema = z.object({
    * generated (absent = 1.00); the delivered payout uses the same factor.
    */
   demandFactor: finite().positive().optional(),
+  /**
+   * Generated beyond one leg's direct range: it needs at least one transit stop
+   * (docs/ECONOMY.md "Transit cargo").
+   */
+  longHaul: z.boolean().optional(),
+  /** Present once the job has been unloaded in transit at an intermediate airport. */
+  transit: jobTransitSchema.optional(),
 });
 export type Job = z.infer<typeof jobSchema>;
 
@@ -117,6 +176,8 @@ export const jobsDomainSchema = z.object({
   boards: z.array(jobBoardSchema),
   available: z.array(jobSchema),
   accepted: z.array(jobSchema),
+  /** Cargo stored at an intermediate airport, waiting for its onward leg. */
+  inTransit: z.array(jobSchema).optional(),
   aircraft: activeAircraftSchema,
 });
 export type JobsState = z.infer<typeof jobsDomainSchema>;
@@ -202,9 +263,12 @@ export const missionSchema = z.object({
   payloadKg: finite().nonnegative(),
   /** Great-circle origin → destination, nm. */
   distanceNm: finite().positive(),
-  /** Tightest time limit among the jobs, minutes from block-out. */
-  timeLimitMin: finite().positive(),
-  /** Sum of the board estimates. */
+  /**
+   * Tightest time left among the jobs, minutes from block-out. Transit cargo has already used
+   * part of its chain: recomputed while loaded and frozen at block-out; negative = already late.
+   */
+  timeLimitMin: finite(),
+  /** Sum of the estimates of the jobs delivered on this leg (transit: late penalty so far). */
   expectedPayout: finite().nonnegative(),
   createdAt: z.string(),
   startedAt: z.string().optional(),
@@ -229,6 +293,13 @@ export const missionSchema = z.object({
   wear: finite().nonnegative().optional(),
   /** Cargo vs sim payload: live preview while loaded, frozen at departure. */
   payloadCheck: payloadCheckSchema.optional(),
+  /**
+   * Jobs whose final destination lies beyond this leg: unloaded in transit at the mission
+   * destination and paid only on their final delivery.
+   */
+  transitJobIds: z.array(z.string().min(1)).optional(),
+  /** Company clock (in-game ms) at block-out; transit ground time is counted up to it. */
+  startedGameMs: finite().nonnegative().optional(),
 });
 export type Mission = z.infer<typeof missionSchema>;
 
@@ -269,7 +340,14 @@ export const jobsRefreshArgsSchema = z
   .strict();
 export const jobIdArgsSchema = z.object({ jobId: z.string().min(1) }).strict();
 export const missionLoadArgsSchema = z
-  .object({ jobIds: z.array(z.string().min(1)).min(1).max(20) })
+  .object({
+    jobIds: z.array(z.string().min(1)).min(1).max(20),
+    /**
+     * Leg destination. Defaults to the jobs' common final destination; another airport makes
+     * this a transit leg for every job going further (docs/ECONOMY.md "Transit cargo").
+     */
+    destination: icao().optional(),
+  })
   .strict();
 export const settingsUpdateArgsSchema = z
   .object({

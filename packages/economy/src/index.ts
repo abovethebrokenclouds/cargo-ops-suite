@@ -27,3 +27,5 @@ export * from "./fbo";
 export * from "./demand";
 export * from "./insurance";
 export * from "./milestones";
+// Transit cargo: jobs carried over several legs, paid on the final delivery.
+export * from "./transit";

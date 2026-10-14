@@ -73,6 +73,30 @@ Values are tagged `SIM`, `REPLAY` or `DEMO`; a dash means "no data", never a mad
 4. A crash fails the mission (reputation −20, repairs). Every flight lands in the **Logbook**
    (`g` `l`) with track, grade and payout; export CSV, GPX (one flight) or the whole career (JSON).
 
+### Transit cargo (more than one leg)
+
+Some contracts go further than one leg: jobs tagged **Needs a stop** are beyond your aircraft's
+direct range, and any job can be routed through another airport (a hub, a longer runway, a
+place where you switch aircraft).
+
+1. Tick the jobs, type the intermediate airport in **Leg to** and **Load**. The mission strip
+   says how many jobs go beyond it. The leg must bring the cargo closer to where it is going,
+   and range, runway, payload, fuel and weight are checked for this leg as usual.
+2. Fly the leg. On arrival the cargo is unloaded and **stored in transit** there: the job moves to
+   **Transit cargo** on Jobs with its airport, final destination and deadline, and the map shows a
+   pin at that airport (hover it for the deadlines). Nothing is paid yet.
+3. Later, with an aircraft at that airport, tick the stored job (alone or with others from the
+   same airport) and load the next leg — to its destination, or to another stop.
+4. The full payout comes on the **final delivery**, with the landing grade of the last leg. The
+   time limit covers **the whole trip**: every leg's block time plus the time the cargo waits on
+   the ground (company clock). If you own an FBO with a **cargo terminal** there, the first 4 / 8 /
+   12 hours (level 1 / 2 / 3) of waiting do not count. The payout shown for stored cargo is an
+   estimate that already includes any late penalty, and the mission strip says "late already"
+   when an onward leg starts past the deadline. A crash on any leg loses the cargo; so does a
+   leg that fails its checks (for example flown to the wrong airport), which counts as
+   abandoning it (−3 reputation). **Abandon** (with a confirmation) gives it up where it is:
+   no payout, −3 reputation.
+
 ## 5. Company, fleet, loans, used market, FBOs
 
 - **Company** (`g` `c`): cash, reputation 0–100 (tiers unlock aircraft, job kinds and loans),

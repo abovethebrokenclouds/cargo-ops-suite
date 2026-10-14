@@ -51,6 +51,9 @@ export const EVENT_NAMES = [
   "demand.event",
   "milestone.reached",
   "insurance.claim",
+  // Transit cargo (additive).
+  "job.in_transit",
+  "job.abandoned",
 ] as const;
 export const eventNameSchema = z.enum(EVENT_NAMES);
 export type EventName = z.infer<typeof eventNameSchema>;

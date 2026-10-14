@@ -56,6 +56,9 @@ export function findRoutes(options: RouteOptions): RouteChain[] {
   const byOrigin = new Map<string, Map<string, Job[]>>();
   for (const job of options.jobs) {
     if (job.status !== "available" && job.status !== "accepted") continue;
+    // Transit cargo: a long-haul job is never one leg (its destination is beyond the
+    // direct range); plan its stops on the board instead.
+    if (job.longHaul) continue;
     const dests = byOrigin.get(job.origin) ?? new Map<string, Job[]>();
     const list = dests.get(job.destination) ?? [];
     list.push(job);

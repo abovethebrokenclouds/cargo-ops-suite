@@ -120,10 +120,12 @@ with a loaded mission also `not_at_origin` beyond 3 nm, `insufficient_fuel`, `ov
 and `flight.end` (completed when Arrived; otherwise `not_arrived` unless
 `args.abort === true`, which ends it as `aborted`; `no_flight` without one). Cargo
 commands (P3, see `docs/ECONOMY.md`): `jobs.list`, `jobs.refresh {airport?, destination?}`,
-`job.accept {jobId}`, `job.release {jobId}`, `mission.load {jobIds}`, `mission.unload`,
+`job.accept {jobId}`, `job.release {jobId}` (an in-transit job is abandoned: failed, −3
+reputation), `mission.load {jobIds, destination?}` (a `destination` other than the jobs' final
+one makes a transit leg), `mission.unload`,
 `mission.abort`, `settings.update {aircraftType?: key | null, base?, crewAllowanceKg?: kg | null}`; errors include
 `bad_args`, `unknown_airport`, `job_unavailable`, `job_not_accepted`, `job_loaded`,
-`mixed_route`, `payload_exceeded`, `runway_unsuitable`, `out_of_range`, `mission_active`,
+`mixed_route`, `same_airport`, `no_progress`, `payload_exceeded`, `runway_unsuitable`, `out_of_range`, `mission_active`,
 `no_mission`, `mission_in_progress`, `unknown_type`. Every other command is answered with
 `ok: false, error.code: "not_implemented"`. When the simulator connects or disconnects, every client receives a
 new `welcome` + `snapshot`, and simulator-derived domains are cleared on disconnect so
