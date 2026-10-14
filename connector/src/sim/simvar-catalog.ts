@@ -33,7 +33,7 @@ export const DOC = {
  * listed; a request must use one from the dimension of the documented unit.
  */
 export const UNIT_DIMENSIONS = {
-  length: ["feet", "meters"],
+  length: ["feet", "meters", "nautical miles"],
   speed: ["knots", "feet per second", "feet per minute", "meters per second"],
   angle: ["degrees", "radians"],
   weight: ["pounds", "kilograms"],
@@ -145,6 +145,25 @@ export const SIMVAR_CATALOG: readonly CatalogSimVar[] = [
   }),
   v("PLANE TOUCHDOWN PITCH DEGREES", "Degrees", "angle", DOC.aircraftMisc, {
     note: "sign convention not documented",
+  }),
+  // GPS flight plan (best effort: deprecated in MSFS 2024, may not reflect EFB plans)
+  v("GPS IS ACTIVE FLIGHT PLAN", "Bool", "bool", DOC.radioNav, {
+    note: "flight plan mode active; 2024 may report stale values for EFB plans",
+  }),
+  v("GPS FLIGHT PLAN WP COUNT", "Number", "number", DOC.radioNav),
+  v("GPS FLIGHT PLAN WP INDEX", "Number", "number", DOC.radioNav, {
+    note: "index of the active waypoint; 0-based numbering is not documented",
+  }),
+  v("GPS WP NEXT ID", null, "string", DOC.radioNav),
+  v("GPS WP NEXT LAT", "Degrees", "angle", DOC.radioNav),
+  v("GPS WP NEXT LON", "Degrees", "angle", DOC.radioNav),
+  v("GPS WP DISTANCE", "Meters", "length", DOC.radioNav, {
+    note: "distance to the next waypoint; requested in nautical miles",
+  }),
+  v("GPS WP ETE", "Seconds", "time", DOC.radioNav),
+  v("GPS ETE", "Seconds", "time", DOC.radioNav, { note: "ETE to the destination" }),
+  v("GPS APPROACH AIRPORT ID", null, "string", DOC.radioNav, {
+    note: "airport of the loaded approach; empty without one",
   }),
 ];
 

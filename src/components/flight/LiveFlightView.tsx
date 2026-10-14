@@ -43,11 +43,14 @@ import {
 } from "@/lib/sim-state";
 import { useTelemetryHistory } from "@/lib/sim-state/history";
 import { useNow } from "@/lib/sim-state/hooks";
-import { useSimConnection } from "@/lib/transport/useSimConnection";
+import { useCommand, useSimConnection } from "@/lib/transport/useSimConnection";
+import { useAirportLookup } from "@/lib/economy/board";
 import { altitudeFromFt, useUnits, weightFromLb } from "@/lib/settings/units";
 import { cn } from "@/lib/utils";
+import type { PlanBasis } from "@cargo-ops/protocol";
 
 import { Annunciator, SubReadout, type AnnunciatorProps } from "./Annunciator";
+import { DestinationPicker, PlanBasisTag } from "./DestinationPicker";
 import { FlightProgressBar } from "./FlightProgressBar";
 import { FlightSummary } from "./FlightSummary";
 import { LandingCard } from "./LandingCard";
@@ -123,6 +126,68 @@ function annunciators(state: ClientSimState, stale: boolean): AnnunciatorProps[]
             }
           : { label: "Data", state: "unknown" },
   ];
+}
+
+/** Connector sessions (live or replay) can set a destination; the demo cannot. */
+function connectorSession(state: ClientSimState): boolean {
+  return state.connection === "live" || state.connection === "replay";
+}
+
+/** Airports load lazily (≈1.1 MB), only when the picker can be used. */
+function ConnectorDestinationPicker(props: {
+  basis: PlanBasis | null;
+  destination: string | null;
+  missionDestination: string | null;
+  enabled: boolean;
+  disabledNote: string | undefined;
+}) {
+  const lookup = useAirportLookup();
+  const command = useCommand();
+  return <DestinationPicker {...props} lookup={lookup} command={command} />;
+}
+
+function RouteDestination({
+  state,
+  basis,
+  destination,
+}: {
+  state: ClientSimState;
+  basis: PlanBasis | null;
+  destination: string | null;
+}) {
+  const command = useCommand();
+  const mission = state.sim.mission;
+  const missionDestination =
+    mission && (mission.status === "loaded" || mission.status === "in_progress")
+      ? mission.destination
+      : null;
+  if (!connectorSession(state)) {
+    return (
+      <DestinationPicker
+        lookup={null}
+        basis={basis}
+        destination={destination}
+        missionDestination={missionDestination}
+        enabled={false}
+        disabledNote={
+          state.connection === "demo"
+            ? "Demo flight: picking a destination needs the local connector."
+            : "Not connected to the connector."
+        }
+        command={command}
+      />
+    );
+  }
+  const offline = isSimOfflineSession(state);
+  return (
+    <ConnectorDestinationPicker
+      basis={basis}
+      destination={destination}
+      missionDestination={missionDestination}
+      enabled={!offline}
+      disabledNote={offline ? "The simulator is not connected." : undefined}
+    />
+  );
 }
 
 /** The Live Flight display, bound to the sim connection. Works the same for demo and live. */
@@ -289,10 +354,17 @@ export function LiveFlightView() {
         title={
           route.origin && route.destination
             ? `${route.origin} → ${route.destination}`
-            : "No flight plan"
+            : route.destination
+              ? `To ${route.destination}`
+              : "No flight plan"
         }
         icon={RouteIcon}
-        action={<SourceTag source={sim.plan ? source : null} />}
+        action={
+          <div className="flex items-center gap-1.5">
+            <PlanBasisTag basis={route.basis} />
+            <SourceTag source={sim.plan ? source : null} />
+          </div>
+        }
       >
         <div className="flex flex-col gap-6">
           <div className="@container grid grid-cols-2 gap-4 sm:grid-cols-3">
@@ -326,6 +398,7 @@ export function LiveFlightView() {
             progress={route.progress}
             ete={route.eteMin === null ? null : formatMinutes(route.eteMin)}
           />
+          <RouteDestination state={state} basis={route.basis} destination={route.destination} />
         </div>
       </Panel>
 

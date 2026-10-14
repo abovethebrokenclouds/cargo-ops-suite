@@ -532,6 +532,9 @@ export class SimConnectSource implements SimSource {
     if (mapped.payload) patch.payload = mapped.payload;
     if (mapped.engines) patch.engines = mapped.engines;
     if (mapped.controls) patch.controls = mapped.controls;
+    // Always reported: a GPS plan, or null for "none" (inactive, empty or rejected). The
+    // session resolves it against the manual and mission destinations.
+    patch.plan = mapped.plan ?? null;
     this.zulu = mapped.zulu;
     if (mapped.simRate !== undefined && mapped.simRate !== this.simRate) {
       const first = this.simRate === undefined;

@@ -10,7 +10,7 @@ documented one, a string SimVar with a numeric datum type (or the reverse), or g
 of going through those tables.
 
 **Accessed:** 2026-10-13/14. **Nothing here has been checked against a running simulator**;
-the PC rows PC-07, PC-12 and PC-20 in `docs/VERIFICATION.md` still decide that.
+the PC rows PC-07, PC-12, PC-20, PC-53 and PC-55 in `docs/VERIFICATION.md` still decide that.
 
 ## How the documentation was reached (and what was not)
 
@@ -89,6 +89,35 @@ are requested with a null unit and a fixed-length string datum type.
 | PLANE TOUCHDOWN NORMAL VELOCITY | fast     | feet per second / f64 | Feet per second | ?        | —            | ✓    | ✓    | Misc     | **[search]** units feet per second; **sign convention not documented**. Mapping ×60 → fpm; the landing analyser uses `-abs()`, so either sign grades the same                                                                             |
 | PLANE TOUCHDOWN BANK DEGREES    | fast     | degrees / f64         | Degrees         | ?        | —            | ✓    | ✓    | Misc     | sign convention not documented; reported as the sim gives it                                                                                                                                                                              |
 | PLANE TOUCHDOWN PITCH DEGREES   | fast     | degrees / f64         | Degrees         | ?        | —            | ✓    | ✓    | Misc     | sign convention not documented; reported as the sim gives it (PC-20 should note whether nose-up is negative)                                                                                                                              |
+| GPS IS ACTIVE FLIGHT PLAN       | slow     | bool / f64            | Bool            | ?        | —            | ✓    | ✓    | Nav      | **[tx2]** "Flight plan mode active". Plan §14.1: the GPS SimVars are deprecated in 2024 and may not reflect EFB plans. Missing (rejected) or false → no GPS plan                                                                          |
+| GPS FLIGHT PLAN WP COUNT        | slow     | number / f64          | Number          | ?        | —            | ✓    | ✓    | Nav      | **[tx2]** "Number of waypoints". 0 → no GPS plan                                                                                                                                                                                          |
+| GPS FLIGHT PLAN WP INDEX        | slow     | number / f64          | Number          | ?        | —            | ✓    | ✓    | Nav      | **[tx2]** "Index of waypoint". Read as the 0-based index of the active (next) waypoint: the numbering is **not documented**; PC-55 checks that the last leg reads `count − 1`                                                             |
+| GPS WP NEXT ID                  | slow     | — / STRING64          | String          | ?        | —            | ✓    | ✓    | Nav      | **[tx2]** String32; 64 is a superset. Read but empty → no GPS plan (MSFS 2024 can leave the plan flag set with empty values for EFB plans). On the last leg it is the destination ident                                                   |
+| GPS WP NEXT LAT                 | slow     | degrees / f64         | Degrees         | ?        | —            | ✓    | ✓    | Nav      | **[tx2]**; 0/0 is treated as "not reported"                                                                                                                                                                                               |
+| GPS WP NEXT LON                 | slow     | degrees / f64         | Degrees         | ?        | —            | ✓    | ✓    | Nav      | **[tx2]**; same                                                                                                                                                                                                                           |
+| GPS WP DISTANCE                 | slow     | nautical miles / f64  | Meters          | ?        | —            | ✓    | ✓    | Nav      | **[tx2]** documented in meters; requested in nautical miles (`nautical miles` is a SimConnect length unit, so it converts). On the last leg it is the remaining distance                                                                  |
+| GPS WP ETE                      | slow     | seconds / f64         | Seconds         | ?        | —            | ✓    | ✓    | Nav      | **[tx2]** ETE to the next waypoint; 0 → not reported                                                                                                                                                                                      |
+| GPS ETE                         | slow     | seconds / f64         | Seconds         | ?        | —            | ✓    | ✓    | Nav      | **[tx2]** "Estimated time en route to destination"; 0 → not reported                                                                                                                                                                      |
+| GPS APPROACH AIRPORT ID         | slow     | — / STRING64          | String          | ?        | —            | ✓    | ✓    | Nav      | **[tx2]** String32, "ID of airport" of the loaded approach; used as the GPS destination only when non-empty and the active waypoint is not the last one                                                                                   |
+
+**[tx2]** (2026-10-14, GPS rows): the SDK pages were still unreachable from the container
+(`docs.flightsimulator.com` → `CONNECT tunnel failed, response 403`; the GitHub API for the
+transcription repository is not enabled for the session). The same transcription **[tx]**
+was read from its npm package instead: `msfs-simconnect-api-wrapper` 4.7.0, tarball from
+`registry.npmjs.org`, file `simvars/aircraft-radio-navigation-variables.js`, which cites the
+2020 SDK page [Aircraft Radio Navigation Variables](https://docs.flightsimulator.com/html/Programming_Tools/SimVars/Aircraft_SimVars/Aircraft_RadioNavigation_Variables.htm).
+Only names, documented units, string-ness and descriptions were taken from it; no code was
+copied and the package is not a dependency (the `LICENSE.md` in that tarball limits use of its
+code to non-commercial projects, so nothing of it is shipped or vendored). Its data-type column also flags several of these
+as settable; the connector never writes them. There is no SimVar that names the flight plan's
+destination outright, so the GPS plan has a destination ident only on the last leg or with an
+approach loaded; otherwise `/flight` shows the GPS ETE and the next waypoint without one.
+
+**Destination fallback (no GPS plan).** When the GPS plan is inactive, empty or rejected, the
+connector uses a manual destination (picked on `/flight`, `plan.destination`, for the current
+flight only) or the loaded mission's destination, and computes distance (great circle from
+`PLANE LATITUDE/LONGITUDE` to the OurAirports reference point) and ETE (distance /
+`GROUND VELOCITY`, only at 30 kt or more). Those are labelled Manual or Mission, never GPS.
 
 ### Removed
 
@@ -141,6 +170,14 @@ trust them alone (`connector/src/sim/pause-state.ts`, tests in
   economy's simulator minutes) stops at SimStop and resumes at SimStart. The interval that ends
   a pause is never counted, so the menu time is not added by the first frame after SimStart.
   No frames are made up during a stop; frames the simulator does send keep the `sim` source tag.
+- **Flight plan during a stop.** The `plan` domain is published in the menu too: the last
+  resolved plan (GPS, manual or mission) stays as it was, because the flight is paused, not
+  ended, and the destination is still the one the pilot will resume towards. Nothing is
+  recomputed or invented while no frames arrive; a frame the simulator does send in the menu
+  is resolved as usual (a GPS plan it reports as inactive falls back to the manual or mission
+  destination, never a kept GPS plan), and `plan.destination` still works. Only a real
+  disconnect clears the plan (`connector/src/core/plan.ts`; emulator test "SimStop (main
+  menu) is a pause").
 - **Stuck pause rule.** A pause flag that never clears is overridden only when all of these
   hold: a SimStart arrived after the latest pause report; the sim is running; and consecutive
   fresh position frames have shown the aircraft really moving (position changed from the
@@ -165,3 +202,7 @@ trust them alone (`connector/src/sim/pause-state.ts`, tests in
 - **PC-20**: touchdown values are latched and fresh after each landing; record the sign of
   `PLANE TOUCHDOWN NORMAL VELOCITY` (descending) and of `PLANE TOUCHDOWN PITCH DEGREES`
   (nose-up) and update the notes above.
+- **PC-55**: GPS flight plan on MSFS 2024: whether a plan made in the EFB (and one entered in
+  the aircraft's GPS) sets `GPS IS ACTIVE FLIGHT PLAN` with real values, whether
+  `GPS FLIGHT PLAN WP INDEX` is `count − 1` on the last leg, and whether `GPS WP DISTANCE` /
+  `GPS ETE` match the aircraft's own display. Record what an EFB-only plan reports here.

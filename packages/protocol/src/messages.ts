@@ -103,8 +103,26 @@ export const KNOWN_COMMANDS = [
   "fbo.pricing",
   "insurance.buy",
   "insurance.cancel",
+  // Manual destination for the current flight (null clears it).
+  "plan.destination",
 ] as const;
 export type KnownCommandName = (typeof KNOWN_COMMANDS)[number];
+
+/**
+ * `plan.destination` arguments: an airport ident (looked up in the bundled airport list by the
+ * connector), or null to clear the manual choice. Kept for the current flight only.
+ */
+export const planDestinationArgsSchema = z
+  .object({
+    icao: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9]{2,8}$/, "expected an airport ident")
+      .transform((s) => s.toUpperCase())
+      .nullable(),
+  })
+  .strict();
+export type PlanDestinationArgs = z.infer<typeof planDestinationArgsSchema>;
 
 // ---- client → server ----
 

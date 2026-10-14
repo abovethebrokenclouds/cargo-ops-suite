@@ -128,6 +128,52 @@ describe("connector server (FakeSource over a real WebSocket)", () => {
     client.ws.close();
   });
 
+  it("plan.destination: only after an authenticated hello; the plan delta is labelled", async () => {
+    // A command as the first message is not a hello: closed, never answered.
+    const early = await connectClient(wsUrl, origin);
+    early.send({
+      type: "command",
+      v: PROTOCOL_VERSION,
+      id: "early",
+      name: "plan.destination",
+      args: { icao: "KATL" },
+    });
+    assert.equal((await early.closed).code, 4401);
+    assert.equal(early.messages.length, 0);
+    // A foreign page cannot even open the socket to send it.
+    assert.equal(await upgradeStatus(wsUrl, "http://evil.example"), 403);
+
+    const client = await connectClient(wsUrl, origin);
+    client.send(hello(connector.token));
+    await client.next((m) => m.type === "welcome");
+    client.send({
+      type: "command",
+      v: PROTOCOL_VERSION,
+      id: "dest",
+      name: "plan.destination",
+      args: { icao: "KATL" },
+    });
+    // The plan delta is broadcast while the command runs, so it arrives before the result.
+    const delta = await client.next(
+      (m) =>
+        m.type === "delta" &&
+        (m.patch.plan as { basis?: string } | null | undefined)?.basis === "manual",
+    );
+    assert.equal(delta.type === "delta" && delta.source, "replay");
+    const result = await client.next((m) => m.type === "result");
+    assert.ok(result.type === "result" && result.ok, JSON.stringify(result));
+    client.send({
+      type: "command",
+      v: PROTOCOL_VERSION,
+      id: "clear",
+      name: "plan.destination",
+      args: { icao: null },
+    });
+    const cleared = await client.next((m) => m.type === "result" && m.id === "clear");
+    assert.ok(cleared.type === "result" && cleared.ok);
+    client.ws.close();
+  });
+
   it("rejects WebSocket upgrades from a foreign or missing Origin", async () => {
     assert.equal(await upgradeStatus(wsUrl, "http://evil.example"), 403);
     assert.equal(await upgradeStatus(wsUrl, "http://127.0.0.1:5999"), 403);
