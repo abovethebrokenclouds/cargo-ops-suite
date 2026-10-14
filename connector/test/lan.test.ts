@@ -89,6 +89,12 @@ function canConnect(host: string, port: number): Promise<boolean> {
 }
 
 const realLanIp = lanInterfaceAddresses()[0];
+/** Skip without a non-loopback IPv4 locally; in CI a missing address is a failure. */
+const skipWithoutLanIp = !realLanIp && !process.env["CI"];
+function requireRealLanIp(): string {
+  assert.ok(realLanIp, "this CI host has no non-loopback IPv4 address; the LAN tests need one");
+  return realLanIp;
+}
 
 function fake() {
   return new FakeSource({ frames: shortFixture(), speed: 1, loop: true, loopGapMs: 200 });
@@ -137,13 +143,24 @@ describe("LAN helpers", () => {
     assert.equal(sanitizeDeviceName("x".repeat(100)).length, 40);
   });
 
+  it("strips Unicode control and format characters from device names (C1, bidi, zero-width)", () => {
+    // U+0085 NEL and U+009B CSI (C1 controls, Cc) become spaces; U+202E RIGHT-TO-LEFT
+    // OVERRIDE, U+2066 LRI, U+200B ZERO WIDTH SPACE and U+FEFF BOM (Cf) are removed.
+    assert.equal(sanitizeDeviceName("Den\u0085tab\u009Blet"), "Den tab let");
+    assert.equal(sanitizeDeviceName("\u202Etxt.exe\u2066x\u200B\uFEFF"), "txt.exex");
+    assert.equal(sanitizeDeviceName("\u202E\u200B"), "LAN device");
+    for (const ch of sanitizeDeviceName("a\u0080\u009F\u061C\u200E\u200F\u202A\u2069b")) {
+      assert.doesNotMatch(ch, /[\p{Cc}\p{Cf}]/u, `U+${ch.codePointAt(0)?.toString(16)}`);
+    }
+  });
+
   it("keeps destructive data actions and LAN management local-only", () => {
     assert.equal(isLocalOnlyRoute("POST", "/api/import"), true);
     assert.equal(isLocalOnlyRoute("POST", "/api/backups"), true);
     assert.equal(isLocalOnlyRoute("DELETE", "/api/simbrief/plan"), true);
     assert.equal(isLocalOnlyRoute("GET", "/api/lan"), true);
     assert.equal(isLocalOnlyRoute("DELETE", "/api/lan/devices/x"), true);
-    assert.equal(isLocalOnlyRoute("GET", "/api/backups"), false);
+    assert.equal(isLocalOnlyRoute("GET", "/api/backups"), true, "backup paths stay on the PC");
     assert.equal(isLocalOnlyRoute("GET", "/api/jobs"), false);
     assert.equal(isLocalOnlyRoute("GET", "/api/export/json"), false);
     assert.equal(isLocalOnlyRoute("PUT", "/api/simbrief"), false);
@@ -219,9 +236,21 @@ describe("LanAccess pairing", () => {
   it("burns the code after too many wrong guesses from any addresses", () => {
     const lan = new LanAccess({ dataDir: null, now: () => 0 });
     const { code } = lan.createCode();
-    for (let i = 0; i < MAX_FAILURES_PER_CODE; i++) lan.pair("ZZZZZZZZ", "x", `10.1.0.${i}`);
+    assert.equal(lan.codeBurned(), false);
+    const results = [];
+    for (let i = 0; i < MAX_FAILURES_PER_CODE; i++) {
+      results.push(lan.pair("ZZZZZZZZ", "x", `10.1.0.${i}`));
+    }
     assert.equal(lan.currentCode(), null);
+    assert.equal(lan.codeBurned(), true, "the PC can say why the code is gone");
+    // Only the guess that burned it says so (the server logs that one at warn).
+    const burned = results.map((r) => !r.ok && r.burned === true);
+    assert.deepEqual(burned, [...Array(MAX_FAILURES_PER_CODE - 1).fill(false), true]);
     assert.equal(lan.pair(code, "x", "10.2.0.1").ok, false);
+    lan.createCode();
+    assert.equal(lan.codeBurned(), false, "a new code clears the notice");
+    lan.cancelCode();
+    assert.equal(lan.codeBurned(), false);
   });
 
   it("revokes a device and stores only token hashes on disk", () => {
@@ -324,8 +353,8 @@ describe("connector without the LAN opt-in", () => {
     assert.equal(code.status, 409);
   });
 
-  it("does not listen on a real non-loopback address", { skip: !realLanIp }, async () => {
-    assert.equal(await canConnect(realLanIp as string, connector.server.port), false);
+  it("does not listen on a real non-loopback address", { skip: skipWithoutLanIp }, async () => {
+    assert.equal(await canConnect(requireRealLanIp(), connector.server.port), false);
     assert.equal(await canConnect("127.0.0.1", connector.server.port), true);
   });
 
@@ -405,8 +434,47 @@ describe("persisted LAN setting on the next start", () => {
           lan: "203.0.113.9",
           lanInterfaces: () => [LAN_IP],
         }),
-        /not an address of this PC/,
+        (err: Error) => {
+          assert.match(err.message, /203\.0\.113\.9/);
+          assert.match(err.message, /not an address of this PC/);
+          assert.match(err.message, /--lan on the command line/, "names where it came from");
+          assert.match(err.message, /--no-lan/, "names the way out");
+          return true;
+        },
       );
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it("falls back to loopback with a warning when the saved address is gone from this PC", async () => {
+    const tmp = tempDir();
+    const dataDir = join(tmp.dir, "data");
+    try {
+      saveLanSetting(dataDir, { enabled: true, address: "192.0.2.200" });
+      const c = await startConnector({
+        sim: "fake",
+        dataDir,
+        port: 0,
+        quiet: true,
+        source: fake(),
+        lanInterfaces: () => [LAN_IP],
+      });
+      try {
+        assert.equal(c.lanBind, null, "loopback only");
+        assert.deepEqual(c.server.lanUrls(), []);
+        const host = await http(c.server.port, "GET", "/api/health", {
+          host: `${LAN_IP}:${c.server.port}`,
+        });
+        assert.equal(host.status, 421);
+        const view = (await http(c.server.port, "GET", "/api/lan", { token: c.token })).json();
+        assert.equal(view["active"], false);
+        assert.match(String(view["warning"]), /192\.0\.2\.200.*not an address of this PC/);
+        const log = readFileSync(join(dataDir, "logs", "connector.log"), "utf8");
+        assert.match(log, /WARN .*Saved LAN address 192\.0\.2\.200 .*127\.0\.0\.1 only/);
+      } finally {
+        await c.stop();
+      }
     } finally {
       tmp.cleanup();
     }
@@ -527,8 +595,6 @@ describe("connector with --lan (LAN client played over 127.0.0.1)", () => {
     assert.equal(session.json()["scope"], "lan");
     const jobs = await withLan(() => lanReq("GET", "/api/jobs", { token: body.token }));
     assert.equal(jobs.status, 200);
-    const backups = await withLan(() => lanReq("GET", "/api/backups", { token: body.token }));
-    assert.equal(backups.status, 200);
     // Single use.
     const reuse = await withLan(() => lanReq("POST", "/api/lan/pair", { body: { code } }));
     assert.equal(reuse.status, 401);
@@ -559,6 +625,7 @@ describe("connector with --lan (LAN client played over 127.0.0.1)", () => {
     const device = await pairDevice("Tablet 2");
     const t = device.token;
     const cases: Array<[string, string, unknown?]> = [
+      ["GET", "/api/backups"],
       ["POST", "/api/import", { format: "cargo-ops-career" }],
       ["POST", "/api/backups"],
       ["DELETE", "/api/simbrief/plan"],
@@ -579,6 +646,72 @@ describe("connector with --lan (LAN client played over 127.0.0.1)", () => {
       devices: Array<{ id: string }>;
     };
     assert.ok(view.devices.some((d) => d.id === device.id));
+  });
+
+  it("never shows a LAN device a path on this PC (/api/status, /api/backups)", async () => {
+    const device = await pairDevice("Path probe");
+    const dataDir = join(tmp.dir, "data");
+    const local = await http(port, "GET", "/api/status", { token: connector.token });
+    assert.equal(local.json()["dataDir"], dataDir, "this PC still sees its paths");
+    assert.ok(typeof local.json()["database"] === "string");
+    const lanStatus = await withLan(() => lanReq("GET", "/api/status", { token: device.token }));
+    assert.equal(lanStatus.status, 200);
+    const body = lanStatus.json();
+    for (const key of ["dataDir", "database", "recording"]) {
+      assert.equal(key in body, false, `${key} hidden from a LAN device`);
+    }
+    assert.ok(!lanStatus.body.includes(tmp.dir), "no absolute path anywhere in the body");
+    assert.equal(body["mode"], "replay", "the rest of the status is still there");
+    const backups = await withLan(() => lanReq("GET", "/api/backups", { token: device.token }));
+    assert.equal(backups.status, 403);
+    assert.ok(!backups.body.includes(tmp.dir));
+  });
+
+  it("ties a WebSocket to the identity of its upgrade token", async () => {
+    const a = await pairDevice("Socket A");
+    const b = await pairDevice("Socket B");
+    const wsUrl = (t: string) => `ws://127.0.0.1:${port}/ws?token=${t}`;
+    // This PC: upgrade with the main token, then hello as a LAN device → refused.
+    const pc = await connectClient(wsUrl(connector.token), `http://127.0.0.1:${port}`);
+    pc.send(hello(a.token));
+    assert.equal((await pc.closed).code, 4401);
+    asLan = true;
+    try {
+      // A LAN device: upgrade as A, hello as B → refused; hello as A → welcome.
+      const swap = await connectClient(wsUrl(a.token), lanOrigin);
+      swap.send(hello(b.token));
+      assert.equal((await swap.closed).code, 4401);
+      const same = await connectClient(wsUrl(a.token), lanOrigin);
+      same.send(hello(a.token));
+      assert.equal((await same.next()).type, "welcome");
+      same.ws.close();
+    } finally {
+      asLan = false;
+    }
+    // This PC with the main token in both places still works.
+    const ok = await connectClient(wsUrl(connector.token), `http://127.0.0.1:${port}`);
+    ok.send(hello(connector.token));
+    assert.equal((await ok.next()).type, "welcome");
+    ok.ws.close();
+  });
+
+  it("logs and reports a code cancelled by wrong guesses", async () => {
+    now += FAILURE_WINDOW_MS + LOCKOUT_MS; // earlier lockouts are over
+    await newCode();
+    for (let i = 0; i < MAX_FAILURES_PER_CODE; i++) {
+      // Different addresses so no single one is locked out first.
+      // (Over HTTP every request here comes from 127.0.0.1, which locks out after 5.)
+      const r = connector.lan.pair("ZZZZZZZZ", "x", `192.0.2.${100 + i}`);
+      assert.equal(r.ok, false);
+    }
+    const view = (await http(port, "GET", "/api/lan", { token: connector.token })).json();
+    assert.equal(view["code"], null);
+    assert.equal(view["codeBurned"], true);
+    const log = readFileSync(join(tmp.dir, "data", "logs", "connector.log"), "utf8");
+    assert.match(log, /WARN .*pairing code cancelled after \d+ wrong attempts/i);
+    await newCode();
+    const fresh = (await http(port, "GET", "/api/lan", { token: connector.token })).json();
+    assert.equal(fresh["codeBurned"], false);
   });
 
   it("refuses foreign Origins and rebinding Host headers", async () => {
@@ -691,8 +824,9 @@ describe("--reset-token", () => {
   });
 });
 
-describe("--lan on a real non-loopback address", { skip: !realLanIp }, () => {
+describe("--lan on a real non-loopback address", { skip: skipWithoutLanIp }, () => {
   it("serves 127.0.0.1 and the chosen address; a real LAN client must pair", async () => {
+    const ip = requireRealLanIp();
     const tmp = tempDir();
     const dataDir = join(tmp.dir, "data");
     const connector = await startConnector({
@@ -701,11 +835,10 @@ describe("--lan on a real non-loopback address", { skip: !realLanIp }, () => {
       port: 0,
       quiet: true,
       source: fake(),
-      lan: realLanIp as string,
+      lan: ip,
     });
     try {
       const port = connector.server.port;
-      const ip = realLanIp as string;
       assert.deepEqual(connector.server.lanUrls(), [`http://${ip}:${port}/`]);
       const local = await http(port, "GET", "/api/session");
       assert.equal(local.json()["token"], connector.token);

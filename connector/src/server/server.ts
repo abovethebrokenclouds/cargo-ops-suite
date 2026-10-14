@@ -69,6 +69,13 @@ const INTERFACE_REFRESH_MS = 5_000;
 /** Who a request or socket acts for: this PC (main token) or a paired LAN device. */
 export type AuthScope = { scope: "local" } | { scope: "lan"; device: LanDevice };
 
+function identityOf(auth: AuthScope): string {
+  return auth.scope === "local" ? "local" : `lan:${auth.device.id}`;
+}
+
+/** Status fields holding absolute paths on this PC: never sent to a LAN device. */
+export const LAN_HIDDEN_STATUS_FIELDS = ["dataDir", "database", "recording"] as const;
+
 /** LAN opt-in wiring (see lan.ts). */
 export interface LanServerOptions {
   access: LanAccess;
@@ -79,6 +86,8 @@ export interface LanServerOptions {
   /** Persisted setting (next start) and its setter, for /api/lan/settings. */
   setting?: () => LanSetting | null;
   saveSetting?: (setting: LanSetting) => void;
+  /** Why the saved setting was not applied this run (shown on the PC's /settings). */
+  warning?: string | null;
 }
 
 /** An authenticated /api request as the route handlers see it. */
@@ -135,6 +144,11 @@ interface Client {
   local: boolean;
   /** Paired LAN device this socket authenticated as. */
   deviceId?: string;
+  /**
+   * Identity the socket is bound to ("local" or "lan:<device id>"): from the upgrade's query
+   * token, else from the first hello. Every hello must resolve to the same identity.
+   */
+  identity?: string;
   lastPongAt: number;
   rttMs?: number;
 }
@@ -315,12 +329,14 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       return;
     }
     if (pathname === "/api/status" && req.method === "GET") {
+      const extra: Record<string, unknown> = { ...(options.status?.() ?? {}) };
+      if (auth.scope === "lan") for (const key of LAN_HIDDEN_STATUS_FIELDS) delete extra[key];
       json(res, 200, {
         ...health(),
         session: session.id,
         seq: session.store.currentSeq,
         clients: clients.size,
-        ...(options.status?.() ?? {}),
+        ...extra,
       });
       return;
     }
@@ -430,6 +446,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       setting,
       // The persisted choice differs from what this process is doing: restart to apply.
       restartRequired:
+        !lan?.warning &&
         setting !== null &&
         (setting.enabled !== active || (setting.enabled && setting.address !== lanBind)),
       code: code
@@ -441,6 +458,9 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
             pairUrls: urls.map((u) => `${u}settings#pair=${code.code}`),
           }
         : null,
+      // Wrong guesses cancelled the last code: the PC's panel says so.
+      codeBurned: code === null && (lan?.access.codeBurned() ?? false),
+      warning: lan?.warning ?? null,
       devices: lan?.access.devices() ?? [],
     };
   }
@@ -544,11 +564,12 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     }
     const local = isLocalAddress(req.socket.remoteAddress);
     const queryToken = url.searchParams.get("token");
-    if (queryToken !== null && !authenticate(queryToken, local)) {
+    const upgradeAuth = queryToken === null ? null : authenticate(queryToken, local);
+    if (queryToken !== null && !upgradeAuth) {
       rejectUpgrade(socket, 401, "Unauthorized");
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, local));
+    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, local, upgradeAuth));
   };
 
   function send(client: Client, msg: ServerMessage): void {
@@ -560,13 +581,15 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     send(client, session.store.snapshot());
   }
 
-  function onConnection(ws: WebSocket, local: boolean): void {
+  function onConnection(ws: WebSocket, local: boolean, upgradeAuth: AuthScope | null): void {
     const client: Client = {
       ws,
       id: nextClientId++,
       authed: false,
       local,
       lastPongAt: Date.now(),
+      ...(upgradeAuth ? { identity: identityOf(upgradeAuth) } : {}),
+      ...(upgradeAuth?.scope === "lan" ? { deviceId: upgradeAuth.device.id } : {}),
     };
     clients.add(client);
     log("info", `Client ${client.id} connected (${clients.size} open)`);
@@ -574,13 +597,21 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       if (!client.authed) ws.close(CLOSE.helloTimeout, "hello timeout");
     }, HELLO_TIMEOUT_MS);
 
-    /** The hello token must authenticate, and a repeated hello must be the same identity. */
+    /**
+     * The hello token must authenticate as the identity this socket is bound to (the upgrade's
+     * query token, or the first hello): a socket opened as one device, or as this PC, can never
+     * switch to another.
+     */
     const checkHello = (given: string): boolean => {
       const auth = authenticate(given, client.local);
       if (!auth) return false;
-      const deviceId = auth.scope === "lan" ? auth.device.id : undefined;
-      if (client.authed && deviceId !== client.deviceId) return false;
-      if (deviceId !== undefined) client.deviceId = deviceId;
+      const identity = identityOf(auth);
+      if (client.identity !== undefined && identity !== client.identity) {
+        log("warn", `Client ${client.id} hello does not match its token identity; closing`);
+        return false;
+      }
+      client.identity = identity;
+      if (auth.scope === "lan") client.deviceId = auth.device.id;
       return true;
     };
 

@@ -27,6 +27,7 @@ import { isIPv4, isIPv6 } from "node:net";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import type { LogFn } from "../sim/source";
 import { tokensEqual } from "./security";
 
 export const PAIRING_CODE_TTL_MS = 5 * 60_000;
@@ -65,16 +66,19 @@ export function lanInterfaceAddresses(
 }
 
 /**
- * Validate a `--lan <address>` value: "0.0.0.0" (all interfaces) or an IPv4 literal of one of
- * this machine's non-loopback interfaces. Returns an error message or null.
+ * Validate a LAN bind address (from `--lan <address>` or the saved setting): "0.0.0.0" (all
+ * interfaces) or an IPv4 literal of one of this machine's non-loopback interfaces. Returns an
+ * error message (without the source; callers name it) or null.
  */
 export function validateLanBind(bind: string, available: readonly string[]): string | null {
   if (bind === "0.0.0.0") return null;
-  if (isIPv6(bind)) return `--lan takes an IPv4 address; IPv6 (${bind}) is not supported`;
-  if (!isIPv4(bind)) return `--lan address must be an IPv4 literal, got "${bind}"`;
-  if (isLoopbackAddress(bind)) return `--lan ${bind} is a loopback address; drop --lan instead`;
+  if (isIPv6(bind)) return `IPv6 (${bind}) is not supported; use an IPv4 address`;
+  if (!isIPv4(bind)) return `"${bind}" is not an IPv4 literal`;
+  if (isLoopbackAddress(bind)) {
+    return `${bind} is a loopback address (127.0.0.1 is always served without LAN access)`;
+  }
   if (!available.includes(bind)) {
-    return `--lan ${bind} is not an address of this PC (found: ${available.join(", ") || "none"})`;
+    return `${bind} is not an address of this PC (found: ${available.join(", ") || "none"})`;
   }
   return null;
 }
@@ -106,12 +110,14 @@ export function formatPairingCode(code: string): string {
 
 export function sanitizeDeviceName(input: unknown): string {
   const raw = typeof input === "string" ? input : "";
-  // Printable characters only, collapsed whitespace.
-  const printable = Array.from(raw, (ch) => {
-    const c = ch.charCodeAt(0);
-    return c < 0x20 || c === 0x7f ? " " : ch;
-  }).join("");
-  const clean = printable.replace(/\s+/g, " ").trim().slice(0, MAX_DEVICE_NAME);
+  // Printable characters only: control characters (Cc: C0, DEL, C1) become spaces, format
+  // characters (Cf: bidi overrides and isolates, zero-width, BOM) are dropped; whitespace
+  // (including line/paragraph separators) collapses to one space.
+  const printable = raw.replace(/\p{Cc}/gu, " ").replace(/\p{Cf}/gu, "");
+  const clean = Array.from(printable.replace(/\s+/g, " ").trim())
+    .slice(0, MAX_DEVICE_NAME)
+    .join("")
+    .trim();
   return clean || "LAN device";
 }
 
@@ -159,12 +165,16 @@ export type PairResult =
       code: "invalid_code" | "pairing_locked";
       message: string;
       retryAfterSec?: number;
+      /** This wrong guess cancelled the code (too many in total). */
+      burned?: boolean;
     };
 
 export interface LanAccessOptions {
   /** Where lan-devices.json lives; null keeps devices in memory (tests). */
   dataDir: string | null;
   now?: () => number;
+  /** Warnings (a code cancelled by wrong guesses). */
+  log?: LogFn;
 }
 
 interface ActiveCode {
@@ -183,6 +193,8 @@ export class LanAccess {
   private devicesList: StoredDevice[] = [];
   private readonly lastSeen = new Map<string, number>();
   private active: ActiveCode | null = null;
+  /** The last code was cancelled by too many wrong guesses (cleared by a new code). */
+  private burned = false;
   private readonly failures = new Map<string, AddressFailures>();
   private readonly revokeListeners = new Set<(id: string) => void>();
 
@@ -197,6 +209,7 @@ export class LanAccess {
   createCode(): { code: string; expiresAt: string } {
     const code = generatePairingCode();
     this.active = { code, expiresAt: this.now() + PAIRING_CODE_TTL_MS, failures: 0 };
+    this.burned = false;
     return { code, expiresAt: new Date(this.active.expiresAt).toISOString() };
   }
 
@@ -209,7 +222,13 @@ export class LanAccess {
     return { code: this.active.code, expiresAt: new Date(this.active.expiresAt).toISOString() };
   }
 
+  /** True after wrong guesses cancelled the last code, until a new one is made. */
+  codeBurned(): boolean {
+    return this.burned;
+  }
+
   cancelCode(): void {
+    this.burned = false;
     this.active = null;
   }
 
@@ -235,12 +254,13 @@ export class LanAccess {
     const code = normalizePairingCode(codeInput);
     const active = this.currentCode() ? this.active : null;
     if (!active || code.length !== PAIRING_CODE_LENGTH || !tokensEqual(active.code, code)) {
-      this.recordFailure(address);
+      const burned = this.recordFailure(address);
       return {
         ok: false,
         status: 401,
         code: "invalid_code",
         message: "That code is wrong or expired. Generate a new one in Settings on the PC.",
+        ...(burned ? { burned: true } : {}),
       };
     }
     if (this.devicesList.length >= MAX_LAN_DEVICES) {
@@ -263,7 +283,8 @@ export class LanAccess {
     return { ok: true, token, device: this.view(stored) };
   }
 
-  private recordFailure(address: string): void {
+  /** Count a wrong guess; true when it cancelled the active code. */
+  private recordFailure(address: string): boolean {
     const now = this.now();
     const f = this.failures.get(address) ?? { times: [], lockedUntil: 0 };
     f.times = f.times.filter((t) => now - t < FAILURE_WINDOW_MS);
@@ -273,10 +294,19 @@ export class LanAccess {
       f.times = [];
     }
     this.failures.set(address, f);
+    let burned = false;
     if (this.active) {
       this.active.failures++;
       // Too many guesses overall (from any address): burn the code.
-      if (this.active.failures >= MAX_FAILURES_PER_CODE) this.active = null;
+      if (this.active.failures >= MAX_FAILURES_PER_CODE) {
+        this.options.log?.(
+          "warn",
+          `LAN pairing code cancelled after ${this.active.failures} wrong attempts (last from ${address}); create a new one on the PC`,
+        );
+        this.active = null;
+        this.burned = true;
+        burned = true;
+      }
     }
     // Bound the map (a LAN has few addresses; this only guards against spoofed floods).
     if (this.failures.size > 1024) {
@@ -286,6 +316,7 @@ export class LanAccess {
         }
       }
     }
+    return burned;
   }
 
   // -- devices --
@@ -367,13 +398,15 @@ export class LanAccess {
 // ---- local-only scope ----
 
 /**
- * Destructive data actions and LAN management stay on this PC (loopback clients with the
- * main token). A paired LAN device gets full flying/company control otherwise.
+ * Destructive data actions, backups (their list shows paths on this PC) and LAN management
+ * stay on this PC (loopback clients with the main token). A paired LAN device gets full
+ * flying/company control otherwise.
  */
 export function isLocalOnlyRoute(method: string, pathname: string): boolean {
   if (pathname === "/api/lan" || pathname.startsWith("/api/lan/")) return true;
   if (method === "DELETE") return true;
   if (pathname === "/api/import") return true;
-  if (pathname === "/api/backups" && method !== "GET") return true;
+  // Backups: writing one is a data action, and the list shows absolute paths on this PC.
+  if (pathname === "/api/backups") return true;
   return false;
 }

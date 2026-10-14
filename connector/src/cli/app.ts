@@ -12,7 +12,7 @@ import { SimConnectSource } from "../sim/simconnect-source";
 import type { LogFn, SimSource } from "../sim/source";
 import { unverifiedSimVars } from "../sim/simvars";
 import { normalizeOrigin } from "../server/security";
-import { LanAccess, clearLanDevices } from "../server/lan";
+import { LanAccess, clearLanDevices, lanInterfaceAddresses, validateLanBind } from "../server/lan";
 import { startServer, type RunningServer } from "../server/server";
 import { openStorage, type Storage } from "../storage/db";
 import { FlightRepo, flightsApi } from "../storage/flights";
@@ -148,13 +148,33 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
   }
   const lanAccess = new LanAccess({
     dataDir: options.dataDir,
+    log,
     ...(options.lanNow ? { now: options.lanNow } : {}),
   });
   let lanSetting = config.lan ?? null;
-  const lanBind =
-    options.lan === false
-      ? null
-      : (options.lan ?? (lanSetting?.enabled ? lanSetting.address : null));
+  const lanInterfaces = options.lanInterfaces ?? (() => lanInterfaceAddresses());
+  // Where the LAN choice comes from decides what an address that is not this PC's means:
+  // on the command line it is a mistake to fix now (refuse to start); a saved setting may
+  // simply be stale (DHCP gave the PC another address), so warn and stay on loopback.
+  let lanBind: string | null = null;
+  let lanWarning: string | null = null;
+  if (options.lan !== false && options.lan !== undefined) {
+    const problem = validateLanBind(options.lan, lanInterfaces());
+    if (problem) {
+      throw new Error(
+        `LAN address ${options.lan} from --lan on the command line: ${problem}. Pass one of this PC's addresses, --lan alone for every interface, or --no-lan to stay on 127.0.0.1.`,
+      );
+    }
+    lanBind = options.lan;
+  } else if (options.lan === undefined && lanSetting?.enabled) {
+    const problem = validateLanBind(lanSetting.address, lanInterfaces());
+    if (problem) {
+      lanWarning = `Saved LAN address ${lanSetting.address} (Settings → LAN access) cannot be used: ${problem}. LAN access stays off this run, 127.0.0.1 only. Choose again in Settings, or start with --lan / --no-lan.`;
+      log("warn", lanWarning);
+    } else {
+      lanBind = lanSetting.address;
+    }
+  }
 
   const source: SimSource =
     options.source ??
@@ -252,7 +272,8 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
       lan: {
         access: lanAccess,
         bind: lanBind,
-        ...(options.lanInterfaces ? { interfaces: options.lanInterfaces } : {}),
+        interfaces: lanInterfaces,
+        warning: lanWarning,
         setting: () => lanSetting,
         saveSetting: (setting) => {
           lanSetting = saveLanSetting(options.dataDir, setting).lan ?? null;
