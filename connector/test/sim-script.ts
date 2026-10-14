@@ -17,8 +17,9 @@ export class StubSource implements SimSource {
   readonly mode = "live" as const;
   readonly frameSource = "sim" as const;
   private readonly emitter = new SimEmitter();
+  connected = true;
   link(): SimLinkInfo {
-    return { connected: true, name: "Test" };
+    return this.connected ? { connected: true, name: "Test" } : { connected: false };
   }
   subscribe(listener: (u: SimUpdate) => void) {
     return this.emitter.subscribe(listener);
@@ -26,6 +27,8 @@ export class StubSource implements SimSource {
   start() {}
   async stop() {}
   emit(update: SimUpdate) {
+    if (update.type === "connected") this.connected = true;
+    if (update.type === "disconnected") this.connected = false;
     this.emitter.emit(update);
   }
 }
@@ -159,6 +162,17 @@ export class SimScript {
         }
       });
     }
+  }
+
+  /** The simulator link drops (MSFS quit or crashed); no frames until reconnect(). */
+  drop(reason = "simulator quit"): void {
+    this.source.emit({ type: "event", name: "sim.disconnected", data: { reason } });
+    this.source.emit({ type: "disconnected", reason });
+  }
+
+  /** The simulator is back: a new SimConnect session opens (frames follow with step/run). */
+  reconnect(): void {
+    this.source.emit({ type: "connected", simName: "Test", protocol: "SunRise" });
   }
 
   command(name: string, args: unknown = {}): Result {

@@ -213,6 +213,11 @@ export class FlightTracker {
     return [];
   }
 
+  /** The simulator link dropped with no flight running: a half-begun leg is forgotten. */
+  dropPendingLeg(): void {
+    if (!this.flight) this.leg = null;
+  }
+
   /** Session reset (new snapshot, replay restart): a running flight is aborted. */
   reset(): TrackerEvent[] {
     const events = this.flight ? [this.finish("aborted")] : [];

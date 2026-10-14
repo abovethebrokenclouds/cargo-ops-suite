@@ -3,6 +3,17 @@
 // the same store (phase/flight domains, phase.changed/touchdown/flight.* events).
 // It is the only producer of those domains and events: FakeSource strips any
 // that a fixture contains, so replays are recomputed from raw telemetry.
+//
+// Simulator link loss (MSFS quit, crashed, pipe broken): the session clears every
+// sim-derived domain, including phase and flight, and calls onDisconnect(). Until the
+// next real sample the core holds no live input: while the link is down flight.start and a
+// plain flight.end are refused with `sim_offline` (an abort is still allowed; after the
+// reconnect but before a sample, start answers `no_data`), nothing is published as the
+// flight domain, and the offline time is never counted (the sim clock resumes where it
+// stopped). A running flight is suspended, not ended: its phase is kept and it resumes
+// on the first sample after the reconnect, where the usual checks apply (a position jump
+// sets the teleport flag). Without a running flight the phase and a half-begun leg are
+// forgotten, as at session start.
 
 import { randomUUID } from "node:crypto";
 import {
@@ -45,6 +56,8 @@ export interface FlightHooks {
   onFlightEnded?(record: FlightRecord, last: FlightSample | null): void;
   /** The store was reset (session start, replay restart). */
   onReset?(): void;
+  /** The simulator link dropped; the session already cleared the sim-derived domains. */
+  onSimOffline?(): void;
   /** Reference approach speed for the landing speed grade, kt. */
   referenceSpeedKt?(): number | null;
 }
@@ -74,6 +87,10 @@ export class FlightCore {
   private lastSample: FlightSample | null = null;
   private publishedFlightId: string | null = null;
   private explicitStart = false;
+  /** False between a simulator disconnect and the reconnect. */
+  private simLinked = true;
+  /** True from a simulator disconnect until the first real sample after it. */
+  private awaitingSample = false;
   hooks: FlightHooks;
 
   constructor(options: FlightCoreOptions) {
@@ -106,6 +123,31 @@ export class FlightCore {
     this.process(atMs);
   }
 
+  /**
+   * The simulator link dropped (see the header): forget every live input, suspend a
+   * running flight, refuse sim-dependent commands until real samples arrive again.
+   */
+  onDisconnect(): void {
+    this.simLinked = false;
+    this.awaitingSample = true;
+    this.lastSample = null;
+    this.analyser.reset();
+    this.clock.suspend();
+    if (this.tracker.active) {
+      this.fsm.suspend();
+    } else {
+      this.fsm.reset();
+      this.tracker.dropPendingLeg();
+      this.telemetry.end();
+    }
+    this.hooks.onSimOffline?.();
+  }
+
+  /** The simulator link is back; live inputs return with its first sample. */
+  onConnect(): void {
+    this.simLinked = true;
+  }
+
   /** A data patch was applied to the store; samples are taken on motion updates. */
   onData(patch: SimStatePatch, atMs: number): void {
     if (patch.motion) this.process(atMs);
@@ -125,6 +167,7 @@ export class FlightCore {
   /** flight.start / flight.end; other commands are not implemented yet. */
   command(cmd: Command): Result {
     if (cmd.name === "flight.start") {
+      if (!this.simLinked) return offline(cmd.id, "start the flight once it is running again");
       const pre = this.tracker.precheck(this.lastSample, this.fsm.onGround);
       if (pre) return failure(cmd.id, pre.code, pre.message);
       const blocked = this.lastSample ? (this.hooks.beforeStart?.(this.lastSample) ?? null) : null;
@@ -149,9 +192,14 @@ export class FlightCore {
         typeof args === "object" &&
         args !== null &&
         (args as Record<string, unknown>)["abort"] === true;
+      if (!abort && !this.simLinked && this.tracker.active) {
+        return offline(cmd.id, "arrival cannot be checked; pass abort to end the flight anyway");
+      }
       const result = this.tracker.end(this.fsm.phase, abort);
       if (!result.ok) return failure(cmd.id, result.code, result.message);
       this.handleTrackerEvents(result.events);
+      // Aborted while the sim is gone: the phase kept for the flight is no longer needed.
+      if (this.awaitingSample) this.fsm.reset();
       this.publishFlight();
       return success(cmd.id, result.record);
     }
@@ -197,10 +245,13 @@ export class FlightCore {
     const sample = sampleFrom(domains, tMs);
     if (!sample) return;
     this.lastSample = sample;
+    const resumed = this.awaitingSample;
+    this.awaitingSample = false;
 
     const before = this.fsm.phase;
     const transition = this.fsm.update(sample);
-    if (before === null && this.fsm.phase !== null) {
+    // First phase of a session, or the kept phase of a flight resumed after a reconnect.
+    if ((before === null || resumed) && this.fsm.phase !== null) {
       this.store.apply({ phase: { current: this.fsm.phase } });
     }
     if (transition) this.publishPhase(transition);
@@ -264,6 +315,8 @@ export class FlightCore {
   }
 
   private publishFlight(): void {
+    // Nothing is published as live while the simulator is gone; the next sample does it.
+    if (this.awaitingSample) return;
     const domain: FlightState | null = this.tracker.domain();
     if (!domain) return;
     if (domain.id !== this.publishedFlightId) {
@@ -286,6 +339,10 @@ export class FlightCore {
 
 function success(id: string, data: unknown): Result {
   return { type: "result", v: PROTOCOL_VERSION, id, ok: true, data };
+}
+
+function offline(id: string, what: string): Result {
+  return failure(id, "sim_offline", `The simulator is not connected: ${what}`);
 }
 
 function failure(

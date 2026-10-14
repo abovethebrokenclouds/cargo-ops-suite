@@ -852,6 +852,45 @@ describe("SimConnect emulator: payload check against the sim (PC-49 logic)", () 
     assert.equal(r.mission()?.payloadCheck?.status, "underloaded");
   });
 
+  it("MSFS quits: start refused (sim_offline), phase/flight cleared, preview unknown; back → start", async () => {
+    const r = await payloadRig(CARAVAN);
+    await loadKatlMission(r);
+    await waitFor(() => r.mission()?.payloadCheck?.status === "underloaded", "a live preview");
+    await waitFor(() => r.session.store.getDomain("phase"), "a phase from the sim");
+
+    r.emu.setAccepting(false); // MSFS is closed for a while
+    r.emu.quit();
+    await waitFor(() => !r.source.link().connected, "link down");
+    assert.equal(r.session.welcome().sim.connected, false);
+    const state = r.session.store.snapshot().state;
+    for (const domain of [
+      "position",
+      "motion",
+      "controls",
+      "payload",
+      "phase",
+      "flight",
+    ] as const) {
+      assert.equal(state[domain] ?? null, null, `${domain} cleared`);
+    }
+    // The last parked, brake-set sample must not let a flight start while MSFS is gone.
+    const refused = r.cmd("flight.start");
+    assert.equal(!refused.ok && refused.error.code, "sim_offline");
+    // The payload preview no longer claims what the sim reported before it quit.
+    const preview = r.mission()?.payloadCheck;
+    assert.equal(preview?.stage, "preview");
+    assert.equal(preview?.status, "unknown");
+    assert.equal(preview?.simPayloadKg, undefined);
+    assert.equal(r.mission()?.status, "loaded", "the mission itself stays loaded");
+
+    r.emu.setAccepting(true);
+    await waitFor(() => r.source.link().connected, "reconnected");
+    await waitFor(() => r.mission()?.payloadCheck?.status === "underloaded", "live preview again");
+    await waitFor(() => r.session.store.getDomain("phase"), "phase again");
+    ok(r, "flight.start");
+    assert.equal(r.mission()?.status, "in_progress");
+  });
+
   it("an aircraft with no payload stations → unknown, the start is not penalised", async () => {
     const r = await payloadRig({ ...CARAVAN, "PAYLOAD STATION COUNT": 0 });
     await loadKatlMission(r);

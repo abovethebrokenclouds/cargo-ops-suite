@@ -15,7 +15,11 @@ import { EconomyEngine, type EconomyOptions } from "./economy/engine";
 import { FlightCore, type FlightCoreOptions } from "./flight-core";
 import { StateStore } from "./store";
 
-/** Domains that describe the simulator; cleared when the link drops so stale values never look live. */
+/**
+ * Domains that describe the simulator, or are computed from it by the flight core (phase,
+ * flight); cleared when the link drops so stale values never look live. The flight core
+ * republishes phase and flight on the first real sample after a reconnect.
+ */
 const SIM_DERIVED_DOMAINS = [
   "sim",
   "aircraft",
@@ -27,6 +31,8 @@ const SIM_DERIVED_DOMAINS = [
   "engines",
   "controls",
   "plan",
+  "phase",
+  "flight",
 ] as const;
 
 export type LinkListener = () => void;
@@ -73,12 +79,14 @@ export class ConnectorSession {
     this.unsubscribe = this.source.subscribe((update) => {
       switch (update.type) {
         case "connected":
+          this.flight.onConnect();
           this.notifyLink();
           break;
         case "disconnected": {
           const clear: SimStatePatch = {};
           for (const domain of SIM_DERIVED_DOMAINS) clear[domain] = null;
           this.store.apply(clear);
+          this.flight.onDisconnect();
           this.notifyLink();
           break;
         }
