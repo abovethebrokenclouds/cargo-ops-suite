@@ -39,3 +39,6 @@ test-results
 data/ourairports/*.csv
 data/basemap/
 *.pmtiles
+
+# Windows CI check logs (scripts/ci)
+ci-logs/
