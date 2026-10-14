@@ -32,7 +32,9 @@ function End({ check, label }: { check: WeatherCheck | undefined; label: string 
         {label} {check.station}
       </span>
       <FlightCategoryChip category={check.category} />
-      {check.metarOrigin ? <MetarOriginTag origin={check.metarOrigin} stale={false} /> : null}
+      {check.metarOrigin ? (
+        <MetarOriginTag origin={check.metarOrigin} stale={check.stale ?? false} />
+      ) : null}
       <SourceTag source={check.source} />
     </span>
   );

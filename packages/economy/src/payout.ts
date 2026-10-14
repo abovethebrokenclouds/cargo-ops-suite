@@ -134,7 +134,8 @@ export function computePayout(input: PayoutInput): PayoutBreakdown {
   });
 
   const c = input.conditions ?? {};
-  const wx = weatherBonus(input.weather);
+  // A board estimate never includes weather, so the value and its note cannot disagree.
+  const wx = weatherBonus(input.estimate ? null : input.weather);
   const conditionValue = noBonus
     ? 1
     : 1 +

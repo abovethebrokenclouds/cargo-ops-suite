@@ -14,6 +14,7 @@ function end(
   category: WeatherReportInput["category"],
   origin: WeatherReportInput["origin"] = "live",
   source: WeatherCheck["source"] = "sim",
+  stale = false,
 ): WeatherCheck {
   return checkWeather({
     stage,
@@ -24,7 +25,7 @@ function end(
       rawText: "KATL 141153Z 00000KT 1/2SM FG VV002 09/09 A3012",
       observedAt: new Date(NOW - 7 * 60_000).toISOString(),
       fetchedAt: new Date(NOW - 3 * 60_000).toISOString(),
-      stale: false,
+      stale,
     },
     source,
     nowMs: NOW,
@@ -103,5 +104,20 @@ describe("weather bonus UI", () => {
     expect(container).toBeEmptyDOMElement();
     render(<WeatherBonusPill weather={null} />);
     expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("a stale live report frozen at an end is tagged STALE, not plain LIVE", () => {
+    const weather: MissionWeather = {
+      departure: end("departure", "LIFR", "live", "sim", true),
+      arrival: end("arrival", "VFR"),
+      bonus: 0,
+    };
+    expect(weather.departure?.eligible).toBe(false);
+    render(<WeatherBonusLine weather={weather} />);
+    const line = screen.getByTestId("weather-bonus");
+    const dep = line.querySelector('[data-weather-end="Dep"]') as HTMLElement;
+    expect(within(dep).getByText("STALE")).toBeInTheDocument();
+    const arr = line.querySelector('[data-weather-end="Arr"]') as HTMLElement;
+    expect(within(arr).queryByText("STALE")).toBeNull();
   });
 });

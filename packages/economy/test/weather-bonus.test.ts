@@ -82,7 +82,11 @@ describe("checkWeather: which reports may count", () => {
   });
 
   it("stale, old or unknown reports do not count", () => {
-    expect(check("departure", "LIFR", { stale: true }).eligible).toBe(false);
+    const stale = check("departure", "LIFR", { stale: true });
+    expect(stale.eligible).toBe(false);
+    // The frozen check records that the report was stale, so the UI can say so.
+    expect(stale.stale).toBe(true);
+    expect(check("departure", "LIFR").stale).toBe(false);
     expect(
       check("departure", "LIFR", { fetchedAt: iso(WEATHER_BONUS_MAX_FETCH_AGE_MIN + 1) }).eligible,
     ).toBe(false);
@@ -211,5 +215,34 @@ describe("worked examples (docs/ECONOMY.md, weather bonus)", () => {
     });
     expect(b.total).toBe(1266);
     expect(b.payloadMismatch).toBe(true);
+  });
+
+  it("a board estimate never carries a weather bonus, in value or in note", () => {
+    const weather: MissionWeather = {
+      departure: check("departure", "LIFR"),
+      arrival: check("arrival", "LIFR"),
+    };
+    const est = computePayout({
+      kind: "cargo",
+      weightKg: 500,
+      distanceNm: 100,
+      units: 1,
+      reputation: 50,
+      estimate: true,
+      weather,
+    });
+    const plain = computePayout({
+      kind: "cargo",
+      weightKg: 500,
+      distanceNm: 100,
+      units: 1,
+      reputation: 50,
+      estimate: true,
+    });
+    const cond = est.factors.find((f) => f.key === "conditions");
+    expect(cond?.value).toBe(1);
+    expect(cond?.note).toMatch(/Estimate: no weather bonus/);
+    expect(est.weatherBonus).toBeUndefined();
+    expect(est.total).toBe(plain.total);
   });
 });

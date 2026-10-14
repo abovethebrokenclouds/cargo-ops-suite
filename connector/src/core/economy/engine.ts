@@ -107,7 +107,6 @@ import {
   checkAtOrigin,
   checkPayload,
   checkWeather,
-  weatherBonus,
   type WeatherReportInput,
   clampReputation,
   computePayout,
@@ -941,8 +940,6 @@ export class EconomyEngine {
       ...m.weather,
       arrival: this.weatherCheckNow(m.destination, "arrival"),
     };
-    const removed = record.flags.noBonus || payloadMismatch(m.payloadCheck);
-    const appliedWeather = { ...weather, bonus: removed ? 0 : weatherBonus(weather).bonus };
     const breakdowns = m.jobs.map((job) =>
       computePayout({
         jobId: job.id,
@@ -988,6 +985,8 @@ export class EconomyEngine {
       costs: settled.costs,
       net: round2(total - costTotal),
     };
+    // The bonus actually paid, taken from the payout itself so the logbook cannot disagree.
+    const appliedWeather = { ...weather, bonus: breakdowns[0]?.weatherBonus ?? 0 };
     this.mission = {
       ...base,
       status: "delivered",

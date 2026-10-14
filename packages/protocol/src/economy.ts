@@ -214,6 +214,8 @@ export const weatherCheckSchema = z.object({
   rawText: z.string().nullable(),
   observedAt: z.string().nullable(),
   fetchedAt: z.string().nullable(),
+  /** The report was stale when frozen (past its TTL or a refresh failed); absent on older checks. */
+  stale: z.boolean().optional(),
   /** This end may count toward the weather bonus. */
   eligible: z.boolean(),
   message: z.string(),

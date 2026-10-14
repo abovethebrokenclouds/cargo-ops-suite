@@ -92,6 +92,7 @@ export function checkWeather(input: WeatherCheckInput): WeatherCheck {
     rawText: report.rawText,
     observedAt: report.observedAt,
     fetchedAt: report.fetchedAt,
+    stale: report.stale,
   };
   const no = (why: string): WeatherCheck => ({
     ...out,
