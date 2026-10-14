@@ -237,7 +237,7 @@ export class EconomyEngine {
 
   /**
    * A fresh connector has no running flight, so nothing it loaded can still be flying
-   * (docs/ECONOMY.md "Connector restart"). The flight tracker's state (distance, fuel,
+   * (docs/ECONOMY.md "Mission lifecycle", connector restart). The flight tracker's state (distance, fuel,
    * landings) was in memory and is gone: a lost flight is never resumed or billed.
    * - Every aircraft left `in_flight` (mission, ferry or aborted flight) is available again.
    * - A mission left `in_progress` goes back to `loaded` with its start cleared; the first
