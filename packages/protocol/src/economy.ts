@@ -263,9 +263,12 @@ export const missionSchema = z.object({
   payloadKg: finite().nonnegative(),
   /** Great-circle origin → destination, nm. */
   distanceNm: finite().positive(),
-  /** Tightest time limit among the jobs, minutes from block-out. */
-  timeLimitMin: finite().positive(),
-  /** Sum of the board estimates. */
+  /**
+   * Tightest time left among the jobs, minutes from block-out. Transit cargo has already used
+   * part of its chain: recomputed while loaded and frozen at block-out; negative = already late.
+   */
+  timeLimitMin: finite(),
+  /** Sum of the estimates of the jobs delivered on this leg (transit: late penalty so far). */
   expectedPayout: finite().nonnegative(),
   createdAt: z.string(),
   startedAt: z.string().optional(),

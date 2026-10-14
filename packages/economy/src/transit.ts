@@ -19,6 +19,7 @@
 import type { Job, JobTransit, TransitStorage } from "../../protocol/src/economy";
 import type { LandingGrade } from "../../protocol/src/landing";
 import { REPUTATION } from "./constants";
+import { computePayout } from "./payout";
 import { CARGO_TERMINAL } from "./fbo-constants";
 import { greatCircleNm, round1, type LatLon } from "./geo";
 import { deliveryReputationDelta, type RuleResult } from "./rules";
@@ -211,4 +212,54 @@ export function legReputationDelta(grade: LandingGrade | null, finalLateMin: num
     return grade && (grade === "D" || grade === "E" || grade === "F") ? REPUTATION.hardLanding : 0;
   }
   return deliveryReputationDelta(grade, Math.max(0, ...finalLateMin));
+}
+
+/**
+ * Payout estimate of a job delivered with its chain as it stands at `atGameMs`: landing 1.00,
+ * current reputation, the board's demand factor, bonuses already lost on a leg removed, damage
+ * from a touchdown already flown, and the late penalty the chain has already accrued (minutes
+ * past the limit at `atGameMs`; the next leg's own block time is not guessed). A job that has
+ * not flown a leg keeps its board estimate.
+ */
+export function transitPayoutEstimate(job: Job, atGameMs: number, reputation: number): number {
+  if (!job.transit) return job.payoutEstimate;
+  const legs = job.transit.legs;
+  const peaks = legs
+    .map((l) => l.peakG)
+    .filter((g): g is number => typeof g === "number" && Number.isFinite(g));
+  return computePayout({
+    kind: job.kind,
+    weightKg: job.weightKg,
+    distanceNm: job.distanceNm,
+    units: job.units,
+    reputation,
+    estimate: false,
+    landingGrade: null,
+    lateMin: Math.max(0, -transitRemainingMin(job, atGameMs)),
+    peakG: peaks.length ? Math.max(...peaks) : null,
+    noBonus: legs.some((l) => l.noBonus === true),
+    payloadMismatch: legs.some((l) => l.payloadMismatch === true),
+    ...(job.demandFactor !== undefined ? { demand: job.demandFactor } : {}),
+  }).total;
+}
+
+/**
+ * Deadline and expected payout of a mission leg at `atGameMs` (docs/ECONOMY.md "Transit
+ * cargo"): the time left is the tightest of the jobs' (a stored job has used part of its
+ * chain; negative = already late, never clamped); the expected payout sums the jobs delivered
+ * on this leg, transit jobs with the late penalty they have already accrued.
+ */
+export function missionLegTerms(
+  jobs: readonly Job[],
+  legDestination: string,
+  atGameMs: number,
+  reputation: number,
+): { timeLimitMin: number; expectedPayout: number } {
+  const left = jobs.map((j) => transitRemainingMin(j, atGameMs));
+  return {
+    timeLimitMin: left.length ? Math.min(...left) : 0,
+    expectedPayout: jobs
+      .filter((j) => j.destination === legDestination)
+      .reduce((s, j) => s + transitPayoutEstimate(j, atGameMs, reputation), 0),
+  };
 }

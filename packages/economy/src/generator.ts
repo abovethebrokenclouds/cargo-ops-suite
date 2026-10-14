@@ -12,6 +12,7 @@ import { isBushStrip, runwaySuitability, type EconomyAirport } from "./airports"
 import {
   BOARD_LIFETIME_MIN,
   BOARD_SIZE,
+  LONG_HAUL_CORRIDOR,
   LONG_HAUL_MAX_FACTOR,
   MIN_JOB_NM,
   SHORT_BAND_MIN_NM,
@@ -20,7 +21,7 @@ import {
   TRANSIT_STOP_SLACK_MIN,
 } from "./constants";
 import { JOB_KIND_MIN_TIER } from "./company-constants";
-import { greatCircleNm, round1 } from "./geo";
+import { EARTH_RADIUS_NM, greatCircleNm, round1 } from "./geo";
 import { computePayout, reputationTier } from "./payout";
 import { Rng, seedFrom } from "./prng";
 import { maxJobDistanceNm, payloadLimitKg, timeLimitMin } from "./rules";
@@ -160,11 +161,40 @@ export function generateJobs(options: GenerateOptions): Job[] {
       options.focus && !focus
         ? (far.find((c) => c.airport.ident === options.focus?.ident) ?? null)
         : null;
-    for (let k = 0; k < longHaul && far.length > 0; k++) {
-      const dest =
-        k === 0 && farFocus ? farFocus : lrng.weighted(far, (c) => TYPE_WEIGHT[c.airport.type]);
-      if (!dest) break;
-      jobs.push(drawJob(lrng, dest, count + k, tier, options, true));
+    // Only destinations reachable by a chain of strictly progressing legs within the direct
+    // range are offered; an unreachable draw leaves the pool and the stream draws again.
+    const routes = new Map<string, LongHaulRoute | null>();
+    const routeTo = (c: Candidate) => {
+      if (!routes.has(c.airport.ident)) {
+        routes.set(c.airport.ident, longHaulRoute(origin, c.airport, options.airports, aircraft));
+      }
+      return routes.get(c.airport.ident) ?? null;
+    };
+    let pool = far;
+    let focusFirst = farFocus !== null && routeTo(farFocus) !== null;
+    for (let k = 0; k < longHaul; k++) {
+      let picked: { dest: Candidate; route: LongHaulRoute } | null = null;
+      while (!picked) {
+        const dest = focusFirst
+          ? farFocus
+          : lrng.weighted(pool, (c) => TYPE_WEIGHT[c.airport.type]);
+        focusFirst = false;
+        if (!dest) break;
+        const route = routeTo(dest);
+        if (route) picked = { dest, route };
+        else pool = pool.filter((c) => c !== dest);
+      }
+      if (!picked) break;
+      jobs.push(
+        drawJob(
+          lrng,
+          { ...picked.dest, payloadLimitKg: picked.route.payloadLimitKg },
+          count + k,
+          tier,
+          options,
+          picked.route,
+        ),
+      );
     }
   }
   return jobs;
@@ -177,7 +207,7 @@ function drawJob(
   index: number,
   tier: number,
   options: GenerateOptions,
-  longHaul: boolean,
+  longHaul: LongHaulRoute | false,
 ): Job {
   const { origin, aircraft, nowMs } = options;
   const bushCapable = aircraft.surfaces.some((s) => s !== "paved");
@@ -211,7 +241,11 @@ function drawJob(
     reputation: options.reputation,
     estimate: true,
   });
-  const limitMin = timeLimitMin(kind, dest.distanceNm, aircraft.cruiseKt);
+  // A long-haul job's limit follows its feasible chain: flown distance + 60 min per stop.
+  const limitMin = longHaul
+    ? timeLimitMin(kind, longHaul.chainNm, aircraft.cruiseKt) +
+      TRANSIT_STOP_SLACK_MIN * (longHaul.legs.length - 1)
+    : timeLimitMin(kind, dest.distanceNm, aircraft.cruiseKt);
   return {
     id,
     status: "available",
@@ -223,7 +257,7 @@ function drawJob(
     weightKg,
     units,
     distanceNm: dest.distanceNm,
-    timeLimitMin: longHaul ? limitMin + TRANSIT_STOP_SLACK_MIN : limitMin,
+    timeLimitMin: limitMin,
     aircraftKey: aircraft.key,
     createdAt: iso(nowMs),
     expiresAt: iso(nowMs + BOARD_LIFETIME_MIN * 60_000),
@@ -235,9 +269,10 @@ function drawJob(
 }
 
 /**
- * Long-haul destinations (transit cargo): beyond the direct range (80 % of the range) up to
- * twice it, runway suitable; the weight is drawn from the payload limit of half the
- * distance (two equal legs), at least 50 kg. Sorted by ident.
+ * Long-haul destination pre-filter (transit cargo): beyond the direct range (80 % of the
+ * range) up to twice it, runway suitable, sorted by ident. `payloadLimitKg` here is the
+ * half-distance limit, a cheap upper bound; the generator only offers a destination once
+ * `longHaulRoute` finds a feasible chain and then sizes the job on that chain.
  */
 export function longHaulCandidates(
   origin: EconomyAirport,
@@ -266,4 +301,118 @@ export function longHaulCandidates(
 /** Board seed: the company seed, the board airport, the aircraft type and a counter. */
 export function boardSeed(companySeed: number, origin: string, aircraftKey: string, n: number) {
   return seedFrom(companySeed, origin, aircraftKey, n);
+}
+
+/** A feasible chain of legs for a long-haul job (transit cargo). */
+export interface LongHaulRoute {
+  /** Airports from the origin to the destination, both included. */
+  legs: Array<{ from: string; to: string; distanceNm: number }>;
+  /** Sum of the leg distances, nm. */
+  chainNm: number;
+  /** Payload limit of the chain's worst leg (max payload − leg fuel), kg. */
+  payloadLimitKg: number;
+}
+
+/**
+ * The best chain from `origin` to `destination` under the transit rules the engine enforces:
+ * every leg within the direct range (80 % of the range), every stop with a suitable runway,
+ * every leg ending strictly closer (great circle) to the destination, every leg carrying at
+ * least 50 kg. Among those chains the one with the fewest legs wins, then the one whose worst
+ * leg carries the most payload, then the shorter (then ident order); the job's weight is drawn
+ * against that worst leg and its time limit from that chain. Null when none is found.
+ *
+ * Deterministic. The search is a DP over a DAG: stops are suitable airports strictly closer
+ * to the destination than the origin, inside the corridor origin → stop → destination ≤ 1.3 ×
+ * the direct distance (a found chain is always valid; a chain needing a wider detour is not
+ * offered, which only makes the board more conservative).
+ */
+export function longHaulRoute(
+  origin: EconomyAirport,
+  destination: EconomyAirport,
+  airports: readonly EconomyAirport[],
+  aircraft: AircraftType,
+): LongHaulRoute | null {
+  if (!runwaySuitability(destination, aircraft).ok) return null;
+  const legMax = maxJobDistanceNm(aircraft);
+  const total = greatCircleNm(origin, destination);
+  const corridor = total * LONG_HAUL_CORRIDOR;
+  const nodes: Array<{ a: EconomyAirport; toDest: number; v: Vec }> = [];
+  const dLat = total / 60 + 0.1;
+  for (const a of airports) {
+    if (a.ident === origin.ident || a.ident === destination.ident) continue;
+    if (Math.abs(a.lat - destination.lat) > dLat) continue;
+    const toDest = greatCircleNm(a, destination);
+    if (toDest >= total) continue;
+    if (toDest + greatCircleNm(origin, a) > corridor) continue;
+    if (!runwaySuitability(a, aircraft).ok) continue;
+    nodes.push({ a, toDest, v: unitVector(a) });
+  }
+  nodes.sort((x, y) => x.toDest - y.toDest || (x.a.ident < y.a.ident ? -1 : 1));
+  // A leg is within range when the unit vectors' dot product ≥ cos(legMax / R).
+  const minDot = Math.cos(legMax / EARTH_RADIUS_NM);
+  type Best = { limit: number; legs: number; nm: number; next: number };
+  const best: Array<Best | null> = [];
+  const better = (c: Best, b: Best | null) =>
+    c.limit >= MIN_JOB_KG &&
+    (!b ||
+      c.legs < b.legs ||
+      (c.legs === b.legs && (c.limit > b.limit || (c.limit === b.limit && c.nm < b.nm - 1e-9))));
+  const solve = (from: EconomyAirport, fromToDest: number, v: Vec, upTo: number): Best | null => {
+    let b: Best | null = null;
+    const direct = greatCircleNm(from, destination);
+    if (direct <= legMax) {
+      const d: Best = { limit: payloadLimitKg(aircraft, direct), legs: 1, nm: direct, next: -1 };
+      if (better(d, b)) b = d;
+    }
+    // Reachable stops are at most legMax closer to the destination: start the scan there.
+    let lo = 0;
+    let hi = upTo;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((nodes[mid]?.toDest ?? 0) < fromToDest - legMax) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let j = lo; j < upTo; j++) {
+      const n = nodes[j];
+      const nb = best[j];
+      if (!n || !nb || n.toDest >= fromToDest) continue;
+      if (v[0] * n.v[0] + v[1] * n.v[1] + v[2] * n.v[2] < minDot) continue;
+      const d = greatCircleNm(from, n.a);
+      if (d > legMax || d === 0) continue;
+      const c: Best = {
+        limit: Math.min(payloadLimitKg(aircraft, d), nb.limit),
+        legs: nb.legs + 1,
+        nm: d + nb.nm,
+        next: j,
+      };
+      if (better(c, b)) b = c;
+    }
+    return b;
+  };
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    best.push(n ? solve(n.a, n.toDest, n.v, i) : null);
+  }
+  const start = solve(origin, total, unitVector(origin), nodes.length);
+  if (!start) return null;
+  const legs: LongHaulRoute["legs"] = [];
+  let from = origin;
+  let step: Best | null = start;
+  while (step) {
+    const to: EconomyAirport =
+      step.next === -1 ? destination : (nodes[step.next]?.a ?? destination);
+    legs.push({ from: from.ident, to: to.ident, distanceNm: round1(greatCircleNm(from, to)) });
+    if (step.next === -1) break;
+    from = to;
+    step = best[step.next] ?? null;
+  }
+  return { legs, chainNm: round1(start.nm), payloadLimitKg: start.limit };
+}
+
+type Vec = [number, number, number];
+
+function unitVector(p: { lat: number; lon: number }): Vec {
+  const lat = (p.lat * Math.PI) / 180;
+  const lon = (p.lon * Math.PI) / 180;
+  return [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)];
 }

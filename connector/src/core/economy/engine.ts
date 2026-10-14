@@ -126,7 +126,7 @@ import {
   finalDeliveryTerms,
   jobLocation,
   legReputationDelta,
-  transitRemainingMin,
+  missionLegTerms,
   transitStorage,
   LONG_HAUL_JOBS_PER_BOARD,
   TRANSIT_ABANDON_REPUTATION,
@@ -449,6 +449,7 @@ export class EconomyEngine {
 
   publish(): void {
     this.flushBook();
+    this.refreshLegTerms();
     if (this.mission && this.mission.id !== this.publishedMissionId) {
       if (this.publishedMissionId !== null) this.store.apply({ mission: null });
       this.publishedMissionId = this.mission.id;
@@ -506,6 +507,8 @@ export class EconomyEngine {
       this.publishedGameMinute = minute;
       this.lastClockPublish = wall;
       this.store.apply({ company: this.companyDomain() });
+      // Transit cargo waiting for departure keeps using its deadline: refresh the leg terms.
+      if (this.refreshLegTerms() && this.mission) this.store.apply({ mission: this.mission });
     }
   }
 
@@ -637,6 +640,19 @@ export class EconomyEngine {
     });
   }
 
+  /**
+   * A loaded mission carrying transit cargo: its deadline and expected payout follow the
+   * company clock until block-out (docs/ECONOMY.md "Transit cargo"). True when they changed.
+   */
+  private refreshLegTerms(): boolean {
+    const m = this.mission;
+    if (!m || m.status !== "loaded" || !m.jobs.some((j) => j.transit)) return false;
+    const t = missionLegTerms(m.jobs, m.destination, this.company.gameMs, this.company.reputation);
+    if (t.timeLimitMin === m.timeLimitMin && t.expectedPayout === m.expectedPayout) return false;
+    this.mission = { ...m, ...t };
+    return true;
+  }
+
   /** Recompute the preview of a loaded mission; true when what it shows changed. */
   private refreshPayloadPreview(): boolean {
     const m = this.mission;
@@ -747,8 +763,10 @@ export class EconomyEngine {
       status: "in_progress",
       flightId: record.id,
       startedAt: new Date(this.now()).toISOString(),
-      // Transit cargo: ground time at the stop is counted up to block-out.
+      // Transit cargo: ground time at the stop is counted up to block-out, where the leg's
+      // deadline and expected payout are frozen.
       startedGameMs: Math.floor(this.company.gameMs),
+      ...missionLegTerms(m.jobs, m.destination, this.company.gameMs, this.company.reputation),
       flownNm: record.distanceNm,
       elapsedMin: record.blockMin,
       payloadCheck,
@@ -879,7 +897,10 @@ export class EconomyEngine {
           : fail("unknown_airport", "Mission airports are unknown");
     if (!verdict.ok) {
       const crashed = verdict.code === "crashed";
-      const delta = crashed ? REPUTATION.crash : 0;
+      // Transit cargo already stored on an earlier leg and lost by a failed (non-crash) leg
+      // counts as abandoned, like job.release: −3 reputation each (a crash costs −20 already).
+      const lost = crashed ? [] : m.jobs.filter((j) => j.transit);
+      const delta = (crashed ? REPUTATION.crash : 0) + TRANSIT_ABANDON_REPUTATION * lost.length;
       if (delta) this.book.adjustReputation(delta);
       const settled = crashed
         ? this.settle(m, record, origin, null, true)
@@ -908,6 +929,14 @@ export class EconomyEngine {
         code: verdict.code,
         message: verdict.message,
       });
+      for (const j of lost) {
+        this.store.event("job.abandoned", {
+          jobId: j.id,
+          location: jobLocation(j),
+          reputationDelta: TRANSIT_ABANDON_REPUTATION,
+          missionId: m.id,
+        });
+      }
       this.publish();
       return;
     }
@@ -1585,12 +1614,10 @@ export class EconomyEngine {
       registration: aircraft.registration,
       payloadKg,
       distanceNm,
-      // Tightest time left: a transit job has already used part of its chain time.
-      timeLimitMin: Math.max(1, Math.min(...loaded.map((j) => transitRemainingMin(j, gameMs)))),
-      // Only the jobs delivered on this leg pay; transit cargo pays on its final delivery.
-      expectedPayout: loaded
-        .filter((j) => j.destination === first.destination)
-        .reduce((s, j) => s + j.payoutEstimate, 0),
+      // Tightest time left (a transit job has already used part of its chain; negative = late)
+      // and the payout of the jobs delivered on this leg (transit cargo pays on its final
+      // delivery, with the late penalty it has accrued).
+      ...missionLegTerms(loaded, first.destination, gameMs, this.company.reputation),
       createdAt: new Date(this.now()).toISOString(),
       ...(transitIds.length ? { transitJobIds: transitIds } : {}),
     };

@@ -21,6 +21,16 @@ const TABLES = [
 ];
 
 describe("storage (node:sqlite)", () => {
+  it("migration versions are unique and contiguous from 1 (no two branches share a number)", () => {
+    const versions = MIGRATIONS.map((m) => m.version);
+    assert.equal(new Set(versions).size, versions.length, `duplicate versions: ${versions}`);
+    assert.deepEqual(
+      versions,
+      versions.map((_, i) => i + 1),
+      `versions must run 1..${versions.length} in order: ${versions}`,
+    );
+  });
+
   it("node:sqlite loads on this Node version", () => {
     assert.equal(typeof loadSqlite().DatabaseSync, "function");
   });

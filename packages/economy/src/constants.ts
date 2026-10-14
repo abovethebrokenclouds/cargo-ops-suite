@@ -101,6 +101,11 @@ export const REPUTATION = {
  * range (80 % of the aircraft range) up to this multiple of it, so they need a transit stop.
  */
 export const LONG_HAUL_MAX_FACTOR = 2;
+/**
+ * Long-haul chains are searched inside the corridor origin → stop → destination ≤ this
+ * multiple of the direct distance (docs/ECONOMY.md "Transit cargo").
+ */
+export const LONG_HAUL_CORRIDOR = 2;
 /** Long-haul jobs the connector adds to every board (drawn after the regular jobs). */
 export const LONG_HAUL_JOBS_PER_BOARD = 2;
 /** Extra time a long-haul job allows for the transit stop, minutes. */

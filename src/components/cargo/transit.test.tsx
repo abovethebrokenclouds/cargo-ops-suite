@@ -7,12 +7,13 @@ import { aircraftTypeByKey, type AircraftType, type Job, type Mission } from "@c
 import {
   airportLookup,
   arriveInTransit,
+  computePayout,
   generateJobs,
   transitStorage,
   type EconomyAirport,
 } from "@cargo-ops/economy";
 import { jobSuitability } from "@/lib/economy/board";
-import { transitView } from "@/lib/economy/format";
+import { transitDeadlineText, transitView } from "@/lib/economy/format";
 import { transitPins } from "@/lib/economy/transit-pins";
 
 import { MissionCard } from "./MissionCard";
@@ -111,6 +112,29 @@ describe("transit cargo view", () => {
       late: true,
       leftMin: -30,
     });
+    // No company clock yet: the due time is known, the time left is not guessed.
+    const unknown = transitView(job, null, 50);
+    expect(unknown).toMatchObject({ leftMin: null, late: false, payoutEstimate: null });
+    expect(unknown && transitDeadlineText(unknown)).toMatch(
+      /^Due Month 1 · Day \d+ · \d\d:\d\d · time left unknown$/,
+    );
+    // The estimate carries the late penalty accrued so far: 90 min late → −15 % of gross.
+    const late = transitView(job, T0 + (limit - 119 + 90) * MIN, 50);
+    const onTime = transitView(job, T0, 50);
+    expect(onTime?.payoutEstimate).toBe(job.payoutEstimate);
+    const gross = computePayout({
+      kind: job.kind,
+      weightKg: job.weightKg,
+      distanceNm: job.distanceNm,
+      units: job.units,
+      reputation: 50,
+      estimate: false,
+      landingGrade: null,
+      lateMin: 90,
+      peakG: 1.18,
+    });
+    expect(late?.payoutEstimate).toBe(gross.total);
+    expect(late?.payoutEstimate).toBeLessThan(job.payoutEstimate);
   });
 
   it("TransitCargo lists the cargo with its deadline and selects it for the onward leg", () => {
@@ -121,6 +145,7 @@ describe("transit cargo view", () => {
       <TransitCargo
         jobs={[job]}
         nowGameMs={T0 + 60 * MIN}
+        reputation={50}
         source="replay"
         selected={[]}
         onSelect={onSelect}
@@ -136,7 +161,16 @@ describe("transit cargo view", () => {
     expect(screen.getByText("REPLAY")).toBeInTheDocument();
     fireEvent.click(within(row).getByLabelText(`Select ${job.id}`));
     expect(onSelect).toHaveBeenCalledWith(job.id, true);
-    fireEvent.click(within(row).getByText("Abandon"));
+    expect(within(row).getByTestId("transit-payout")).toHaveTextContent(
+      `est. $${job.payoutEstimate.toLocaleString("en-US")} on delivery`,
+    );
+    // Abandon asks first: cancelling keeps the cargo, confirming abandons it.
+    fireEvent.click(within(row).getByTestId("transit-abandon"));
+    expect(screen.getByText("Abandon this cargo?")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Keep it"));
+    expect(onAbandon).not.toHaveBeenCalled();
+    fireEvent.click(within(row).getByTestId("transit-abandon"));
+    fireEvent.click(screen.getByTestId("transit-abandon-confirm"));
     expect(onAbandon).toHaveBeenCalledWith(job.id);
   });
 
@@ -145,6 +179,7 @@ describe("transit cargo view", () => {
       <TransitCargo
         jobs={[]}
         nowGameMs={0}
+        reputation={50}
         source="replay"
         selected={[]}
         onSelect={() => {}}
@@ -163,7 +198,9 @@ describe("transit cargo view", () => {
       kind: "transit",
       label: "KATL · 2 in transit",
     });
-    expect(pins[0]?.title).toContain(`${job.id} → KMIA, due Month 1 · Day 2`);
+    expect(pins[0]?.title).toContain(`${job.id} → KMIA, Due Month 1 · Day`);
+    expect(pins[0]?.title).toMatch(/left$/);
+    expect(transitPins([job], null, lookup)[0]?.title).toMatch(/time left unknown$/);
     expect(transitPins([{ ...job, status: "loaded" }], T0, lookup)).toEqual([]);
   });
 
@@ -188,5 +225,29 @@ describe("transit cargo view", () => {
     expect(screen.getByTestId("mission-strip-transit")).toHaveTextContent(
       "Transit leg: 1 job goes beyond KATL · stored there, paid on final delivery",
     );
+    expect(screen.getByTestId("mission-deadline")).toHaveTextContent("6h 40m from block-out");
+  });
+
+  it("the mission strip shows a transit leg that is already late as late, not 1 min", () => {
+    const job = stored();
+    const mission: Mission = {
+      id: "M-3",
+      status: "loaded",
+      origin: "KATL",
+      destination: "KMIA",
+      jobIds: [job.id],
+      jobs: [{ ...job, status: "loaded" }],
+      aircraftKey: "c208b",
+      payloadKg: job.weightKg,
+      distanceNm: 517.7,
+      timeLimitMin: -91.7,
+      expectedPayout: 6313,
+      createdAt: "2026-10-13T12:00:00.000Z",
+    };
+    render(<MissionStrip mission={mission} source="replay" />);
+    const deadline = screen.getByTestId("mission-deadline");
+    expect(deadline).toHaveTextContent("1h 32m late already");
+    expect(deadline.className).toContain("text-destructive");
+    expect(screen.getByTestId("mission-payout")).toHaveTextContent("$6,313");
   });
 });

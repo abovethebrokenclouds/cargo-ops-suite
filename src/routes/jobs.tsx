@@ -710,6 +710,7 @@ function Jobs() {
           <TransitCargo
             jobs={inTransit}
             nowGameMs={company?.clock?.gameMs ?? null}
+            reputation={company?.reputation ?? null}
             source={source}
             selected={selected}
             onSelect={toggleSelected}

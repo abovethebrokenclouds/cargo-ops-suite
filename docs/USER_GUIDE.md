@@ -81,8 +81,12 @@ place where you switch aircraft).
 4. The full payout comes on the **final delivery**, with the landing grade of the last leg. The
    time limit covers **the whole trip**: every leg's block time plus the time the cargo waits on
    the ground (company clock). If you own an FBO with a **cargo terminal** there, the first 4 / 8 /
-   12 hours (level 1 / 2 / 3) of waiting do not count. A crash on any leg loses the cargo;
-   **Abandon** gives it up where it is (no payout, −3 reputation).
+   12 hours (level 1 / 2 / 3) of waiting do not count. The payout shown for stored cargo is an
+   estimate that already includes any late penalty, and the mission strip says "late already"
+   when an onward leg starts past the deadline. A crash on any leg loses the cargo; so does a
+   leg that fails its checks (for example flown to the wrong airport), which counts as
+   abandoning it (−3 reputation). **Abandon** (with a confirmation) gives it up where it is:
+   no payout, −3 reputation.
 
 ## 5. Company, fleet, loans, used market, FBOs
 

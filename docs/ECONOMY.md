@@ -217,20 +217,21 @@ engine's `load` / delivery path, constants in `constants.ts` and `fbo-constants.
 plan does not specify transit cargo, so these are the simplest rules consistent with the
 rest of the economy:
 
-| Rule            | Value                                                                                                                                                                                                                         |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Transit leg     | `mission.load {jobIds, destination}` with a `destination` other than a job's final destination. The leg starts where the cargo is (its origin, or its transit stop); all jobs must be there (`mixed_route`)                   |
-| Stacking        | without `destination` the jobs must share their final destination (as before); with it, jobs going there are delivered and the others go on in transit (`mission.transitJobIds`)                                              |
-| Progress        | the leg must end strictly closer (great circle) to every onward job's final destination than where the cargo is now (`no_progress`); a leg to the same airport is `same_airport`                                              |
-| Per-leg checks  | unchanged and per leg: range, runway, payload limit (max payload − leg fuel, − major-defect penalty) over everything on board, airworthiness, start at the origin, fuel, MTOW, payload check, leg verification                |
-| Payout          | **full payout on the final delivery only** (job origin → destination great circle, kind, units, board demand factor, current reputation, landing grade of the final leg); intermediate legs pay nothing; never partial credit |
-| Deadline        | the job's time limit covers the **whole chain**: Σ block minutes of every leg + ground time between legs on the company clock − free storage minutes; late minutes at the final delivery use the normal late penalty          |
-| Bonuses, damage | a leg flown above 1× (noBonus) or departed underloaded removes the bonuses of the final payout; a fragile touchdown above 1.5 G on **any** leg damages it                                                                     |
-| Reputation      | a leg with at least one final delivery: the normal rule over those jobs; a leg that only carried transit cargo: 0, except a hard landing (D/E/F) −5                                                                           |
-| Failure         | a crash or a failed verification fails every job on board (no partial credit); abort / unload puts transit cargo back at its stop with its clock unchanged                                                                    |
-| Abandon         | `job.release` of an in-transit job: failed, no payout, reputation **−3** (`job.abandoned`)                                                                                                                                    |
-| Storage         | at an airport without an own FBO: no benefit; own operating FBO: none either; own **cargo terminal** L1 / L2 / L3: the first **4 / 8 / 12** ground hours at that stop do not count against the deadline                       |
-| Long-haul jobs  | every connector board adds **2** jobs beyond one leg's direct range (80 % of the range) up to 2 × that, tagged `longHaul` ("Needs a stop")                                                                                    |
+| Rule            | Value                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transit leg     | `mission.load {jobIds, destination}` with a `destination` other than a job's final destination. The leg starts where the cargo is (its origin, or its transit stop); all jobs must be there (`mixed_route`)                                                                                                                                                                                                                |
+| Stacking        | without `destination` the jobs must share their final destination (as before); with it, jobs going there are delivered and the others go on in transit (`mission.transitJobIds`)                                                                                                                                                                                                                                           |
+| Progress        | the leg must end strictly closer (great circle) to every onward job's final destination than where the cargo is now (`no_progress`); a leg to the same airport is `same_airport`                                                                                                                                                                                                                                           |
+| Per-leg checks  | unchanged and per leg: range, runway, payload limit (max payload − leg fuel, − major-defect penalty) over everything on board, airworthiness, start at the origin, fuel, MTOW, payload check, leg verification                                                                                                                                                                                                             |
+| Payout          | **full payout on the final delivery only** (job origin → destination great circle, kind, units, board demand factor, current reputation, landing grade of the final leg); intermediate legs pay nothing; never partial credit                                                                                                                                                                                              |
+| Deadline        | the job's time limit covers the **whole chain**: Σ block minutes of every leg + ground time between legs on the company clock − free storage minutes; late minutes at the final delivery use the normal late penalty                                                                                                                                                                                                       |
+| Bonuses, damage | a leg flown above 1× (noBonus) or departed underloaded removes the bonuses of the final payout; a fragile touchdown above 1.5 G on **any** leg damages it                                                                                                                                                                                                                                                                  |
+| Reputation      | a leg with at least one final delivery: the normal rule over those jobs; a leg that only carried transit cargo: 0, except a hard landing (D/E/F) −5                                                                                                                                                                                                                                                                        |
+| Failure         | a crash or a failed verification fails every job on board (no partial credit). Cargo already stored on an earlier leg and lost by a failed **non-crash** verification (wrong airport, short distance, teleport, > 8×) counts as abandoned: **−3** reputation each and `job.abandoned`, exactly like `job.release` (a crash already costs −20). Abort / unload puts transit cargo back at its stop with its clock unchanged |
+| Abandon         | `job.release` of an in-transit job: failed, no payout, reputation **−3** (`job.abandoned`)                                                                                                                                                                                                                                                                                                                                 |
+| Storage         | at an airport without an own FBO: no benefit; own operating FBO: none either; own **cargo terminal** L1 / L2 / L3: the first **4 / 8 / 12** ground hours at that stop do not count against the deadline                                                                                                                                                                                                                    |
+| Leg deadline    | a loaded leg's `timeLimitMin` is the tightest time left among its jobs (negative = already late, never clamped), recomputed every in-game minute while the stored cargo waits and frozen at block-out; `expectedPayout` sums the jobs delivered on the leg, stored ones with the late penalty accrued so far                                                                                                               |
+| Long-haul jobs  | every connector board adds **2** jobs beyond one leg's direct range (80 % of the range) up to 2 × that, tagged `longHaul` ("Needs a stop"), only when a chain of legs that passes every load rule exists (below)                                                                                                                                                                                                           |
 
 ```
 chain minutes       = Σ leg block minutes + Σ max(0, ground minutes at each stop − free storage minutes)
@@ -240,11 +241,25 @@ deadline at a stop  = arrival company clock + (time limit − chain minutes so f
 
 **Long-haul jobs.** Drawn after every other job of the board from their own seeded stream
 (seed FNV-1a(board seed, "long-haul")), so the regular jobs of a board never change.
-Destinations: runway suitable, `0.8 × range < d ≤ 1.6 × range`, weighted large 3 / medium 2;
-a `jobs.refresh {destination}` beyond the direct range puts the first long-haul job there.
-Kind, units and estimate as usual; weight from the payload limit of **half** the distance
-(two equal legs); time limit = the usual limit + **60 min** for the stop. The browser demo
-board has none (it stays the 24-job P3 board).
+Destinations: runway suitable, `0.8 × range < d ≤ 1.6 × range`, weighted large 3 / medium 2,
+and **deliverable**: `longHaulRoute` must find a chain in which every leg is within the direct
+range, ends at a suitable runway, ends strictly closer to the destination and carries at least
+50 kg (the rules `mission.load` enforces). The search is a deterministic DP over the airports
+closer to the destination than the origin, inside the corridor origin → stop → destination ≤
+**2 ×** the direct distance; among chains the fewest legs win, then the best worst leg, then
+the shortest. A drawn destination without a chain leaves the pool and the stream draws again
+(seed 4242-style boards keep their regular jobs byte-identical). Examples (C208B): LPLA →
+EIKY has no progressing chain over the Atlantic and is never offered (49 of the 301
+pre-filtered LPLA destinations are dropped); KMEM → KMIA goes KMEM → KPAM → KMIA (752.4 nm).
+A `jobs.refresh {destination}` beyond the direct range puts the first long-haul job there when
+it is deliverable. Kind and units as usual; weight drawn against the payload limit of the
+chain's **worst leg**; time limit = the usual limit for the chain's flown distance + **60 min
+per stop**. The browser demo board has none (it stays the 24-job P3 board).
+
+**UI.** `/jobs` lists stored cargo with its stop, final destination, due time on the company
+clock and time left ("time left unknown" before the company clock is known; nothing is
+guessed), the payout estimate with the late penalty accrued so far, and Abandon behind a
+confirmation dialog. The mission strip shows a leg already late as "… late already".
 
 **Events.** `job.in_transit {jobId, missionId, location, destination, storage,
 deadlineGameMs}` when cargo is stored; `job.completed` only on final delivery;
@@ -282,7 +297,11 @@ one `mission_payout` row, reputation +2, the ledger balances. With an own KATL F
 cargo terminal L1 the stored job shows `own_terminal`, 240 free minutes: 3 h at the stop
 cost nothing, 5 h cost 60 min. Long-haul: the KMEM board has 26 jobs, 2 long-haul; a KMIA
 job (747.4 nm > 720) is refused direct (`out_of_range`) and loads via KATL. A crash on a
-transit leg fails the job; abandoning stored cargo costs 3 reputation.
+transit leg fails the job; abandoning stored cargo costs 3 reputation, and so does losing it on
+an onward leg flown to KCLT instead of KRDU (`short_distance`, `job.abandoned`). A stored job
+kept 90 min past its limit: the onward leg loads with `timeLimitMin` −90 and the expected
+payout with that late penalty, both follow the clock while it waits (−120 after 30 more
+minutes) and freeze at block-out.
 
 ### Storage and export
 

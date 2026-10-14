@@ -21,6 +21,10 @@ import {
   jobLocation,
   legReputationDelta,
   longHaulCandidates,
+  longHaulRoute,
+  missionLegTerms,
+  runwaySuitability,
+  transitPayoutEstimate,
   maxJobDistanceNm,
   payloadLimitKg,
   timeLimitMin,
@@ -328,9 +332,14 @@ describe("long-haul jobs on the board", () => {
       expect(j.longHaul).toBe(true);
       expect(j.distanceNm).toBeGreaterThan(maxNm);
       expect(j.distanceNm).toBeLessThanOrEqual(maxNm * 2);
-      expect(j.weightKg).toBeLessThanOrEqual(payloadLimitKg(C208B, j.distanceNm / 2));
+      const route = longHaulRoute(apt("KMEM"), apt(j.destination), bundledAirports(), C208B);
+      expect(route).not.toBeNull();
+      if (!route) continue;
+      // Sized on the worst leg of the chain; the limit follows the chain + 60 min per stop.
+      expect(j.weightKg).toBeLessThanOrEqual(route.payloadLimitKg);
       expect(j.timeLimitMin).toBe(
-        timeLimitMin(j.kind, j.distanceNm, C208B.cruiseKt) + TRANSIT_STOP_SLACK_MIN,
+        timeLimitMin(j.kind, route.chainNm, C208B.cruiseKt) +
+          TRANSIT_STOP_SLACK_MIN * (route.legs.length - 1),
       );
       expect(plain.some((p) => p.id === j.id)).toBe(false);
     }
@@ -350,5 +359,128 @@ describe("long-haul jobs on the board", () => {
     const chains = findRoutes({ start: "KMEM", jobs, aircraft: C208B, limit: 50 });
     for (const c of chains)
       for (const l of c.legs) for (const id of l.jobIds) expect(longIds.has(id)).toBe(false);
+  });
+});
+
+/** Independent check of a chain against the rules mission.load enforces. */
+function assertFeasible(
+  route: NonNullable<ReturnType<typeof longHaulRoute>>,
+  origin: string,
+  dest: string,
+  aircraft: AircraftType,
+  weightKg: number,
+) {
+  const legMax = maxJobDistanceNm(aircraft);
+  expect(route.legs[0]?.from).toBe(origin);
+  expect(route.legs.at(-1)?.to).toBe(dest);
+  for (const [i, leg] of route.legs.entries()) {
+    if (i > 0) expect(leg.from).toBe(route.legs[i - 1]?.to);
+    const from = apt(leg.from);
+    const to = apt(leg.to);
+    const d = greatCircleNm(from, to);
+    expect(d).toBeLessThanOrEqual(legMax); // within the direct range (out_of_range)
+    expect(runwaySuitability(to, aircraft).ok).toBe(true); // runway_unsuitable
+    expect(weightKg).toBeLessThanOrEqual(payloadLimitKg(aircraft, d)); // payload_exceeded
+    // no_progress: strictly closer to the destination.
+    if (leg.to !== dest) {
+      expect(greatCircleNm(to, apt(dest))).toBeLessThan(greatCircleNm(from, apt(dest)));
+    }
+  }
+}
+
+describe("long-haul jobs are always deliverable", () => {
+  const all = bundledAirports();
+
+  it("LPLA → EIKY (no progressing chain over the Atlantic) is never offered", () => {
+    // EIKY passes the distance pre-filter but no chain of progressing legs reaches it.
+    expect(
+      longHaulCandidates(apt("LPLA"), all, C208B).some((c) => c.airport.ident === "EIKY"),
+    ).toBe(true);
+    expect(longHaulRoute(apt("LPLA"), apt("EIKY"), all, C208B)).toBeNull();
+    const offered = new Set<string>();
+    for (let seed = 1; seed <= 12; seed++) {
+      const jobs = generateJobs({
+        origin: apt("LPLA"),
+        airports: all,
+        aircraft: C208B,
+        seed,
+        nowMs: 0,
+        reputation: 50,
+        longHaulJobs: 2,
+        ...(seed === 1 ? { focus: apt("EIKY") } : {}),
+      });
+      for (const j of jobs.filter((x) => x.longHaul)) offered.add(j.destination);
+    }
+    expect(offered.has("EIKY")).toBe(false); // not even as a focus
+    for (const d of offered) expect(longHaulRoute(apt("LPLA"), apt(d), all, C208B)).not.toBeNull();
+  }, 60_000);
+
+  it("KMEM → KMIA: two legs via KPAM, weight drawn against the worse leg", () => {
+    const route = longHaulRoute(apt("KMEM"), apt("KMIA"), all, C208B);
+    expect(route?.legs.map((l) => l.to)).toEqual(["KPAM", "KMIA"]);
+    expect(route?.chainNm).toBe(752.4);
+    // Worst leg KPAM → KMIA 380 nm: 1,360 − 170 × (380 / 170 + 0.75) = 852 kg.
+    expect(route?.payloadLimitKg).toBe(852);
+  });
+
+  it("every long-haul job on many boards has a chain that passes the load rules", () => {
+    for (const key of ["pc6", "c208b", "atr72f"]) {
+      const aircraft = type(key);
+      for (const o of ["KMEM", "LPLA", "PANC", "EGLL"]) {
+        for (let seed = 1; seed <= 3; seed++) {
+          const jobs = generateJobs({
+            origin: apt(o),
+            airports: all,
+            aircraft,
+            seed,
+            nowMs: 0,
+            reputation: 50,
+            longHaulJobs: 2,
+          });
+          for (const j of jobs.filter((x) => x.longHaul)) {
+            const route = longHaulRoute(apt(o), apt(j.destination), all, aircraft);
+            expect(route, `${key} ${o} → ${j.destination}`).not.toBeNull();
+            if (route) assertFeasible(route, o, j.destination, aircraft, j.weightKg);
+          }
+        }
+      }
+    }
+  }, 120_000);
+});
+
+describe("leg terms while transit cargo waits (deadline and expected payout)", () => {
+  it("time left goes negative (no clamp) and the expected payout carries the late penalty", () => {
+    const job = krduJob("cargo", 500);
+    const stored = arriveInTransit(
+      job,
+      leg1,
+      stop(transitStorage({ fbo: false, terminalLevel: 0 })),
+    );
+    // 630 − 119 = 511 min left at arrival; 602.7 min later the chain is 91.7 min late.
+    const at = T0 + 602.7 * MIN;
+    const terms = missionLegTerms([stored], "KRDU", at, 50);
+    expect(terms.timeLimitMin).toBe(-91.7);
+    const late = computePayout({
+      kind: "cargo",
+      weightKg: 500,
+      distanceNm: job.distanceNm,
+      units: 1,
+      reputation: 50,
+      estimate: false,
+      landingGrade: null,
+      lateMin: 91.7,
+      peakG: 1.18,
+    });
+    expect(terms.expectedPayout).toBe(late.total);
+    expect(transitPayoutEstimate(stored, at, 50)).toBe(late.total);
+    expect(terms.expectedPayout).toBeLessThan(job.payoutEstimate);
+    // On time it is the board estimate; a leg that only stores the cargo expects nothing.
+    expect(missionLegTerms([stored], "KRDU", T0, 50).expectedPayout).toBe(job.payoutEstimate);
+    expect(missionLegTerms([stored], "KCLT", at, 50).expectedPayout).toBe(0);
+    // A job that has not flown a leg keeps its board estimate and full limit.
+    expect(missionLegTerms([job], "KRDU", at, 50)).toEqual({
+      timeLimitMin: 630,
+      expectedPayout: job.payoutEstimate,
+    });
   });
 });

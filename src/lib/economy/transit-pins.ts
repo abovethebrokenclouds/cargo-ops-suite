@@ -2,9 +2,7 @@ import type { Job } from "@cargo-ops/protocol";
 import type { AirportLookup } from "@cargo-ops/economy";
 
 import type { OpsMapPin } from "@/components/map/OpsMap";
-import { formatMinutes } from "@/lib/format";
-
-import { transitView } from "./format";
+import { transitDeadlineText, transitView } from "./format";
 
 /**
  * Map pins for transit cargo (docs/ECONOMY.md "Transit cargo"): one pin per airport holding
@@ -27,12 +25,9 @@ export function transitPins(
     const airport = lookup?.get(icao);
     if (!airport) continue;
     const lines = list.map((j) => {
-      const v = transitView(j, nowGameMs ?? j.transit?.arrivedGameMs ?? 0);
+      const v = transitView(j, nowGameMs);
       if (!v) return j.id;
-      const when = v.late
-        ? `late by ${formatMinutes(-v.leftMin)}`
-        : `due ${v.dueLabel} (${formatMinutes(v.leftMin)} left)`;
-      return `${j.id} → ${v.destination}, ${when}`;
+      return `${j.id} → ${v.destination}, ${transitDeadlineText(v)}`;
     });
     pins.push({
       id: `transit-${icao}`,

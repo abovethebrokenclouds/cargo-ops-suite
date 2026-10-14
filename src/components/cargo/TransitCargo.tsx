@@ -1,22 +1,35 @@
 import { Warehouse } from "lucide-react";
+import { useState } from "react";
 
 import type { Job, Source } from "@cargo-ops/protocol";
 import { Panel } from "@/components/dashboard/Panel";
 import { SourceTag } from "@/components/status/SourceTag";
-import { transitView } from "@/lib/economy/format";
-import { formatInt, formatMinutes, formatUsd } from "@/lib/format";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { transitDeadlineText, transitView } from "@/lib/economy/format";
+import { formatInt, formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 import { KindBadge } from "./MissionCard";
 
 /**
  * Cargo stored at an intermediate airport (docs/ECONOMY.md "Transit cargo"): where it is,
- * where it goes, how much of its chain deadline is left on the company clock, and a box to
- * load it on the onward leg (from that airport).
+ * where it goes, how much of its chain deadline is left on the company clock, the payout
+ * estimate with the late penalty accrued so far, and a box to load it on the onward leg (from
+ * that airport). Abandoning asks for confirmation first.
  */
 export function TransitCargo({
   jobs,
   nowGameMs,
+  reputation,
   source,
   selected,
   onSelect,
@@ -26,6 +39,7 @@ export function TransitCargo({
 }: {
   jobs: readonly Job[];
   nowGameMs: number | null;
+  reputation: number | null;
   source: Source | null;
   selected: readonly string[];
   onSelect: (jobId: string, checked: boolean) => void;
@@ -33,6 +47,7 @@ export function TransitCargo({
   disabled: boolean;
   className?: string;
 }) {
+  const [pending, setPending] = useState<Job | null>(null);
   if (jobs.length === 0) return null;
   return (
     <Panel
@@ -44,7 +59,7 @@ export function TransitCargo({
     >
       <ul className="flex flex-col gap-2" data-testid="transit-jobs">
         {jobs.map((j) => {
-          const v = transitView(j, nowGameMs ?? j.transit?.arrivedGameMs ?? 0);
+          const v = transitView(j, nowGameMs, reputation);
           if (!v) return null;
           return (
             <li
@@ -71,7 +86,15 @@ export function TransitCargo({
                 <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <KindBadge kind={j.kind} className="px-1.5 py-0" />
                   <span className="font-tabular">{formatInt(j.weightKg)} kg</span>
-                  <span className="font-tabular">{formatUsd(j.payoutEstimate)} on delivery</span>
+                  <span
+                    className="font-tabular"
+                    data-testid="transit-payout"
+                    title="Estimate: landing 1.00, current reputation, late penalty accrued so far"
+                  >
+                    {v.payoutEstimate === null
+                      ? "est. payout unknown"
+                      : `est. ${formatUsd(v.payoutEstimate)} on delivery`}
+                  </span>
                 </p>
                 <p
                   className={cn(
@@ -80,9 +103,7 @@ export function TransitCargo({
                   )}
                   data-testid="transit-deadline"
                 >
-                  {v.late
-                    ? `Late by ${formatMinutes(-v.leftMin)} (penalty at delivery)`
-                    : `Due ${v.dueLabel} · ${formatMinutes(v.leftMin)} left`}
+                  {transitDeadlineText(v)}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {v.storageLabel}
@@ -96,7 +117,8 @@ export function TransitCargo({
                   className="text-xs text-muted-foreground hover:text-destructive disabled:opacity-50"
                   disabled={disabled}
                   title="Abandon this cargo here: no payout, −3 reputation"
-                  onClick={() => onAbandon(j.id)}
+                  data-testid="transit-abandon"
+                  onClick={() => setPending(j)}
                 >
                   Abandon
                 </button>
@@ -109,6 +131,30 @@ export function TransitCargo({
         Paid in full on the final delivery only. The time limit covers every leg and the ground time
         in between. Load it from the airport where it is stored.
       </p>
+      <AlertDialog open={pending !== null} onOpenChange={(o) => !o && setPending(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Abandon this cargo?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="font-mono">{pending?.id}</span> stays at{" "}
+              {pending?.transit?.location ?? "its stop"} and is never delivered: no payout and −3
+              reputation.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="transit-abandon-confirm"
+              onClick={() => {
+                if (pending && onAbandon) onAbandon(pending.id);
+                setPending(null);
+              }}
+            >
+              Abandon cargo
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Panel>
   );
 }

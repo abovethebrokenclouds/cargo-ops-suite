@@ -26,6 +26,7 @@ import {
   computePayout,
   greatCircleNm,
   payloadLimitKg,
+  transitPayoutEstimate,
   transitRemainingMin,
   type EconomyAirport,
 } from "../src/economy";
@@ -54,10 +55,10 @@ const apt = (icao: string): EconomyAirport => {
 };
 
 /** Leg 1 (synthetic KMEM → KATL) followed by leg 2 (SYNTHETIC KATL → KRDU re-projection). */
-function twoLegs(): { frames: FixtureFrame[]; leg2Start: number } {
+function twoLegs(to = "KRDU"): { frames: FixtureFrame[]; leg2Start: number } {
   const leg1 = loadFixture(FIXTURE);
   const end = leg1.at(-1)?.t ?? 0;
-  const leg2 = reprojectLeg(leg1, apt("KMEM"), apt("KATL"), apt("KATL"), apt("KRDU"), end + 5_000);
+  const leg2 = reprojectLeg(leg1, apt("KMEM"), apt("KATL"), apt("KATL"), apt(to), end + 5_000);
   return { frames: [...leg1, ...leg2], leg2Start: leg1.length };
 }
 
@@ -139,7 +140,7 @@ function acceptTo(r: Rig, dest: string): Job {
 }
 
 function gameMs(r: Rig): number {
-  return r.company().clock?.gameMs ?? 0;
+  return r.session.economy?.companyBook.company.gameMs ?? 0;
 }
 
 describe("transit cargo: KMEM → KRDU via KATL on two replayed legs", () => {
@@ -483,3 +484,76 @@ function withCrash(frames: FixtureFrame[]): FixtureFrame[] {
   } as FixtureFrame);
   return out;
 }
+
+describe("transit cargo: the onward leg's deadline and a lost onward leg", () => {
+  it("a late stored job: the leg's deadline goes negative, follows the clock, freezes at block-out", () => {
+    const tmp = tempDir();
+    const { frames, leg2Start } = twoLegs();
+    try {
+      const r = rig(tmp.dir, frames);
+      const job = acceptTo(r, "KRDU");
+      r.ok("mission.load", { jobIds: [job.id], destination: "KATL" });
+      r.source.playRange(0, leg2Start);
+      const stored = r.jobs().inTransit?.find((j) => j.id === job.id);
+      assert.ok(stored?.transit);
+      // Wait at KATL until the chain is 90 minutes past the limit.
+      const wait = Math.round((job.timeLimitMin - stored.transit.elapsedMin + 90) * 60_000);
+      r.session.economy?.advanceGameTime(stored.transit.arrivedGameMs + wait - gameMs(r));
+      const m = r.ok<Mission>("mission.load", { jobIds: [job.id] });
+      assert.equal(m.timeLimitMin, -90); // not clamped to 1 minute
+      const rep = r.company().reputation;
+      const expected = transitPayoutEstimate(stored, gameMs(r), rep);
+      assert.equal(m.expectedPayout, expected);
+      assert.ok(expected < job.payoutEstimate, `${expected} < ${job.payoutEstimate}`);
+      // Still waiting: 30 more minutes show on the published mission.
+      r.session.economy?.advanceGameTime(30 * 60_000);
+      const later = r.mission();
+      assert.equal(later?.timeLimitMin, -120);
+      assert.equal(later?.expectedPayout, transitPayoutEstimate(stored, gameMs(r), rep));
+      r.source.playRange(leg2Start);
+      const done = r.mission();
+      assert.equal(done?.status, "delivered", JSON.stringify(done?.failure ?? done?.startBlocked));
+      // Frozen at block-out (after the replay's boarding minutes, so past −120 min); the
+      // payout is lower still (the leg's own block time adds to the chain).
+      assert.ok(done?.startedGameMs !== undefined);
+      assert.equal(done.timeLimitMin, transitRemainingMin(stored, done.startedGameMs ?? 0));
+      assert.ok(done.timeLimitMin < -120);
+      assert.ok((done?.payout?.total ?? 0) <= (later?.expectedPayout ?? 0));
+      const late = done?.payout?.jobs[0]?.factors.find((f) => f.key === "late");
+      assert.ok((late?.value ?? 0) > 0);
+      r.close();
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it("an onward leg that fails verification loses stored cargo like abandoning it (−3)", () => {
+    const tmp = tempDir();
+    // Leg 2 is flown to KCLT instead of KRDU (SYNTHETIC re-projection): short of the route.
+    const { frames, leg2Start } = twoLegs("KCLT");
+    try {
+      const r = rig(tmp.dir, frames);
+      const job = acceptTo(r, "KRDU");
+      r.ok("mission.load", { jobIds: [job.id], destination: "KATL" });
+      r.source.playRange(0, leg2Start);
+      assert.equal(r.jobs().inTransit?.[0]?.id, job.id);
+      r.ok("mission.load", { jobIds: [job.id] });
+      const rep = r.company().reputation;
+      r.source.playRange(leg2Start);
+      const m = r.mission();
+      assert.equal(m?.status, "failed");
+      assert.notEqual(m?.failure?.code, "crashed");
+      assert.equal(m?.reputationDelta, -3);
+      assert.equal(r.company().reputation, rep - 3);
+      const abandoned = r.events("job.abandoned");
+      assert.equal(abandoned.length, 1);
+      const row = r.storage.db.prepare("SELECT status FROM jobs WHERE id = ?").get(job.id) as {
+        status: string;
+      };
+      assert.equal(row.status, "failed");
+      r.close();
+    } finally {
+      tmp.cleanup();
+    }
+  });
+});

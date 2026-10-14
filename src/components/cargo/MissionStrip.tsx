@@ -94,12 +94,14 @@ export function MissionStrip({
           <p
             className={cn(
               "mt-1 font-mono text-lg font-tabular",
-              left !== null && left < 0 ? "text-destructive" : "text-foreground",
+              (left ?? mission.timeLimitMin) < 0 ? "text-destructive" : "text-foreground",
             )}
             data-testid="mission-deadline"
           >
             {left === null
-              ? `${formatMinutes(mission.timeLimitMin)} from block-out`
+              ? mission.timeLimitMin < 0
+                ? `${formatMinutes(-mission.timeLimitMin)} late already`
+                : `${formatMinutes(mission.timeLimitMin)} from block-out`
               : left >= 0
                 ? `${formatMinutes(left)} left`
                 : `${formatMinutes(-left)} late`}
