@@ -44,7 +44,7 @@ const looks: Record<SimStatus, Look> = {
     pulse: true,
   },
   error: {
-    chip: "border-destructive/60 bg-destructive/20 text-destructive-foreground",
+    chip: "border-destructive/60 bg-destructive/20 text-foreground",
     dot: "text-destructive",
     pulse: false,
   },
