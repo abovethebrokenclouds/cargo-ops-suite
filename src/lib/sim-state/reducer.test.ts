@@ -289,6 +289,47 @@ describe("simReducer frames", () => {
   });
 });
 
+describe("simReducer with the simulator offline", () => {
+  const offline: Welcome = { ...liveWelcome, sim: { connected: false } };
+  const stale: Snapshot["state"] = {
+    sim: { connected: true, paused: false, simRate: 1 },
+    position,
+    motion,
+    controls: { parkingBrake: true },
+    phase: { current: "Cruise" },
+    flight: { active: true, elapsedSec: 600 },
+    company: {
+      name: "Co",
+      base: "KMEM",
+      cash: 1000,
+      reputation: 50,
+      reputationTier: "Regional",
+    } as NonNullable<Snapshot["state"]["company"]>,
+  };
+
+  it("never holds sim-derived domains while a live welcome says the sim is offline", () => {
+    const s = run([{ type: "snapshot", msg: snapshot(5, stale), at: 1 }], welcomed(offline));
+    for (const d of ["sim", "position", "motion", "controls", "phase", "flight"] as const) {
+      expect(s.sim[d], d).toBeUndefined();
+    }
+    // Connector-owned state is not simulator telemetry and stays.
+    expect(s.sim.company?.name).toBe("Co");
+    const d = run([{ type: "delta", msg: delta(6, { phase: { current: "Descent" } }), at: 2 }], s);
+    expect(d.sim.phase).toBeUndefined();
+    expect(d.lastSeq).toBe(6);
+  });
+
+  it("keeps them when the simulator is connected, and in demo/replay sessions", () => {
+    const live = run([{ type: "snapshot", msg: snapshot(1, stale), at: 1 }], welcomed());
+    expect(live.sim.phase?.current).toBe("Cruise");
+    const replay = run(
+      [{ type: "snapshot", msg: { ...snapshot(1, stale), source: "replay" }, at: 1 }],
+      welcomed({ ...offline, mode: "replay" }),
+    );
+    expect(replay.sim.phase?.current).toBe("Cruise");
+  });
+});
+
 describe("actionFromMessage", () => {
   it("maps state messages and ignores the rest", () => {
     expect(actionFromMessage(liveWelcome, 5)).toEqual({ type: "welcome", msg: liveWelcome });
