@@ -384,6 +384,14 @@ test.describe("demo mode (no connector)", () => {
     await expect(cards.nth(1).getByTestId("lease-badge")).toHaveText("Dry lease");
     await expect(cards.first().getByTestId("repair-aircraft")).toBeDisabled();
     await expect(page.getByTestId("fleet-disabled-note")).toBeVisible();
+    // Insurer repair loans: shown for the insured demo starter, tagged DEMO. The demo starter
+    // flies for the simulated hired pilot, so the insurer form explains why it is locked and
+    // offers no enabled control.
+    const financing = page.getByTestId("repair-financing");
+    await expect(financing).toBeVisible();
+    await expect(financing.getByText("DEMO")).toBeVisible();
+    await expect(financing.getByTestId("repair-financing-blocked")).toContainText("hired pilot");
+    await expect(financing.locator("button:enabled, input:enabled, select:enabled")).toHaveCount(0);
     await page.getByTestId("tab-new-aircraft").click();
     const market = page.getByTestId("market-type");
     expect(await market.count()).toBeGreaterThan(8);
