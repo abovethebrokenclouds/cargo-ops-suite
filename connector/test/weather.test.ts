@@ -20,6 +20,13 @@ import { shortFixture, tempDir } from "./helpers";
 const FIXTURE = JSON.parse(
   readFileSync(join(__dirname, "..", "..", "..", "fixtures", "awc-metar.handmade.json"), "utf8"),
 ) as { response: unknown[] };
+// RECORDED live response (metar-live workflow run 38491010466, 2026-10-14).
+const RECORDED = JSON.parse(
+  readFileSync(
+    join(__dirname, "..", "..", "..", "fixtures", "awc-metar.recorded-2026-10-14.json"),
+    "utf8",
+  ),
+) as { response: unknown[] };
 
 const T0 = Date.parse("2026-10-13T16:05:00Z");
 
@@ -177,6 +184,24 @@ describe("WeatherService (online)", () => {
       storage.close();
       tmp.cleanup();
     }
+  });
+});
+
+describe("WeatherService (recorded live response)", () => {
+  it("maps the recorded aviationweather.gov response for KMEM, KATL, EGLL, KJFK", async () => {
+    const { svc, calls } = service({ now: () => Date.parse("2026-10-14T00:30:00Z") }, () =>
+      jsonResponse(RECORDED.response),
+    );
+    const r = await svc.metar(["KMEM", "KATL", "EGLL", "KJFK"], true);
+    assert.equal(calls.length, 1);
+    for (const s of r.stations) {
+      assert.equal(s.report?.origin, "live", s.station);
+      assert.equal(s.report?.category, "VFR", s.station);
+      assert.equal(s.report?.decodedBy, "api", s.station);
+    }
+    assert.equal(byStation(r, "EGLL")?.report?.altimeterHpa, 1028);
+    assert.equal(byStation(r, "KMEM")?.report?.observedAt, "2026-10-13T23:54:00.000Z");
+    assert.equal(byStation(r, "KMEM")?.report?.visibilityPlus, true);
   });
 });
 

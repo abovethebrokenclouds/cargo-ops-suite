@@ -44,5 +44,7 @@ jobs:
         run: npm ci && npm run build
       - name: Self-check against the hand-made fixture
         run: node scripts/ci/metar-live.mjs --file connector/fixtures/awc-metar.handmade.json --ids KMEM,KATL,KSEA,KORD,EGLL
+      - name: Self-check against the recorded live response (2026-10-14)
+        run: node scripts/ci/metar-live.mjs --file connector/fixtures/awc-metar.recorded-2026-10-14.json --ids KMEM,KATL,EGLL,KJFK
       - name: Live METAR check (KMEM, KATL, EGLL, KJFK)
         run: node scripts/ci/metar-live.mjs --ids KMEM,KATL,EGLL,KJFK
