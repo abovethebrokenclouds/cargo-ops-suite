@@ -326,6 +326,27 @@ export const payloadCheckSchema = z.object({
   /** TOTAL WEIGHT and MAX GROSS WEIGHT when the sim reports them, pounds. */
   totalLb: finite().nonnegative().optional(),
   maxGrossLb: finite().nonnegative().optional(),
+  /** What an `overloaded` status rests on: the sim's TOTAL WEIGHT, or the payload you entered. */
+  overBasis: z.enum(["total_weight", "entered"]).optional(),
+  /**
+   * Payload entered by the player for this mission, kg (source `player`, never sim). It only
+   * stands in for an `unknown` station readout and never overrides a sim reading.
+   */
+  enteredKg: finite().nonnegative().optional(),
+  /**
+   * used: no station readout, the entered value is shown in its place (bonuses unaffected);
+   * agrees / contradicts: the sim reading decides, the entered value is shown beside it.
+   */
+  enteredRole: z.enum(["used", "agrees", "contradicts"]).optional(),
+  /** EMPTY WEIGHT and fuel on board when the sim reports them, pounds. */
+  emptyLb: finite().nonnegative().optional(),
+  fuelLb: finite().nonnegative().optional(),
+  /** TOTAL WEIGHT − EMPTY WEIGHT − fuel, kg: a second source; absent when not all reported. */
+  impliedKg: finite().nonnegative().optional(),
+  /** Implied payload compared with the station sum (or the entered value plus crew setting). */
+  crossCheck: z.enum(["match", "mismatch"]).optional(),
+  crossCheckWith: z.enum(["stations", "entered"]).optional(),
+  crossCheckToleranceKg: finite().nonnegative().optional(),
   message: z.string(),
   /** Wall clock of the check, ISO 8601. */
   checkedAt: z.string(),
@@ -373,6 +394,11 @@ export const missionSchema = z.object({
   wear: finite().nonnegative().optional(),
   /** Cargo vs sim payload: live preview while loaded, frozen at departure. */
   payloadCheck: payloadCheckSchema.optional(),
+  /**
+   * Payload entered by the player for this mission, kg (`mission.load` or `mission.payload`
+   * before departure). Labelled "entered by you"; only used when the sim reports no stations.
+   */
+  enteredPayloadKg: finite().nonnegative().optional(),
   /** METAR flight category at departure (origin) and arrival (destination); weather bonus. */
   weather: missionWeatherSchema.optional(),
   /**
@@ -429,7 +455,13 @@ export const missionLoadArgsSchema = z
      * this a transit leg for every job going further (docs/ECONOMY.md "Transit cargo").
      */
     destination: icao().optional(),
+    /** Payload you loaded, kg (docs/ECONOMY.md "Payload entered by you"). */
+    enteredPayloadKg: finite().min(0).max(200_000).optional(),
   })
+  .strict();
+/** `mission.payload`: set (kg) or clear (null) the payload entered for the loaded mission. */
+export const missionPayloadArgsSchema = z
+  .object({ kg: finite().min(0).max(200_000).nullable() })
   .strict();
 export const settingsUpdateArgsSchema = z
   .object({
