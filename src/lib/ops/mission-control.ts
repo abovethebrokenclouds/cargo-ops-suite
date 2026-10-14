@@ -489,7 +489,10 @@ export function describeEvent(ev: ReceivedEvent): LoopLine {
       text = "SIMULATOR DISCONNECTED";
       break;
     case "sim.paused":
-      text = d["paused"] === false ? "SIM RESUMED" : "SIM PAUSED";
+      // `event` says what the connector's effective pause came from (docs/SIMVARS.md).
+      if (d["event"] === "SimStop" && d["paused"] !== false) text = "SIM STOPPED · MAIN MENU";
+      else if (d["event"] === "stuck_pause") text = "SIM RESUMED · STUCK PAUSE IGNORED";
+      else text = d["paused"] === false ? "SIM RESUMED" : "SIM PAUSED";
       break;
     case "sim.rate": {
       const rate = num(d["rate"]) ?? num(d["simRate"]);
