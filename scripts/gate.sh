@@ -100,8 +100,14 @@ fi
 if [ $E2E = 1 ]; then
   # Same order as the CI e2e job: connector built, then a fresh SPA build for it to serve.
   step "web: build:local after connector build" "bun run build:local" || BUILD_FAILED=1
+  # The demo project serves the SSR build (.output, built in the web steps above) on E2E_PORT.
+  # Pick a free port unless one is given, so gates in parallel worktrees never collide.
+  if [ -z "${E2E_PORT:-}" ]; then
+    E2E_PORT="$(node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')"
+  fi
+  export E2E_PORT
   if [ $BUILD_FAILED = 0 ]; then
-    step "e2e (playwright)" "bun run e2e"
+    step "e2e (playwright, demo port $E2E_PORT)" "bun run e2e"
   else
     skip "e2e (playwright)" "a build failed"
   fi

@@ -45,11 +45,16 @@ export function KeyboardShortcuts() {
       if (!openRef.current && document.querySelector('[role="dialog"], [role="alertdialog"]')) {
         return;
       }
-      // Time the chord with the event's own timestamp (when the key was pressed), not the
-      // handling time: a busy main thread (e.g. the map initialising) must not split `g f`.
+      // Time the chord with the event's own timestamp (when the key was pressed), and start
+      // the window when the page actually processed the `g` (and its release, see onKeyUp):
+      // time the main thread was blocked (a route rendering, the map initialising) must not
+      // split `g f`, whether the block fell before the second key or between the two.
       const action = machine.current.handle(e, e.timeStamp, pathRef.current);
       if (!action) return;
-      if (action.type === "pending") return;
+      if (action.type === "pending") {
+        machine.current.responded(performance.now());
+        return;
+      }
       e.preventDefault();
       if (action.type === "help") setOpen((o) => !o);
       else if (action.type === "toggle-follow") {
@@ -59,11 +64,16 @@ export function KeyboardShortcuts() {
         void navigate({ to: action.to });
       }
     };
+    const onKeyUp = () => {
+      if (machine.current.pending) machine.current.responded(performance.now());
+    };
     const onOpen = () => setOpen(true);
     window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
     window.addEventListener(OPEN_SHORTCUTS_EVENT, onOpen);
     return () => {
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener(OPEN_SHORTCUTS_EVENT, onOpen);
     };
   }, [navigate]);

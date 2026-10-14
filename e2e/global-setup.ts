@@ -1,9 +1,9 @@
 import { chromium, type FullConfig } from "@playwright/test";
 
-// The Vite dev server pre-bundles dependencies (MapLibre among them) on its first page
-// load, which can take longer than an assertion timeout on a cold CI runner. Load the
-// heaviest routes once and wait for the app to hydrate before any test runs, so the
-// tests measure the app rather than the dev server's one-time warm-up.
+// Load the heaviest routes once and wait for the app to hydrate before any test runs, so the
+// tests measure the app rather than one-time warm-up: the first SSR render loads the server
+// chunks, and with E2E_DEMO_DEV=1 the Vite dev server pre-bundles dependencies (MapLibre
+// among them) on its first page load.
 export default async function globalSetup(config: FullConfig) {
   const demo = config.projects.find((p) => p.name === "demo");
   const baseURL = demo?.use.baseURL;

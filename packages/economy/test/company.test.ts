@@ -38,6 +38,9 @@ import {
   type BookNotice,
   type CompanyCore,
 } from "../src/index";
+import type { EconomyAirport } from "../src/airports";
+import { nearestLargeAirportNm } from "../src/costs";
+import { greatCircleNm } from "../src/geo";
 import { bundledAirports } from "./airports";
 
 const lookup = airportLookup(bundledAirports());
@@ -164,11 +167,54 @@ describe("costs", () => {
     });
     expect(fuelPrice(kmem, lookup.list).usdPerKg).toBe(1.948);
     expect(fuelPrice(katl, lookup.list)).toEqual(fuelPrice(katl, [...lookup.list].reverse()));
+    // Every bundled airport, collected into one assertion each. Prices must also be the same
+    // from a reversed list (determinism does not depend on list order).
+    const reversed = [...lookup.list].reverse();
+    const outOfRange: string[] = [];
+    const orderDependent: string[] = [];
     for (const a of lookup.list) {
-      const p = fuelPrice(a, lookup.list).usdPerKg;
-      expect(p).toBeGreaterThanOrEqual(1.95 * 0.8 - 0.001);
-      expect(p).toBeLessThanOrEqual(1.95 * 1.2 + 0.001);
+      const price = fuelPrice(a, lookup.list);
+      if (price.usdPerKg < 1.95 * 0.8 - 0.001 || price.usdPerKg > 1.95 * 1.2 + 0.001) {
+        outOfRange.push(`${a.ident} ${price.usdPerKg}`);
+      }
+      if (fuelPrice(a, reversed).usdPerKg !== price.usdPerKg) orderDependent.push(a.ident);
     }
+    expect(outOfRange).toEqual([]);
+    expect(orderDependent).toEqual([]);
+  });
+
+  it("nearest large airport: the pruned search equals a full scan", () => {
+    const fullScan = (a: EconomyAirport): number | null => {
+      let best: number | null = null;
+      for (const o of lookup.list) {
+        if (o.type !== "large" || o.ident === a.ident) continue;
+        const d = greatCircleNm(a, o);
+        if (best === null || d < best) best = d;
+      }
+      return best;
+    };
+    // A deterministic spread of the bundled airports (every 20th: both sizes, all latitudes).
+    const sample = lookup.list.filter((_, i) => i % 20 === 0);
+    const mismatches: string[] = [];
+    for (const a of sample) {
+      if (nearestLargeAirportNm(a, lookup.list) !== fullScan(a)) mismatches.push(a.ident);
+    }
+    expect(sample.length).toBeGreaterThan(200);
+    expect(mismatches).toEqual([]);
+    // Edge cases: across the pole, across the antimeridian, no other large airport.
+    const at = (ident: string, lat: number, lon: number, t: EconomyAirport["type"] = "large") =>
+      ({ ident, lat, lon, type: t }) as EconomyAirport;
+    const pole = [at("A", 89, 0), at("B", 89, 180)];
+    const antimeridian = [at("C", -10, 179.9), at("D", -10, -179.9)];
+    expect(nearestLargeAirportNm(pole[0] as EconomyAirport, pole)).toBeCloseTo(120.1, 1);
+    expect(nearestLargeAirportNm(antimeridian[0] as EconomyAirport, antimeridian)).toBeCloseTo(
+      11.8,
+      1,
+    );
+    expect(nearestLargeAirportNm(at("X", 0, 0, "medium"), [at("Y", 0, 0, "medium")])).toBeNull();
+    expect(nearestLargeAirportNm(pole[0] as EconomyAirport, [pole[0] as EconomyAirport])).toBe(
+      null,
+    );
   });
 
   it("landing fees by airport size and category", () => {

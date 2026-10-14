@@ -85,6 +85,18 @@ export class ShortcutMachine {
     return this.pendingSince !== null;
   }
 
+  /**
+   * The page has just processed a key event of the pending chord (the `g` itself, or its
+   * release) at `at`, on the same clock as the timestamps passed to `handle`. The chord window
+   * then runs from here: the time the page spent unable to process input does not count
+   * against the person typing. Without this, a main thread blocked between `g` and its
+   * release (e.g. a page rendering after navigation) could expire the chord although the
+   * next key followed immediately once the page responded.
+   */
+  responded(at: number): void {
+    if (this.pendingSince !== null && at > this.pendingSince) this.pendingSince = at;
+  }
+
   handle(input: KeyInput, now: number, pathname: string): ShortcutAction | null {
     if (input.ctrlKey || input.metaKey || input.altKey) {
       this.reset();
