@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Response } from "@playwright/test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -65,15 +65,48 @@ test.afterAll(async () => {
   await other?.close();
 });
 
-/** Open `host` with an iframe on `src`; returns the "Refused to frame …" console lines. */
-async function hostPage(page: Page, host: HostServer, src: string): Promise<string[]> {
-  const refused: string[] = [];
+interface Hosted {
+  /** Console lines about a blocked frame (wording differs between Chromium versions). */
+  blockedLogs: string[];
+  /** The response the framed document's navigation received (its headers decide framing). */
+  frameResponse: Response;
+}
+
+/** Open `host` with an iframe on `src`; returns the framed navigation's response. */
+async function hostPage(page: Page, host: HostServer, src: string): Promise<Hosted> {
+  const blockedLogs: string[] = [];
   page.on("console", (msg) => {
-    if (/Refused to (frame|display)/i.test(msg.text())) refused.push(msg.text());
+    // Older Chromium: "Refused to frame ..."; newer: "Framing '...' violates ... frame-ancestors".
+    if (
+      /Refused to (frame|display)|Framing .* violates|frame-ancestors|X-Frame-Options/i.test(
+        msg.text(),
+      )
+    ) {
+      blockedLogs.push(msg.text());
+    }
   });
   host.frameSrc = src;
-  await page.goto(`${host.origin}/`);
-  return refused;
+  const response = page.waitForResponse(
+    (r) => r.url() === src && r.request().isNavigationRequest(),
+  );
+  await page.goto(`${host.origin}/`); // waits for the load event, iframe included
+  return { blockedLogs, frameResponse: await response };
+}
+
+/** The iframe's document is not the requested URL and holds none of the app. */
+async function expectNotRendered(page: Page, src: string, label: string): Promise<void> {
+  const frame = await (await page.locator("#panel").elementHandle())!.contentFrame();
+  expect(frame, label).not.toBeNull();
+  // Chromium replaces a refused frame with its error page (chrome-error://...), never `src`.
+  expect(frame!.url(), label).not.toBe(src);
+  expect(
+    await frame!.locator('[data-testid="page"], [data-testid="compact-panel"]').count(),
+    label,
+  ).toBe(0);
+  expect(
+    await page.evaluate(() => (window as unknown as { __messages: unknown[] }).__messages),
+    label,
+  ).toEqual([]);
 }
 
 test("/panel renders inside a frame from another origin and connects in replay", async ({
@@ -106,24 +139,32 @@ test("/panel renders inside a frame from another origin and connects in replay",
 });
 
 test("an origin that was not allowed cannot frame /panel", async ({ page }) => {
-  const refused = await hostPage(page, other!, `${connector!.url}/panel`);
-  await expect.poll(() => refused.length, { timeout: 10_000 }).toBeGreaterThan(0);
-  expect(refused.join("\n")).toMatch(/frame-ancestors/);
+  const src = `${connector!.url}/panel`;
+  const { frameResponse, blockedLogs } = await hostPage(page, other!, src);
+  // The security property: the headers /panel was served with exclude this origin.
+  const headers = frameResponse.headers();
+  expect(frameResponse.status()).toBe(200);
+  expect(headers["x-frame-options"]).toBeUndefined();
+  const csp = headers["content-security-policy"] ?? "";
+  expect(csp).toBe(`frame-ancestors 'self' coui: ${allowed!.origin}`);
+  expect(csp).not.toContain(other!.origin);
+  // And the browser enforced it: nothing of the app rendered, no ready message.
   await page.waitForTimeout(500);
-  expect(await page.frameLocator("#panel").getByTestId("compact-panel").count()).toBe(0);
-  expect(
-    await page.evaluate(() => (window as unknown as { __messages: unknown[] }).__messages),
-  ).toEqual([]);
+  await expectNotRendered(page, src, "/panel from a disallowed origin");
+  // Optional extra signal; its wording depends on the Chromium version.
+  if (blockedLogs.length > 0) expect(blockedLogs.join("\n")).toMatch(/frame-ancestors/);
 });
 
 test("no other route can be framed, even from the allowed origin", async ({ page }) => {
   for (const path of ["/flight", "/settings", "/"]) {
     const p = await page.context().newPage();
-    const refused = await hostPage(p, allowed!, `${connector!.url}${path}`);
-    await expect.poll(() => refused.length, { timeout: 10_000 }).toBeGreaterThan(0);
-    expect(refused.join("\n"), path).toMatch(/frame-ancestors 'none'|X-Frame-Options/);
+    const src = `${connector!.url}${path}`;
+    const { frameResponse } = await hostPage(p, allowed!, src);
+    const headers = frameResponse.headers();
+    expect(headers["x-frame-options"], path).toBe("DENY");
+    expect(headers["content-security-policy"], path).toBe("frame-ancestors 'none'");
     await p.waitForTimeout(300);
-    expect(await p.frameLocator("#panel").getByTestId("page").count(), path).toBe(0);
+    await expectNotRendered(p, src, path);
     await p.close();
   }
 });
