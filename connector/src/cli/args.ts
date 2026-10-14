@@ -128,7 +128,8 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
         break;
       case "--lan": {
         const next = inline ?? (args[0] && !args[0].startsWith("--") ? args.shift() : undefined);
-        if (next !== undefined && next.trim() === "") return { ok: false, error: "--lan address is empty" };
+        if (next !== undefined && next.trim() === "")
+          return { ok: false, error: "--lan address is empty" };
         options.lan = next ?? "0.0.0.0";
         break;
       }

@@ -174,19 +174,20 @@ export function ConnectorPanel({ ctx }: { ctx: SettingsContext }) {
         <summary className="cursor-pointer text-foreground">Port and token reset</summary>
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>
-            The connector listens on 127.0.0.1 only (default port 4311). Another port:{" "}
+            The connector listens on 127.0.0.1 only (default port 4311) unless you turn on LAN
+            access below. Another port:{" "}
             <code className="font-mono">scripts\start-cargo-ops.cmd --port 4312</code>, then open
             that port.
           </li>
           <li>
             The token only protects the local API from other web pages; this page fetches it itself
-            and never shows it in full.
+            and never shows it in full. It never leaves this PC: LAN devices pair and get their own.
           </li>
           <li>
             Reset it: stop the connector and start it with{" "}
             <code className="font-mono">--reset-token</code> (or delete{" "}
             <code className="font-mono">%LOCALAPPDATA%\CargoOps\config.json</code>), then reload
-            open tabs.
+            open tabs. A reset also unpairs every LAN device.
           </li>
         </ul>
       </details>

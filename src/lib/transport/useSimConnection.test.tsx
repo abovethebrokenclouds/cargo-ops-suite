@@ -122,6 +122,48 @@ describe("SimConnectionProvider", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("on an unpaired LAN device: asks to pair, does not retry, reconnects after pairing", async () => {
+    let paired = false;
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        paired
+          ? new Response(JSON.stringify({ token: "lan-tok", wsUrl: "/ws", scope: "lan" }), {
+              headers: { "Content-Type": "application/json" },
+            })
+          : new Response(JSON.stringify({ error: "pairing_required" }), { status: 403 }),
+      ),
+    );
+    let ctx: ReturnType<typeof useSimConnection> | null = null;
+    function PairProbe() {
+      ctx = useSimConnection();
+      return <span data-testid="pairing">{ctx.pairingRequired ? "pair" : "no"}</span>;
+    }
+    render(
+      <SimConnectionProvider
+        options={{
+          origin: "http://192.168.1.5:4311",
+          connectorFlag: "1",
+          href: "http://192.168.1.5:4311/",
+          fetch: fetchImpl as unknown as typeof fetch,
+          WebSocketImpl: FakeWs,
+        }}
+      >
+        <PairProbe />
+      </SimConnectionProvider>,
+    );
+    await flush();
+    expect(screen.getByTestId("pairing").textContent).toBe("pair");
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    paired = true;
+    await act(async () => {
+      (ctx as unknown as { reconnect: () => void }).reconnect();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId("pairing").textContent).toBe("no");
+    expect(FakeWs.last?.url).toBe("ws://192.168.1.5:4311/ws");
+  });
+
   it("connects live with the session token and requests a resync on a seq gap", async () => {
     const fetchImpl = vi.fn(() =>
       Promise.resolve(

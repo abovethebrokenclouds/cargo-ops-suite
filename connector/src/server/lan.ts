@@ -107,11 +107,11 @@ export function formatPairingCode(code: string): string {
 export function sanitizeDeviceName(input: unknown): string {
   const raw = typeof input === "string" ? input : "";
   // Printable characters only, collapsed whitespace.
-  const clean = raw
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, MAX_DEVICE_NAME);
+  const printable = Array.from(raw, (ch) => {
+    const c = ch.charCodeAt(0);
+    return c < 0x20 || c === 0x7f ? " " : ch;
+  }).join("");
+  const clean = printable.replace(/\s+/g, " ").trim().slice(0, MAX_DEVICE_NAME);
   return clean || "LAN device";
 }
 
@@ -153,7 +153,13 @@ export function clearLanDevices(dataDir: string): void {
 
 export type PairResult =
   | { ok: true; token: string; device: LanDevice }
-  | { ok: false; status: 401 | 429; code: "invalid_code" | "pairing_locked"; message: string; retryAfterSec?: number };
+  | {
+      ok: false;
+      status: 401 | 429;
+      code: "invalid_code" | "pairing_locked";
+      message: string;
+      retryAfterSec?: number;
+    };
 
 export interface LanAccessOptions {
   /** Where lan-devices.json lives; null keeps devices in memory (tests). */

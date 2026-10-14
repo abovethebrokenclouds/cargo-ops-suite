@@ -15,6 +15,7 @@ import { AppNav } from "../components/AppNav";
 import { KeyboardShortcuts } from "../components/KeyboardShortcuts";
 import { useHydrated } from "../hooks/use-hydrated";
 import { ConnectedStatusChip } from "../components/status/ConnectedStatusChip";
+import { PairDeviceGate } from "../components/settings/PairDevice";
 import { SimConnectionProvider } from "../lib/transport/useSimConnection";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -146,6 +147,7 @@ function RootComponent() {
       <SimConnectionProvider>
         <AppNav statusSlot={<ConnectedStatusChip />} />
         <main id="main-content" tabIndex={-1} className="mx-auto max-w-7xl px-4 pb-24 md:px-6">
+          <PairDeviceGate />
           <div
             key={hydrated ? pathname : "shell"}
             className="animate-in fade-in duration-300 motion-reduce:animate-none"

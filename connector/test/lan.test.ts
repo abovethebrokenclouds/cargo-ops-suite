@@ -506,7 +506,9 @@ describe("connector with --lan (LAN client played over 127.0.0.1)", () => {
     assert.equal(view.code.code, code);
     assert.deepEqual(view.code.pairUrls, [`http://${LAN_IP}:${port}/settings#pair=${code}`]);
     const wrong = await withLan(() =>
-      lanReq("POST", "/api/lan/pair", { body: { code: code === "ZZZZZZZZ" ? "YYYYYYYY" : "ZZZZZZZZ" } }),
+      lanReq("POST", "/api/lan/pair", {
+        body: { code: code === "ZZZZZZZZ" ? "YYYYYYYY" : "ZZZZZZZZ" },
+      }),
     );
     assert.equal(wrong.status, 401);
     assert.equal(wrong.json()["error"], "invalid_code");
@@ -594,11 +596,19 @@ describe("connector with --lan (LAN client played over 127.0.0.1)", () => {
     );
     assert.equal(session.status, 403);
     // Unbound address on the right port, wrong port on a bound address, any hostname.
-    for (const host of [`192.0.2.99:${port}`, `${LAN_IP}:${port + 1}`, `evil.example:${port}`, `${LAN_IP}`]) {
+    for (const host of [
+      `192.0.2.99:${port}`,
+      `${LAN_IP}:${port + 1}`,
+      `evil.example:${port}`,
+      `${LAN_IP}`,
+    ]) {
       const r = await http(port, "GET", "/api/health", { host });
       assert.equal(r.status, 421, host);
     }
-    assert.equal(await upgradeStatus(`ws://127.0.0.1:${port}/ws`, `http://192.0.2.99:${port}`), 403);
+    assert.equal(
+      await upgradeStatus(`ws://127.0.0.1:${port}/ws`, `http://192.0.2.99:${port}`),
+      403,
+    );
     assert.equal(await upgradeStatus(`ws://127.0.0.1:${port}/ws`, evil), 403);
     assert.equal(await upgradeStatus(`ws://127.0.0.1:${port}/ws`, lanOrigin), 101);
   });
@@ -639,7 +649,9 @@ describe("connector with --lan (LAN client played over 127.0.0.1)", () => {
     now += FAILURE_WINDOW_MS; // earlier tests' wrong codes no longer count
     const code = await newCode();
     for (let i = 0; i < MAX_FAILURES_PER_ADDRESS; i++) {
-      const r = await withLan(() => lanReq("POST", "/api/lan/pair", { body: { code: "ZZZZZZZZ" } }));
+      const r = await withLan(() =>
+        lanReq("POST", "/api/lan/pair", { body: { code: "ZZZZZZZZ" } }),
+      );
       assert.equal(r.status, 401);
     }
     const locked = await withLan(() => lanReq("POST", "/api/lan/pair", { body: { code } }));
