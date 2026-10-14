@@ -53,6 +53,7 @@ async function main(): Promise<number> {
       speed: options.speed,
       loop: options.loop,
       devOrigins: options.devOrigins,
+      panelFrameAncestors: options.panelFrameAncestors,
       resetToken: options.resetToken,
       backupKeep: options.backupKeep,
       verbose: options.verbose,

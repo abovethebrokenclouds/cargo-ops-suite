@@ -78,9 +78,81 @@ export function bearerToken(header: string | undefined): string | undefined {
 
 export const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
+  // No page of the connector may be framed by another page (clickjacking), with one exception:
+  // the read-only /panel route below, shown inside the simulator's toolbar panel.
   "X-Frame-Options": "DENY",
+  "Content-Security-Policy": "frame-ancestors 'none'",
   "Referrer-Policy": "no-referrer",
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Resource-Policy": "same-origin",
   "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 };
+
+// ---- In-sim toolbar panel (msfs-panel/, docs/SETUP_WINDOWS.md "Toolbar panel") ----
+//
+// The simulator's toolbar panel is an HTML page inside the sim (served from its own `coui:`
+// scheme) that shows http://127.0.0.1:<port>/panel in an iframe. Only that exact path may be
+// framed, and only by the ancestors listed here:
+//  - the panel page is read-only (no buttons that change anything, no links to other routes),
+//    so a framing page has nothing to trick the player into clicking (clickjacking);
+//  - a framing page cannot read the frame's content (different origin), and the access token
+//    still only comes from same-origin GET /api/session to a loopback client;
+//  - every other path keeps X-Frame-Options: DENY and frame-ancestors 'none', and the web app
+//    refuses to render any other route inside a frame (src/lib/framing.ts) in case the
+//    in-frame app navigates client-side.
+
+/** The one route that may be framed. Exact match: "/panel/x" or "/panel?…" paths differ. */
+export const PANEL_PATH = "/panel";
+
+/** Default ancestors for /panel: this connector itself and the simulator's `coui:` UI scheme. */
+export const DEFAULT_PANEL_FRAME_ANCESTORS: readonly string[] = ["'self'", "coui:"];
+
+/** `--panel-frame-ancestor any`: send no framing restriction at all for /panel. */
+export const ANY_FRAME_ANCESTOR = "any";
+
+/**
+ * Validate one extra frame ancestor given on the command line: an http(s) origin, a bare
+ * scheme such as `coui:`, or `any`. Anything else (paths, wildcards, quotes, `;`) is refused
+ * so the value can never inject another CSP directive.
+ */
+export function normalizeFrameAncestor(value: string): string {
+  const v = value.trim();
+  if (v.toLowerCase() === ANY_FRAME_ANCESTOR) return ANY_FRAME_ANCESTOR;
+  if (/^[a-z][a-z0-9+.-]*:$/i.test(v)) {
+    const scheme = v.toLowerCase();
+    // A bare web scheme would let every web site frame the panel; say `any` if that is meant.
+    if (["http:", "https:", "ws:", "wss:", "data:", "blob:"].includes(scheme)) {
+      throw new Error(`frame ancestor ${value} is too broad: give an origin, or "any"`);
+    }
+    return scheme;
+  }
+  let url: URL;
+  try {
+    url = new URL(v);
+  } catch {
+    throw new Error(
+      `frame ancestor must be an http(s) origin, a scheme like coui: or "any": ${value}`,
+    );
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.origin !== v.replace(/\/$/, "").toLowerCase()
+  ) {
+    throw new Error(`frame ancestor must be an http(s) origin without a path: ${value}`);
+  }
+  return url.origin;
+}
+
+/**
+ * Framing headers for a response: `null` means "keep the strict defaults" (X-Frame-Options
+ * DENY, frame-ancestors 'none'). For /panel the X-Frame-Options header is dropped (it cannot
+ * name an allowed ancestor) and the CSP lists the allowed ancestors, or is dropped with `any`.
+ */
+export function panelFramingHeaders(
+  pathname: string,
+  ancestors: readonly string[],
+): { csp: string | null } | null {
+  if (pathname !== PANEL_PATH) return null;
+  if (ancestors.includes(ANY_FRAME_ANCESTOR)) return { csp: null };
+  return { csp: `frame-ancestors ${[...new Set(ancestors)].join(" ")}` };
+}

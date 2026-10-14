@@ -11,7 +11,7 @@ import { FakeSource } from "../sim/fake-source";
 import { SimConnectSource } from "../sim/simconnect-source";
 import type { LogFn, SimSource } from "../sim/source";
 import { unverifiedSimVars } from "../sim/simvars";
-import { normalizeOrigin } from "../server/security";
+import { normalizeFrameAncestor, normalizeOrigin } from "../server/security";
 import { LanAccess, clearLanDevices, lanInterfaceAddresses, validateLanBind } from "../server/lan";
 import { startServer, type RunningServer } from "../server/server";
 import { openStorage, type Storage } from "../storage/db";
@@ -71,6 +71,8 @@ export interface ConnectorOptions {
   /** Local basemap folder (default <dataDir>/basemap). */
   basemapDir?: string;
   devOrigins?: string[];
+  /** Extra frame ancestors for /panel (`--panel-frame-ancestor`; see server/security.ts). */
+  panelFrameAncestors?: string[];
   resetToken?: boolean;
   verbose?: boolean;
   quiet?: boolean;
@@ -139,6 +141,10 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
   log("info", `Data directory: ${options.dataDir}`);
 
   const devOrigins = (options.devOrigins ?? []).map(normalizeOrigin);
+  const panelFrameAncestors = (options.panelFrameAncestors ?? []).map(normalizeFrameAncestor);
+  if (panelFrameAncestors.length > 0) {
+    log("info", `/panel may also be framed by: ${panelFrameAncestors.join(" ")}`);
+  }
   const { config, created } = loadOrCreateConfig(options.dataDir, {
     ...(options.resetToken ? { resetToken: true } : {}),
   });
@@ -281,6 +287,7 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
       ...(options.web ? { webDir: resolve(options.web) } : {}),
       basemapDir: resolve(options.basemapDir ?? join(options.dataDir, "basemap")),
       devOrigins,
+      panelFrameAncestors,
       ...(options.pingIntervalMs ? { pingIntervalMs: options.pingIntervalMs } : {}),
       log,
       lan: {
