@@ -52,11 +52,19 @@ Values are tagged `SIM`, `REPLAY` or `DEMO`; a dash means "no data", never a mad
    Block-out starts the mission; **Live Flight** (`g` `f`) shows altitude, speeds, fuel,
    endurance vs ETE, phase, payload and, after touchdown, the landing grade. **Weather en
    route** shows the origin and destination METAR: a VFR / MVFR / IFR / LIFR chip, wind,
-   visibility, ceiling, how old the observation is and the raw text on request. On the job board
-   each contract has a **Weather** button with the same view. For simulation only: never use it
-   for real-world flight planning.
+   visibility, ceiling, how old the observation is and the raw text on request. Below them the
+   destination **TAF** (forecast) is a timeline: each forecast period coloured by its flight
+   category, TEMPO / PROB30 / BECMG changes as outlined bars under it, a tick for now and, while
+   you fly, an **ETA** marker with the category forecast for your arrival (and any temporary
+   change then). The period list and the raw TAF are underneath. Many small airports publish no
+   TAF; you then see a note instead. On the job board each contract has a **Weather** button with
+   the same view. For simulation only: never use it for real-world flight planning.
 2. Fly it. The **Map** (`g` `m`) follows the aircraft (`f` toggles follow), with route, trail,
-   airports, your FBOs and demand events.
+   airports, your FBOs and demand events. Small coloured **METAR badges** (VFR green, MVFR blue,
+   IFR red, LIFR magenta) sit up and to the right of the origin, the destination and the airports
+   of your accepted jobs; hover or tap one (or use the **METAR** list at the bottom left) for the
+   raw report and its age. The cloud button in the map controls hides them. They use the same
+   METAR request as the rest of the page, nothing extra.
 3. Land, taxi in, **park with engines off and the brake set**. The leg is verified (≥ 90 % of
    the distance flown, arrival within 3 nm, no teleport/slew, sim rate ≤ 8×) and the payout is
    booked with its breakdown: landing grade multiplier, lateness, fuel at the landing airport's
@@ -100,9 +108,11 @@ Shortcuts are ignored while you type in a field.
 - **Connector**: address and a masked token (reset with `--reset-token`, setup guide §6).
 - **Basemap**: local extract → online OpenFreeMap (switch off to stay offline) → outline.
 - **Weather** (this browser): **Online weather** lets the connector fetch origin and destination
-  METARs from aviationweather.gov (NOAA, no account) for Live Flight and the job board; switch it
-  off and no weather request leaves your PC. Replays and the demo show **SAMPLE** METARs, which
-  are examples, never real weather.
+  METARs and the destination TAF from aviationweather.gov (NOAA, no account) for Live Flight, the
+  job board and the map badges; switch it off and no weather request leaves your PC. The
+  connector keeps METARs 10 minutes and TAFs 30 minutes (TAFs are issued about every 6 hours) and
+  never shows a TAF whose validity has ended. Replays and the demo show **SAMPLE** METARs and
+  TAFs, which are examples, never real weather.
 - **Data**: **Back up now**, the backup list (a daily backup is automatic, newest 14 kept),
   career export/import (import replaces the career; refused during a flight). Restoring a backup
   is manual with the connector stopped — steps in the page and in setup guide §6.
