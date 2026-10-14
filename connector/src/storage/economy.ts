@@ -397,10 +397,10 @@ export class EconomyRepo {
     this.db
       .prepare(
         `INSERT INTO jobs (id, status, origin, dest, cargo_kind, weight_kg, payout, deadline_at, json,
-           created_at, mission_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           created_at, mission_id, location)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET status = excluded.status, payout = excluded.payout,
-           json = excluded.json, mission_id = excluded.mission_id`,
+           json = excluded.json, mission_id = excluded.mission_id, location = excluded.location`,
       )
       .run(
         job.id,
@@ -414,6 +414,8 @@ export class EconomyRepo {
         JSON.stringify(job),
         ms(job.createdAt),
         job.missionId ?? null,
+        // Transit cargo: where the cargo is now (migration 7).
+        job.transit?.location ?? job.origin,
       );
   }
 

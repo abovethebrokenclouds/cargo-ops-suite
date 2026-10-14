@@ -96,6 +96,18 @@ export const REPUTATION = {
   start: 50,
 } as const;
 
+/**
+ * Transit cargo (docs/ECONOMY.md "Transit cargo"). Long-haul jobs go beyond one leg's direct
+ * range (80 % of the aircraft range) up to this multiple of it, so they need a transit stop.
+ */
+export const LONG_HAUL_MAX_FACTOR = 2;
+/** Long-haul jobs the connector adds to every board (drawn after the regular jobs). */
+export const LONG_HAUL_JOBS_PER_BOARD = 2;
+/** Extra time a long-haul job allows for the transit stop, minutes. */
+export const TRANSIT_STOP_SLACK_MIN = 60;
+/** Abandoning cargo in transit (job.release of an in-transit job), reputation. */
+export const TRANSIT_ABANDON_REPUTATION = -3;
+
 /** Board size and lifetime. */
 export const BOARD_SIZE = 24;
 export const BOARD_LIFETIME_MIN = 24 * 60;
