@@ -1,9 +1,10 @@
-import { Clock, Package, Ruler, Weight } from "lucide-react";
-import type { ReactNode } from "react";
+import { Clock, CloudSun, Package, Ruler, Weight } from "lucide-react";
+import { useState, type ReactNode } from "react";
 
 import type { AircraftType, CargoKind, Job, Source } from "@cargo-ops/protocol";
 import { KIND_LABELS, type AirportLookup } from "@cargo-ops/economy";
 import { SourceTag } from "@/components/status/SourceTag";
+import { RouteWeather } from "@/components/weather/RouteWeather";
 import { jobSuitability, type SuitabilityBadge } from "@/lib/economy/board";
 import { formatInt, formatMinutes, formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -76,6 +77,7 @@ export function MissionCard({
   className,
 }: MissionCardProps) {
   const badges = jobSuitability(job, type, lookup);
+  const [showWeather, setShowWeather] = useState(false);
   return (
     <li
       className={cn(
@@ -135,6 +137,21 @@ export function MissionCard({
           </p>
         </div>
         {action}
+      </div>
+      <div className="md:col-span-2">
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-accent hover:text-foreground"
+          aria-expanded={showWeather}
+          onClick={() => setShowWeather((v) => !v)}
+          data-testid="job-weather-toggle"
+        >
+          <CloudSun className="size-4" aria-hidden="true" />
+          {showWeather ? "Hide weather" : `Weather ${job.origin} / ${job.destination}`}
+        </button>
+        {showWeather ? (
+          <RouteWeather className="mt-3" origin={job.origin} destination={job.destination} />
+        ) : null}
       </div>
     </li>
   );

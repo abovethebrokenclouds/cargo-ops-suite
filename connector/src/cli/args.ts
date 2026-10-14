@@ -15,6 +15,8 @@ export interface CliOptions {
   lan: boolean;
   resetToken: boolean;
   backupKeep: number;
+  /** Weather source; unset = "online" for simconnect, "sample" for fake. */
+  weather?: "online" | "sample" | "off";
   /**
    * Hidden: connect to a SimConnect server over TCP at this host/port instead of the normal
    * discovery (SimConnect.cfg, local pipe, registry port). Used by the protocol emulator tests;
@@ -56,6 +58,13 @@ Data
   --backup-keep <n>       Database backups kept in <data-dir>/backups (default: 14). A daily
                           backup of the career database runs while the connector is up;
                           0 turns the daily backup off (on-demand backups are then all kept)
+
+Weather
+  --weather online|sample|off
+                          METAR source (default: online with --sim simconnect, sample with
+                          --sim fake). online fetches aviationweather.gov (no key, cached
+                          10 min) only while the page's "Online weather" switch is on;
+                          sample serves built-in SAMPLE reports, never real weather
 
 Other
   --open                  Open the browser when the server is ready
@@ -133,6 +142,7 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
       case "--web":
       case "--data-dir":
       case "--basemap-dir":
+      case "--weather":
       case "--simconnect-host":
       case "--simconnect-port":
       case "--backup-keep": {
@@ -161,6 +171,14 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
             return { ok: false, error: "--backup-keep must be an integer between 0 and 3650" };
           }
           options.backupKeep = keep;
+        } else if (flag === "--weather") {
+          if (value !== "online" && value !== "sample" && value !== "off") {
+            return {
+              ok: false,
+              error: `--weather must be "online", "sample" or "off", got "${value}"`,
+            };
+          }
+          options.weather = value;
         } else if (flag === "--simconnect-port") {
           const port = Number(value);
           if (!Number.isInteger(port) || port < 1 || port > 65535) {

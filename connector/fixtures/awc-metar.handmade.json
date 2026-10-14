@@ -1,0 +1,143 @@
+{
+  "_comment": "HAND-MADE, not a recording: aviationweather.gov was unreachable from the build container (egress proxy 403). Shape follows the documented AWC Data API METAR JSON (GET /api/data/metar?ids=...&format=json); station ids are real, every value is invented. Entry 4 deliberately lacks decoded fields so the parser fallback is exercised. A recorded response now lives in awc-metar.recorded-2026-10-14.json; this file keeps the edge cases.",
+  "request": "https://aviationweather.gov/api/data/metar?ids=KMEM,KATL,KSEA,KORD,EGLL&format=json",
+  "response": [
+    {
+      "icaoId": "KMEM",
+      "receiptTime": "2026-10-13T15:56:12.000Z",
+      "obsTime": 1791906780,
+      "reportTime": "2026-10-13T16:00:00.000Z",
+      "temp": 28.3,
+      "dewp": 18.9,
+      "wdir": 200,
+      "wspd": 9,
+      "wgst": null,
+      "visib": "10+",
+      "altim": 1013.5,
+      "slp": 1013.2,
+      "qcField": 4,
+      "wxString": null,
+      "presTend": null,
+      "maxT": null,
+      "minT": null,
+      "maxT24": null,
+      "minT24": null,
+      "precip": null,
+      "pcp3hr": null,
+      "pcp6hr": null,
+      "pcp24hr": null,
+      "snow": null,
+      "vertVis": null,
+      "metarType": "METAR",
+      "rawOb": "KMEM 131553Z 20009KT 10SM FEW040 SCT250 28/19 A2993 RMK AO2 SLP132 T02830189",
+      "mostRecent": 1,
+      "lat": 35.0424,
+      "lon": -89.9767,
+      "elev": 78,
+      "prior": 0,
+      "name": "Memphis Intl, TN, US",
+      "clouds": [
+        {
+          "cover": "FEW",
+          "base": 4000
+        },
+        {
+          "cover": "SCT",
+          "base": 25000
+        }
+      ],
+      "fltCat": "VFR"
+    },
+    {
+      "icaoId": "KATL",
+      "receiptTime": "2026-10-13T15:55:40.000Z",
+      "obsTime": 1791906780,
+      "reportTime": "2026-10-13T16:00:00.000Z",
+      "temp": 21.1,
+      "dewp": 17.8,
+      "wdir": 240,
+      "wspd": 12,
+      "wgst": 20,
+      "visib": 4,
+      "altim": 1010.8,
+      "wxString": "-RA BR",
+      "metarType": "METAR",
+      "rawOb": "KATL 131552Z 24012G20KT 4SM -RA BR BKN015 OVC030 21/18 A2985 RMK AO2",
+      "mostRecent": 1,
+      "lat": 33.6301,
+      "lon": -84.4418,
+      "elev": 308,
+      "name": "Atlanta/Hartsfield Intl, GA, US",
+      "clouds": [
+        {
+          "cover": "BKN",
+          "base": 1500
+        },
+        {
+          "cover": "OVC",
+          "base": 3000
+        }
+      ],
+      "fltCat": "MVFR"
+    },
+    {
+      "icaoId": "KSEA",
+      "receiptTime": "2026-10-13T15:55:10.000Z",
+      "obsTime": 1791906780,
+      "reportTime": "2026-10-13T16:00:00.000Z",
+      "temp": 9,
+      "dewp": 9,
+      "wdir": "VRB",
+      "wspd": 3,
+      "wgst": null,
+      "visib": 0.25,
+      "altim": 1019.6,
+      "wxString": "FG",
+      "metarType": "METAR",
+      "rawOb": "KSEA 131553Z VRB03KT 1/4SM FG VV002 09/09 A3011 RMK AO2",
+      "mostRecent": 1,
+      "lat": 47.4447,
+      "lon": -122.3144,
+      "elev": 115,
+      "name": "Seattle-Tacoma Intl, WA, US",
+      "clouds": [
+        {
+          "cover": "OVX",
+          "base": 200
+        }
+      ],
+      "fltCat": "LIFR"
+    },
+    {
+      "icaoId": "KORD",
+      "obsTime": null,
+      "metarType": "SPECI",
+      "rawOb": "SPECI KORD 131541Z 36008KT 250V320 1 1/2SM BR OVC008 12/11 A3001 RMK AO2",
+      "mostRecent": 1,
+      "name": "Chicago/O Hare Intl, IL, US"
+    },
+    {
+      "icaoId": "EGLL",
+      "receiptTime": "2026-10-13T15:52:00.000Z",
+      "obsTime": 1791906600,
+      "reportTime": "2026-10-13T16:00:00.000Z",
+      "temp": 14,
+      "dewp": 9,
+      "wdir": 250,
+      "wspd": 14,
+      "wgst": null,
+      "visib": "6+",
+      "altim": 1009,
+      "metarType": "METAR",
+      "rawOb": "EGLL 131550Z AUTO 25014KT 9999 NCD 14/09 Q1009",
+      "mostRecent": 1,
+      "name": "London/Heathrow Arpt, EN, GB",
+      "clouds": [
+        {
+          "cover": "CLR"
+        }
+      ],
+      "fltCat": "VFR"
+    }
+  ]
+}

@@ -15,6 +15,7 @@ import { RouteFinder } from "@/components/cargo/RouteFinder";
 import { MetricTile } from "@/components/dashboard/MetricTile";
 import { DemoTag, Panel } from "@/components/dashboard/Panel";
 import { SourceTag } from "@/components/status/SourceTag";
+import { RouteWeatherPanel } from "@/components/weather/RouteWeather";
 import {
   AIRCRAFT_TYPES,
   activeType,
@@ -268,6 +269,14 @@ function Jobs() {
 
         {mission && !demo ? (
           <MissionStrip mission={mission} source={source} className="col-span-12" />
+        ) : null}
+        {mission && !demo && mission.status !== "delivered" ? (
+          <RouteWeatherPanel
+            className="col-span-12"
+            eyebrow={`Mission ${mission.id} weather`}
+            origin={mission.origin}
+            destination={mission.destination}
+          />
         ) : null}
 
         <DemandEvents
