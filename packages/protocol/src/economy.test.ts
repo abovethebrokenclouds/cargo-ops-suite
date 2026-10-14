@@ -160,5 +160,6 @@ describe("transit cargo protocol additions", () => {
     expect(load({ jobIds: ["J-1"], destination: "" })).toBe(false);
     expect(EVENT_NAMES).toContain("job.in_transit");
     expect(EVENT_NAMES).toContain("job.abandoned");
+    expect(EVENT_NAMES).toContain("mission.recovered");
   });
 });
