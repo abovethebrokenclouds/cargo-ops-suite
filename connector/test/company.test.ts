@@ -502,8 +502,13 @@ describe("P4 storage: migration and P3 career import", () => {
       assert.equal(repo.listLedger(1)[0]?.category, "mission_payout");
       assert.equal(repo.listLedger(1)[0]?.balance, 251_000);
       assert.equal(repo.getCompany()?.startingCash, 250_000);
+      // The monthly P&L is rebuilt from the imported ledger (P3 rows are month 0).
+      const pnl = [{ month: 0, revenue: 1_000, expense: 0, net: 1_000 }];
+      assert.deepEqual(repo.getCompany()?.pnl, pnl);
+      assert.equal(repo.getCompany()?.ledgerCount, 1);
       storage.close();
       const r = rig(tmp.dir);
+      assert.deepEqual(r.repo.getCompany()?.pnl, pnl, "kept after the engine loads it");
       assert.equal(r.company().name, "Old Co");
       assert.equal(r.fleet().aircraft[0]?.location, "KATL"); // starter at the imported base
       assert.equal(sumCents(r.repo), Math.round((r.company().cash - 250_000) * 100));

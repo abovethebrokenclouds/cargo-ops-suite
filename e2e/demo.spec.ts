@@ -140,9 +140,17 @@ test.describe("demo mode (no connector)", () => {
     });
     const width = await page.evaluate(() => document.documentElement.scrollWidth);
     expect(width).toBeLessThanOrEqual(390);
-    const nav = await page.getByTestId("console-nav").boundingBox();
-    const perf = await page.getByTestId("console-perf").boundingBox();
-    expect(nav && perf && perf.y > nav.y + nav.height - 1).toBe(true);
+    // Both consoles are measured in one layout snapshot: two separate boundingBox() reads
+    // can straddle a reflow while late demo data grows a console, and overlap falsely.
+    const stacked = () =>
+      page.evaluate(() => {
+        const nav = document.querySelector('[data-testid="console-nav"]')?.getBoundingClientRect();
+        const perf = document
+          .querySelector('[data-testid="console-perf"]')
+          ?.getBoundingClientRect();
+        return Boolean(nav && perf && perf.top > nav.bottom - 1);
+      });
+    await expect.poll(stacked).toBe(true);
   });
 
   test("/flight shows replayed demo values tagged DEMO, never LIVE", async ({ page }) => {
