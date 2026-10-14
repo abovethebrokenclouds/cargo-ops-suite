@@ -42,3 +42,9 @@ data/basemap/
 
 # Windows CI check logs (scripts/ci)
 ci-logs/
+
+# MSFS toolbar panel: package tool output and anything compiled (built on the owner's PC only,
+# never committed; scripts/build-msfs-panel.ps1 builds outside the repository)
+msfs-panel/Packages/
+msfs-panel/_PackageInt/
+*.spb

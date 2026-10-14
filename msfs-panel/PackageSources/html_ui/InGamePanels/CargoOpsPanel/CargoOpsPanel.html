@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<!-- Cargo Ops toolbar panel. Shows the local Cargo Ops page http://127.0.0.1:<port>/panel in an
+     iframe; when Cargo Ops is not running it shows how to start it and keeps retrying.
+     The /SCSS, /JS and /templates paths are the simulator's own UI files, loaded at run time
+     from the simulator; nothing of them is copied into this package. -->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Cargo Ops</title>
+    <link rel="stylesheet" href="/SCSS/common.css" />
+    <link rel="stylesheet" href="CargoOpsPanel.css" />
+    <script type="text/javascript" src="/JS/coherent.js"></script>
+    <script type="text/javascript" src="/JS/common.js"></script>
+    <script type="text/javascript" src="/JS/dataStorage.js"></script>
+    <script type="text/javascript" src="/JS/buttons.js"></script>
+    <script type="text/javascript" src="/JS/Services/ToolBarPanels.js"></script>
+    <link rel="import" href="/templates/ingameUi/ingameUi.html" />
+    <link rel="import" href="/templates/ingameUiHeader/ingameUiHeader.html" />
+    <script type="text/javascript" src="config.js"></script>
+    <script type="text/javascript" src="CargoOpsPanel.js"></script>
+  </head>
+  <body class="border-box">
+    <cargo-ops-panel>
+      <ingame-ui
+        id="CargoOpsPanel"
+        panel-id="PANEL_CARGO_OPS"
+        title="Cargo Ops"
+        class="ingameUiFrame panelInvisible"
+        content-fit="true"
+        min-width="300"
+        min-height="400"
+      >
+        <div id="CargoOpsWrap">
+          <iframe id="CargoOpsFrame" title="Cargo Ops" src="about:blank"></iframe>
+          <div id="CargoOpsFallback" class="is-hidden" role="status">
+            <p class="cargo-ops-title">Cargo Ops is not running</p>
+            <p class="cargo-ops-action">Start Cargo Ops (scripts\start-cargo-ops.cmd)</p>
+            <p class="cargo-ops-detail">
+              Waiting for <span id="CargoOpsAddress">http://127.0.0.1:4311</span>. This panel
+              connects by itself as soon as Cargo Ops is up.
+            </p>
+          </div>
+        </div>
+      </ingame-ui>
+    </cargo-ops-panel>
+  </body>
+</html>

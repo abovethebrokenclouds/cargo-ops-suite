@@ -185,9 +185,10 @@ jobs:
           if-no-files-found: ignore
 
   connector:
-    # W-06, W-29/33/36, W-44, W-45, W-41: the real connector build on Windows paths
-    # (%LOCALAPPDATA%\CargoOps), Windows PowerShell 5.1 for the owner-facing scripts.
-    name: Connector on Windows paths (W-06, W-29, W-33, W-36, W-44, W-45, W-41)
+    # W-06, W-29/33/36, W-44, W-45, W-47, W-41: the real connector build on Windows paths
+    # (%LOCALAPPDATA%\CargoOps), Windows PowerShell 5.1 for the owner-facing scripts. W-47 runs
+    # the toolbar panel build script without the MSFS SDK (a stand-in package tool).
+    name: Connector on Windows paths (W-06, W-29, W-33, W-36, W-44, W-45, W-47, W-41)
     runs-on: windows-latest
     timeout-minutes: 40
     defaults:
@@ -229,6 +230,12 @@ jobs:
         timeout-minutes: 5
         shell: powershell
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\ci\check-shortcuts.ps1
+
+      - name: W-47 build-msfs-panel.ps1 (no-SDK error, Community detection, stand-in package tool, -WhatIf, -Remove)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\ci\check-msfs-panel.ps1
 
       - name: W-41 fetch-basemap.ps1 -MaxZoom 2
         id: basemap
