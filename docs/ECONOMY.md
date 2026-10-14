@@ -1303,9 +1303,19 @@ first leg  = the first duty-window time at or after the assignment
 | Turboprop | single-, twin- and regional-turboprops | $7,500               |
 | Jet       | narrowbody and widebody jets           | $14,000              |
 
-The first month's wage is paid **at hiring**, then every pilot on the payroll is billed at each
+At hiring the wage for **the rest of the current in-game month** is paid, pro-rated by the time
+left and rounded to the cent; then every pilot on the payroll is billed the full wage at each
 month boundary for the coming month (`pilot_wage`, cash may go negative like lease fees).
 Letting a pilot go refunds nothing and stops the wages. At most **10** pilots.
+
+```
+first wage = round(wage in cents × (next month boundary − now) / 30 days) / 100
+```
+
+Examples (turboprop, $7,500): hired at the start of a month → **$7,500**; on day 20 of 30 (10
+days left) → 7,500 × 10 / 30 = **$2,500.00**, then $7,500 at the boundary; one minute before the
+boundary → 7,500 × 60,000 / 2,592,000,000 = **$0.17**, then $7,500 a minute later (never twice
+the full wage for one month).
 
 ## Assignment
 
@@ -1323,8 +1333,11 @@ existing pilot routes (`airport_not_served`). The route must suit the type both 
 
 While assigned the aircraft's fleet status is **`hired`**: `mission.load` on it is refused
 with **`aircraft_with_hired_pilot`** ("… is flown by hired pilot NAME on A–B (simulated):
-unassign the pilot on the Fleet page to fly it yourself"), and selling, returning, repairs,
-annual inspections, deferrals and ferry permits are refused with `aircraft_busy`.
+unassign the pilot on the Fleet page to fly it yourself"), and every other action on it is
+refused with `aircraft_busy`: selling, returning, repairs, annual inspections, deferrals,
+ferry permits, buying or cancelling hull insurance, and pledging it as loan collateral.
+A repossession (missed loan payments on an aircraft pledged before it was assigned) stops the
+route at once with `pilot.route_stopped` (`aircraft_repossessed`).
 `pilot.unassign` makes it available where it is; a leg in progress is **cancelled** (the
 aircraft stays at the leg's departure airport and nothing is booked for that leg).
 
@@ -1390,22 +1403,30 @@ landing fees use the existing `fuel` and `landing_fee` categories with `refType 
 starting cash** to the cent (tests after a day, a month rollover and a 40-day run). Each pilot
 keeps a monthly P&L (last 12 months): income, wages, fuel, fees, `net = income − wages − fuel −
 fees` summed in integer cents, legs, wear points and their repair value (not cash), plus the
-last 10 legs.
+last 10 legs. The domain's monthly totals sum this month's rows over **every** pilot record, so
+a pilot let go this month still counts (the wage was paid), and that pilot stays listed with
+status `fired` until the month ends.
 
 ## Storage, export, API
 
 Migration **9** (idempotent): `hired_pilots(id, status CHECK hired|fired, aircraft_id, json)`;
 the company row gains `pilotCounter` (JSON, default 0) and fleet rows may carry the status
 `hired` (no column change). Career export: `pilots` is an **optional** field of version 5 (no
-format bump; files without it import with no pilots). An older connector does not know the
-fleet status `hired` and refuses such a file as invalid instead of misreading it; an aircraft
-marked `hired` without a hired pilot assigned to it loads as `available`. API:
+format bump; files without it import with no pilots). A career that ever hired a pilot cannot
+move to an older connector: its ledger has `pilot_wage`/`hired_income` rows (and an assigned
+aircraft the status `hired`), which an older connector does not know, so it refuses the file as
+invalid instead of misreading it, assigned pilots or not. Loading repairs what an import cannot
+be trusted with: an aircraft marked `hired` without a pilot loads `available`; a pilot assigned
+to an aircraft not marked `hired`, or a second pilot on an aircraft another pilot already flies
+(the first in hiring order keeps it), is unassigned with `stopped.code` `assignment_invalid`.
+API:
 `GET /api/pilots` (the `pilots` domain). Commands: `pilot.hire {rating}`,
 `pilot.fire {pilotId}`, `pilot.assign {pilotId, aircraftId, origin?, destination}`,
 `pilot.unassign {pilotId}` (zod, strict; same token and Origin rules as every command).
 
 ## Demo
 
-`buildDemoCompany` hires a turboprop pilot on day **74** and assigns the starter C208B to
+`buildDemoCompany` hires a turboprop pilot on day **74** (day 15 of month 3: 16 days left, first
+wage $4,000) and assigns the starter C208B to
 **KMEM ⇄ KBNA** (173.6 nm); by day 77.6 it has flown 14 legs. Shown on /fleet → Hired pilots,
 tagged DEMO and "Hired pilot (simulated)", with every action disabled.

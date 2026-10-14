@@ -148,7 +148,9 @@ place where you switch aircraft).
   your flying: nothing appears in the logbook, no landing is graded, and it never counts toward
   your hours or landing streak. The aircraft is not yours to fly until you unassign the pilot
   (a mission load on it is refused with that reason). A defect that grounds it stops the route;
-  repair it and assign again. The first month's wage is paid at hiring and not refunded.
+  repair it and assign again. At hiring you pay the wage for the rest of the in-game month (pro-rated), then the
+  full wage each month; nothing is refunded when you let a pilot go. While a pilot flies it, the
+  aircraft cannot be sold, repaired, insured or pledged for a loan either.
 
 Formulas and worked examples: `docs/ECONOMY.md`.
 

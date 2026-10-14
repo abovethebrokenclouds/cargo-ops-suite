@@ -200,11 +200,13 @@ export const CAREER_FORMAT = "cargo-ops-career";
  * weather check claiming eligibility without sim telemetry and a live METAR is not trusted
  * (`eligible` is cleared, see `trustedWeather`). An older connector refuses a version 5 file instead of misreading it.
  * Version 5 files may also carry hired pilots (`pilots`, optional, no format bump: absent in
- * older files, stripped by older connectors' schemas). An aircraft assigned to a hired pilot
- * has the fleet status `hired`, which an older connector does not know: it refuses such a
- * file as invalid instead of misreading it (unassign the pilots first to move a career to an
- * older connector). On import an aircraft marked hired without a hired pilot assigned to it
- * is made available again when the book loads.
+ * older files). A career that ever hired a pilot cannot move to an older connector: its
+ * ledger has `pilot_wage` (and usually `hired_income`) rows and an assigned aircraft has the
+ * fleet status `hired`, none of which an older connector knows, so it refuses the file as
+ * invalid instead of misreading it — whether or not pilots are still assigned. On import the
+ * book repairs what it cannot trust: an aircraft marked hired without a pilot is available
+ * again, and a pilot on an aircraft not marked hired (or a second pilot on one aircraft) is
+ * unassigned.
  * Version 4 (P5 part 2) adds FBOs, FBO transactions and demand events (the company carries
  * demand activity, counters and milestones; fleet rows carry insurance and incidents);
  * version 3 (P5) adds the used market's listings (and fleet rows carry systems, defects,
