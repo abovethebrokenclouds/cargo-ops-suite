@@ -105,7 +105,7 @@ test("hire a pilot, assign the starter in the UI: simulated label, mission.load 
   expect(load.error?.code).toBe("aircraft_with_hired_pilot");
   expect(load.error?.message).toMatch(/hired pilot .*\(simulated\)/);
 
-  // The API agrees; the first month's wage is in a balanced ledger.
+  // The API agrees; the pro-rated first wage is in a balanced ledger.
   const pilots = await get<{ simulated: boolean; pilots: Array<{ id: string }> }>("/api/pilots");
   expect(pilots.simulated).toBe(true);
   expect(pilots.pilots).toHaveLength(1);
@@ -114,7 +114,11 @@ test("hire a pilot, assign the starter in the UI: simulated label, mission.load 
     entries: Array<{ category: string; amount: number }>;
   }>("/api/ledger");
   expect(ledger.balanced).toBe(true);
-  expect(ledger.entries.find((e) => e.category === "pilot_wage")?.amount).toBe(-7_500);
+  // The first wage is pro-rated by the time left in the in-game month; the fresh company's
+  // clock has run a few seconds, so it is a few cents under $7,500.
+  const wage = ledger.entries.find((e) => e.category === "pilot_wage")?.amount ?? 0;
+  expect(wage).toBeGreaterThanOrEqual(-7_500);
+  expect(wage).toBeLessThan(-7_490);
 
   // Unassign in the UI: the aircraft is the player's again and the mission loads.
   await page.getByTestId("tab-hired-pilots").click();
