@@ -170,6 +170,14 @@ trust them alone (`connector/src/sim/pause-state.ts`, tests in
   economy's simulator minutes) stops at SimStop and resumes at SimStart. The interval that ends
   a pause is never counted, so the menu time is not added by the first frame after SimStart.
   No frames are made up during a stop; frames the simulator does send keep the `sim` source tag.
+- **Flight plan during a stop.** The `plan` domain is published in the menu too: the last
+  resolved plan (GPS, manual or mission) stays as it was, because the flight is paused, not
+  ended, and the destination is still the one the pilot will resume towards. Nothing is
+  recomputed or invented while no frames arrive; a frame the simulator does send in the menu
+  is resolved as usual (a GPS plan it reports as inactive falls back to the manual or mission
+  destination, never a kept GPS plan), and `plan.destination` still works. Only a real
+  disconnect clears the plan (`connector/src/core/plan.ts`; emulator test "SimStop (main
+  menu) is a pause").
 - **Stuck pause rule.** A pause flag that never clears is overridden only when all of these
   hold: a SimStart arrived after the latest pause report; the sim is running; and consecutive
   fresh position frames have shown the aircraft really moving (position changed from the

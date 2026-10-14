@@ -1230,6 +1230,53 @@ describe("SimConnect emulator: GPS flight plan and destination (PC-55 logic)", (
     r.emu.quit();
     await waitFor(() => r.plan() === null && !r.source.link().connected, "plan cleared offline");
   });
+
+  it("SimStop (main menu) is a pause: the plan stays published; menu frames are still resolved", async () => {
+    const r = await planRig({ values: { ...CARAVAN, ...GPS_LAST_LEG } });
+    await waitFor(() => (r.plan()?.["basis"] === "gps" ? r.plan() : null), "GPS plan in use");
+    const sim = () => r.session.store.getDomain("sim") as { paused?: boolean } | null;
+
+    // Back to the main menu, the sim sends no frames: the last plan stays, nothing cleared.
+    let mark = r.frames.length;
+    r.emu.simStop();
+    await waitFor(() => sim()?.paused === true, "paused by SimStop");
+    await new Promise((res) => setTimeout(res, 400));
+    assert.equal(r.source.link().connected, true, "a stop is not a disconnect");
+    assert.equal(r.plan()?.["basis"], "gps");
+    assert.equal(r.plan()?.["destination"], "KATL");
+    const planPatches = (from: number) =>
+      r.frames
+        .slice(from)
+        .filter(
+          (f) => f.type === "delta" && (f.patch as Record<string, unknown>)["plan"] !== undefined,
+        );
+    assert.equal(planPatches(mark).length, 0, "no plan change while the menu sends nothing");
+    // A destination can still be picked in the menu (it lasts for the paused flight).
+    const pick = r.cmd("plan.destination", { icao: "KBNA" });
+    assert.ok(pick.ok);
+    assert.equal(r.plan()?.["basis"], "gps", "the active GPS plan still wins");
+
+    // The sim does send frames in the menu and the plan was cleared there: that is real
+    // data, so it is resolved as usual (manual pick, never a kept GPS plan).
+    r.emu.simStart();
+    await waitFor(() => sim()?.paused === false, "running again");
+    r.emu.simStop({ haltFrames: false });
+    await waitFor(() => sim()?.paused === true, "paused again");
+    mark = r.frames.length;
+    r.emu.set(GPS_OFF);
+    const manual = await waitFor(
+      () => (r.plan()?.["basis"] === "manual" ? r.plan() : null),
+      "manual from a menu frame",
+    );
+    assert.equal(manual["destination"], "KBNA");
+    assert.equal(manual["eteSec"], undefined, "parked: no ETE");
+    assert.ok(planPatches(mark).every((f) => f.source === "sim"));
+
+    // SimStart: the GPS plan is back from the next frames.
+    r.emu.set(GPS_LAST_LEG);
+    r.emu.simStart();
+    await waitFor(() => (r.plan()?.["basis"] === "gps" ? r.plan() : null), "GPS plan again");
+  });
 });
 
 describe("SimConnect emulator: real connector CLI end to end", () => {

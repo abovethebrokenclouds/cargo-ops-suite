@@ -65,7 +65,9 @@ Values are tagged `SIM`, `REPLAY` or `DEMO`; a dash means "no data", never a mad
    flight ends) or **Mission** (the loaded mission's destination, the default). An active GPS
    plan always wins, then your pick, then the mission. For Manual and Mission the connector
    computes the remaining distance from your position and the ETE from your ground speed
-   (no ETE below 30 kt); these are not GPS figures.
+   (no ETE below 30 kt); these are not GPS figures. Back in the simulator's main menu the flight is paused
+   and the Route panel keeps its last destination; it is cleared only when the simulator
+   disconnects.
 2. Fly it. The **Map** (`g` `m`) follows the aircraft (`f` toggles follow), with route, trail,
    airports, your FBOs and demand events. Small coloured **METAR badges** (VFR green, MVFR blue,
    IFR red, LIFR magenta) sit up and to the right of the origin, the destination and the airports

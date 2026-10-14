@@ -15,6 +15,11 @@
 // Frames carry the session's source (`sim` live, `replay` for FakeSource), as everything else.
 // While the simulator is offline nothing is published: the session clears `plan` with the
 // other sim-derived domains and the resolver waits for the next real data.
+//
+// SimStop (back to the main menu) is a pause, not a link loss (sim/pause-state.ts): the
+// resolver keeps publishing. The last plan stays as it was while no frames arrive (the flight
+// is paused, not ended), a frame the sim does send in the menu is resolved as usual, and
+// `plan.destination` still works. Nothing here reads the pause state on purpose.
 
 import {
   PROTOCOL_VERSION,
