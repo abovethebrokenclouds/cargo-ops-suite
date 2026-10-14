@@ -78,9 +78,8 @@ interface Product<R extends { stale: boolean }> {
   sample: (station: string, at: Date) => R | null;
   sampleNote: string;
   noneNote: string;
-  /** Extra check on a cached report (TAF: not expired). */
-  usable?: (report: R, now: number) => boolean;
-  expiredNote?: string;
+  /** Why a cached report must not be shown (TAF: NIL/CNL or expired); null = show it. */
+  unusable?: (report: R, now: number) => string | null;
 }
 
 const METAR: Product<MetarReport> = {
@@ -141,8 +140,12 @@ const TAF: Product<TafReport> = {
   sample: sampleTaf,
   sampleNote: SAMPLE_TAF_NOTE,
   noneNote: "No current TAF for this station (many smaller airports have none).",
-  usable: (report, now) => !report.cancelled && !isTafExpired(report, now),
-  expiredNote: "The last TAF for this station has expired.",
+  unusable: (report, now) =>
+    report.cancelled
+      ? "The TAF for this station is NIL or cancelled (CNL): no forecast."
+      : isTafExpired(report, now)
+        ? "The last TAF for this station has expired."
+        : null,
 };
 
 /** Cache and request state of one product. */
@@ -299,9 +302,8 @@ export class WeatherService {
   ): StationResult<R> {
     const c = this.cached(p, st, station);
     const error = st.lastError.get(station) ?? null;
-    if (c?.report && p.usable && !p.usable(c.report, now)) {
-      return { station, report: null, note: error ?? p.expiredNote ?? p.noneNote };
-    }
+    const unusable = c?.report && p.unusable ? p.unusable(c.report, now) : null;
+    if (unusable) return { station, report: null, note: error ?? unusable };
     if (c && now - c.fetchedAt <= p.ttlMs && !error) {
       return c.report
         ? { station, report: { ...c.report, stale: false }, note: null }

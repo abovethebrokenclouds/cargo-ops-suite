@@ -147,6 +147,16 @@ describe("WeatherService TAF", () => {
     assert.match(tafBy(r, "KMEM")?.note ?? "", /expired/);
   });
 
+  it("a NIL/CNL TAF gets its own note, distinct from an expired one", async () => {
+    const { svc } = service({}, () =>
+      jsonResponse([{ icaoId: "KXYZ", rawTAF: "TAF KXYZ 131520Z NIL" }]),
+    );
+    const r = await svc.taf(["KXYZ"], true);
+    assert.equal(tafBy(r, "KXYZ")?.report, null);
+    assert.match(tafBy(r, "KXYZ")?.note ?? "", /NIL or cancelled/);
+    assert.doesNotMatch(tafBy(r, "KXYZ")?.note ?? "", /expired/);
+  });
+
   it("stations without a TAF get a note", async () => {
     const { svc } = service({}, () => new Response(null, { status: 204 }));
     const r = await svc.taf(["KZZZ"], true);

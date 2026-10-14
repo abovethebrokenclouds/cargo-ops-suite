@@ -63,6 +63,26 @@ describe("TafTimeline", () => {
     expect(screen.getByTestId("taf-eta")).toHaveTextContent("after this TAF ends");
   });
 
+  it("an expired TAF leaves the screen at once, without waiting for the next poll", () => {
+    const { rerender } = render(<TafTimeline result={result()} now={NOW} />);
+    expect(screen.getAllByTestId("taf-period")).toHaveLength(5);
+    // Same report, the clock passes the end of validity (14/18Z).
+    rerender(<TafTimeline result={result()} now={Date.parse("2026-10-14T18:00:00Z")} />);
+    expect(screen.queryByTestId("taf-period")).toBeNull();
+    expect(screen.queryByTestId("taf-segment")).toBeNull();
+    expect(screen.getByTestId("taf-note")).toHaveTextContent(
+      "The last TAF for this station has expired.",
+    );
+    expect(screen.getByTestId("taf-timeline")).toHaveAttribute("data-origin", "none");
+  });
+
+  it("a NIL/CNL TAF shows its own note", () => {
+    const r = result();
+    if (r.report) r.report = { ...r.report, cancelled: true, periods: [] };
+    render(<TafTimeline result={r} now={NOW} />);
+    expect(screen.getByTestId("taf-note")).toHaveTextContent(/NIL or cancelled/);
+  });
+
   it("SAMPLE and stale labels, and a note without a report", () => {
     const { unmount } = render(<TafTimeline result={result("sample")} now={NOW} />);
     expect(screen.getByText("SAMPLE")).toBeInTheDocument();

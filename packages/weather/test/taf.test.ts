@@ -150,6 +150,76 @@ describe("parseTaf edge cases", () => {
   });
 });
 
+describe("parseTaf / tafAt review cases (hand-made TAFs)", () => {
+  const at = (taf: TafDecoded, iso: string) => tafAt(taf, Date.parse(iso));
+
+  it("inside a BECMG window the worse of before and after applies", () => {
+    const t = parseTaf(
+      "TAF KXYZ 131720Z 1318/1418 00000KT 1/4SM FG OVC002 BECMG 1400/1404 9999 NSW SCT030",
+      REF,
+    ) as TafDecoded;
+    expect(t.periods[1]?.category).toBe("VFR");
+    expect(at(t, "2026-10-14T00:30:00Z").category).toBe("LIFR");
+    expect(at(t, "2026-10-14T00:30:00Z").worst).toBe("LIFR");
+    expect(at(t, "2026-10-13T23:00:00Z").category).toBe("LIFR");
+    expect(at(t, "2026-10-14T04:00:00Z").category).toBe("VFR");
+  });
+
+  it("NSW clears inherited weather on merge", () => {
+    const t = parseTaf(
+      "TAF KXYZ 131720Z 1318/1418 20010KT 4SM -RA BKN020 BECMG 1400/1402 9999 NSW SCT030",
+      REF,
+    ) as TafDecoded;
+    expect(t.periods[0]?.weather).toBe("-RA");
+    expect(t.periods[1]?.weather).toBeNull();
+    expect(t.periods[1]?.weatherCleared).toBe(true);
+    // Without NSW the weather is inherited.
+    const keep = parseTaf(
+      "TAF KXYZ 131720Z 1318/1418 20010KT 4SM -RA BKN020 BECMG 1400/1402 SCT030",
+      REF,
+    ) as TafDecoded;
+    expect(keep.periods[1]?.weather).toBe("-RA");
+  });
+
+  it("a TEMPO starting at the same instant as a BECMG sees the BECMG in parser and tafAt", () => {
+    const t = parseTaf(
+      "TAF KXYZ 131720Z 1318/1418 18008KT P6SM OVC008 BECMG 1400/1402 BKN040 TEMPO 1400/1404 4SM",
+      REF,
+    ) as TafDecoded;
+    const tempo = t.periods.find((p) => p.kind === "TEMPO");
+    // 4SM over BKN040 (after the BECMG) = MVFR; over OVC008 it would be IFR.
+    expect(tempo?.category).toBe("MVFR");
+    const now = at(t, "2026-10-14T00:00:00Z");
+    expect(now.changes.map((c) => c.category)).toEqual(["MVFR"]);
+    // The BECMG window is open at 00Z: OVC008 (IFR) may still prevail.
+    expect(now.category).toBe("IFR");
+    expect(at(t, "2026-10-14T03:00:00Z").category).toBe("VFR");
+    expect(at(t, "2026-10-14T03:00:00Z").worst).toBe("MVFR");
+  });
+
+  it("a change group spanning an FM is merged with the conditions in force at the time", () => {
+    const t = parseTaf(
+      "TAF KXYZ 131720Z 1318/1418 18008KT P6SM BKN040 FM140200 18008KT P6SM OVC008 TEMPO 1400/1404 4SM",
+      REF,
+    ) as TafDecoded;
+    // Before the FM: 4SM over BKN040 = MVFR; after it: over OVC008 = IFR.
+    expect(at(t, "2026-10-14T01:00:00Z").changes[0]?.category).toBe("MVFR");
+    expect(at(t, "2026-10-14T03:00:00Z").changes[0]?.category).toBe("IFR");
+    expect(at(t, "2026-10-14T03:00:00Z").worst).toBe("IFR");
+  });
+
+  it("clips periods to the validity; nothing has from after to", () => {
+    const t = parseTaf(
+      "TAF KXYZ 131720Z 1318/1418 18008KT P6SM BKN040 FM150300 20010KT 2SM OVC005 TEMPO 1416/1420 3SM BR",
+      REF,
+    ) as TafDecoded;
+    expect(kinds(t)).toEqual(["BASE", "TEMPO"]);
+    expect(t.periods[0]?.to).toBe("2026-10-14T18:00:00.000Z");
+    expect(t.periods[1]?.to).toBe("2026-10-14T18:00:00.000Z");
+    for (const p of t.periods) expect(Date.parse(p.to)).toBeGreaterThan(Date.parse(p.from));
+  });
+});
+
 describe("aviationweather.gov TAF JSON (HAND-MADE fixture)", () => {
   const tafs = fromAwcTafResponse(HANDMADE.response, REF);
   const by = (id: string) => tafs.find((t) => t.station === id) as (typeof tafs)[number];

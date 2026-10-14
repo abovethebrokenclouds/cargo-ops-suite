@@ -2,6 +2,7 @@ import { useId, useState } from "react";
 import {
   formatObservationAge,
   formatTafTime,
+  isTafExpired,
   tafAt,
   tafPeriodLabel,
   type TafPeriod,
@@ -55,14 +56,24 @@ export function TafTimeline({
 }) {
   const [showRaw, setShowRaw] = useState(false);
   const rawId = useId();
-  const taf = result?.report ?? null;
+  const received = result?.report ?? null;
+  // Checked here too, not only in the connector: a TAF that ends between two polls (or a
+  // NIL/CNL one) must leave the screen at once.
+  const expired = received !== null && now !== null && isTafExpired(received, now);
+  const cancelled = received?.cancelled === true;
+  const taf = expired || cancelled ? null : received;
+  const note = cancelled
+    ? "The TAF for this station is NIL or cancelled (CNL): no forecast."
+    : expired
+      ? "The last TAF for this station has expired."
+      : (result?.note ?? "Loading forecast…");
   const from = taf?.validFrom ? Date.parse(taf.validFrom) : NaN;
   const to = taf?.validTo ? Date.parse(taf.validTo) : NaN;
   const span = to - from;
   const usable = taf !== null && Number.isFinite(span) && span > 0;
   const pct = (t: number) => `${(Math.min(Math.max((t - from) / span, 0), 1) * 100).toFixed(3)}%`;
   const width = (a: number, b: number) =>
-    `${(((Math.min(b, to) - Math.max(a, from)) / span) * 100).toFixed(3)}%`;
+    `${((Math.max(0, Math.min(b, to) - Math.max(a, from)) / span) * 100).toFixed(3)}%`;
 
   const ticks: number[] = [];
   if (usable) {
@@ -106,7 +117,7 @@ export function TafTimeline({
 
       {!taf ? (
         <p className="text-sm text-muted-foreground" data-testid="taf-note">
-          {result?.note ?? "Loading forecast…"}
+          {note}
         </p>
       ) : !usable ? (
         <p className="text-sm text-muted-foreground" data-testid="taf-note">

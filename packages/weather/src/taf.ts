@@ -37,6 +37,8 @@ export interface TafConditions {
   ceilingFt: number | null;
   /** Present weather groups as written; null when none stated (NSW also gives null). */
   weather: string | null;
+  /** NSW ("no significant weather") was stated: it clears inherited weather when merged. */
+  weatherCleared: boolean;
 }
 
 export interface TafPeriod extends TafConditions {
@@ -52,6 +54,12 @@ export interface TafPeriod extends TafConditions {
   category: FlightCategory | null;
   /** The period's groups as written, e.g. "TEMPO 1320/1324 2SM -RA BR OVC008". */
   text: string;
+  /**
+   * What the period itself states, before merging over the prevailing conditions (equal to
+   * the conditions above for BASE/FM). `tafAt` merges it with the conditions in force at the
+   * asked time, so a change group spanning an FM uses the right base.
+   */
+  stated: TafConditions;
 }
 
 export interface TafDecoded {
@@ -128,10 +136,14 @@ function conditions(station: string, tokens: string[], ref: Date): TafConditions
     clouds: d?.clouds ?? null,
     ceilingFt: d?.ceilingFt ?? null,
     weather: kept.includes("NSW") ? null : (d?.weather ?? null),
+    weatherCleared: kept.includes("NSW"),
   };
 }
 
-/** `over` stated groups replace those of `base`; unstated ones are inherited. */
+/**
+ * `over` stated groups replace those of `base`; unstated ones are inherited. NSW in `over`
+ * clears the inherited weather.
+ */
 export function mergeConditions(base: TafConditions | null, over: TafConditions): TafConditions {
   const visibilityStated = over.visibilitySm !== null;
   const clouds = over.clouds ?? base?.clouds ?? null;
@@ -141,7 +153,8 @@ export function mergeConditions(base: TafConditions | null, over: TafConditions)
     visibilityPlus: visibilityStated ? over.visibilityPlus : (base?.visibilityPlus ?? false),
     clouds,
     ceilingFt: ceilingOf(clouds),
-    weather: over.weather ?? base?.weather ?? null,
+    weather: over.weatherCleared ? null : (over.weather ?? base?.weather ?? null),
+    weatherCleared: over.weatherCleared,
   };
 }
 
@@ -265,13 +278,26 @@ export function parseTaf(raw: string, ref: Date = new Date()): TafDecoded | null
   prevailing.forEach((s, n) => {
     s.to = prevailing[n + 1]?.from ?? end;
   });
+  // Clip every period to the validity (a malformed FM or change group outside it would
+  // otherwise give from > to); periods left without duration are dropped.
+  if (validity) {
+    const lo = validity.from.getTime();
+    const hi = validity.to.getTime();
+    const clip = (d: Date | null) => (d ? new Date(Math.min(Math.max(d.getTime(), lo), hi)) : null);
+    for (const seg of segments) {
+      seg.from = clip(seg.from);
+      seg.to = clip(seg.to);
+    }
+  }
 
   const ref2 = issued ?? ref;
   const decoded = segments
-    .filter((s) => s.from && s.to)
+    .filter((s) => s.from && s.to && s.to.getTime() > s.from.getTime())
     .map((s) => ({ seg: s, cond: conditions(station, s.body, ref2) }));
 
-  const prevailingAt = (t: number): TafConditions | null => {
+  // Prevailing conditions at t: the BASE/FM segment in force, with the BECMG groups of that
+  // segment that started at or before t (the same `<=` boundary as tafAt).
+  const prevailingAt = (t: number, self: Segment): TafConditions | null => {
     let base: TafConditions | null = null;
     let segFrom = -Infinity;
     for (const d of decoded) {
@@ -281,11 +307,10 @@ export function parseTaf(raw: string, ref: Date = new Date()): TafDecoded | null
         segFrom = (d.seg.from as Date).getTime();
       }
     }
-    // BECMG changes inside the current prevailing segment that began before t.
     for (const d of decoded) {
-      if (d.seg.kind !== "BECMG") continue;
+      if (d.seg.kind !== "BECMG" || d.seg === self) continue;
       const f = (d.seg.from as Date).getTime();
-      if (f >= segFrom && f < t) base = mergeConditions(base, d.cond);
+      if (f >= segFrom && f <= t) base = mergeConditions(base, d.cond);
     }
     return base;
   };
@@ -293,7 +318,7 @@ export function parseTaf(raw: string, ref: Date = new Date()): TafDecoded | null
   for (const { seg, cond } of decoded) {
     const isChange = seg.kind !== "BASE" && seg.kind !== "FM";
     const merged = isChange
-      ? mergeConditions(prevailingAt((seg.from as Date).getTime()), cond)
+      ? mergeConditions(prevailingAt((seg.from as Date).getTime(), seg), cond)
       : cond;
     out.periods.push({
       kind: seg.kind,
@@ -304,6 +329,7 @@ export function parseTaf(raw: string, ref: Date = new Date()): TafDecoded | null
       ...merged,
       category: categoryOf(merged),
       text: [...seg.head, ...seg.body].join(" "),
+      stated: cond,
     });
   }
   return out;
@@ -323,12 +349,21 @@ export function worseCategory(
 export interface TafAt {
   /** Prevailing period (BASE/FM) at the time, or null outside the validity. */
   prevailing: TafPeriod | null;
-  /** Category of the prevailing conditions, BECMG changes applied. */
+  /**
+   * Category of the prevailing conditions with the BECMG groups that have started applied;
+   * inside a BECMG window (change under way) the worse of before and after.
+   */
   category: FlightCategory | null;
-  /** TEMPO/PROB periods covering the time. */
+  /** TEMPO/PROB periods covering the time, each with its category at that time. */
   changes: TafPeriod[];
   /** Worst of the prevailing category and the covering TEMPO/PROB periods. */
   worst: FlightCategory | null;
+}
+
+/** A period's own groups (older cached reports without `stated` fall back to the merged ones). */
+function statedOf(p: TafPeriod): TafConditions {
+  const stated = (p as Partial<TafPeriod>).stated;
+  return stated ?? { ...p, weatherCleared: p.weatherCleared ?? false };
 }
 
 /** What the TAF forecasts at time `t` (ms). */
@@ -336,19 +371,28 @@ export function tafAt(taf: TafDecoded, t: number): TafAt {
   const within = (p: TafPeriod) => Date.parse(p.from) <= t && t < Date.parse(p.to);
   const prevailing =
     taf.periods.find((p) => (p.kind === "BASE" || p.kind === "FM") && within(p)) ?? null;
-  let category = prevailing?.category ?? null;
-  if (prevailing) {
-    // The latest BECMG in this prevailing segment that has started carries the merged state.
-    const becmg = taf.periods.filter(
-      (p) =>
-        p.kind === "BECMG" &&
-        Date.parse(p.from) >= Date.parse(prevailing.from) &&
-        Date.parse(p.from) <= t,
-    );
-    const last = becmg[becmg.length - 1];
-    if (last) category = last.category;
+  if (!prevailing) return { prevailing: null, category: null, changes: [], worst: null };
+
+  // BECMG groups of this prevailing segment that have started (same `<=` boundary as the
+  // parser), in time order.
+  const segFrom = Date.parse(prevailing.from);
+  const becmg = taf.periods
+    .filter((p) => p.kind === "BECMG" && Date.parse(p.from) >= segFrom && Date.parse(p.from) <= t)
+    .sort((a, b) => Date.parse(a.from) - Date.parse(b.from));
+  let cond = statedOf(prevailing);
+  let underWay: FlightCategory | null = null;
+  for (const b of becmg) {
+    const before = cond;
+    cond = mergeConditions(cond, statedOf(b));
+    // During the BECMG window either state may prevail: keep the worse one.
+    if (t < Date.parse(b.to)) underWay = worseCategory(underWay, categoryOf(before));
   }
-  const changes = taf.periods.filter((p) => (p.kind === "TEMPO" || p.kind === "PROB") && within(p));
+  const category = worseCategory(categoryOf(cond), underWay);
+
+  // Temporary changes merged over the conditions in force at t (not at their own start).
+  const changes = taf.periods
+    .filter((p) => (p.kind === "TEMPO" || p.kind === "PROB") && within(p))
+    .map((p) => ({ ...p, category: categoryOf(mergeConditions(cond, statedOf(p))) }));
   let worst = category;
   for (const c of changes) worst = worseCategory(worst, c.category);
   return { prevailing, category, changes, worst };
