@@ -222,7 +222,7 @@ export function TafTimeline({
               <li
                 key={`${p.from}-${p.kind}-${i}`}
                 className={cn(
-                  "grid grid-cols-[6rem_6.5rem_2.75rem_minmax(0,1fr)] items-baseline gap-2",
+                  "grid grid-cols-[6rem_6.5rem_minmax(0,1fr)] items-baseline gap-x-2 sm:grid-cols-[6rem_6.5rem_2.75rem_minmax(0,1fr)]",
                   !isPrevailing(p) && "text-muted-foreground",
                 )}
                 data-testid="taf-period"
@@ -243,7 +243,10 @@ export function TafTimeline({
                 >
                   {p.category ?? "—"}
                 </span>
-                <span className="truncate font-mono" title={p.text}>
+                <span
+                  className="col-span-full break-words font-mono sm:col-span-1 sm:truncate"
+                  title={p.text}
+                >
                   {periodBody(p)}
                 </span>
               </li>
