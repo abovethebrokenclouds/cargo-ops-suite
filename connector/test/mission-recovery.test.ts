@@ -152,7 +152,10 @@ describe("mission.abort while the flight is running", () => {
       assert.equal(m?.payout, undefined);
       const fuel = m?.costs?.find((c) => c.key === "fuel");
       assert.ok(fuel && fuel.amount > 0, `fuel billed: ${JSON.stringify(m?.costs)}`);
-      assert.ok(m?.costs?.some((c) => c.key === "landing_fee"), "landing fee where it parked");
+      assert.ok(
+        m?.costs?.some((c) => c.key === "landing_fee"),
+        "landing fee where it parked",
+      );
       assert.ok((m?.wear ?? 0) > 0, "wear booked");
       // No payout row, the jobs stay accepted, reputation unchanged.
       const rows = r.repo.listLedger();
@@ -178,7 +181,14 @@ describe("mission.abort while the flight is running", () => {
     try {
       const leg1 = loadFixture(FIXTURE);
       const end = leg1.at(-1)?.t ?? 0;
-      const leg2 = reprojectLeg(leg1, apt("KMEM"), apt("KATL"), apt("KATL"), apt("KRDU"), end + 5_000);
+      const leg2 = reprojectLeg(
+        leg1,
+        apt("KMEM"),
+        apt("KATL"),
+        apt("KATL"),
+        apt("KRDU"),
+        end + 5_000,
+      );
       const frames = [...leg1, ...leg2];
       const r = rig(tmp.dir, frames);
       const job = acceptTo(r, "KRDU");
@@ -203,7 +213,10 @@ describe("mission.abort while the flight is running", () => {
       assert.equal(aircraft?.status, "available");
       assert.equal(aircraft?.location, "KRDU");
       assert.ok(sumCosts(r.mission()) > 0, "the onward flight's costs are booked");
-      assert.deepEqual(r.jobs().inTransit?.find((j) => j.id === job.id), stored);
+      assert.deepEqual(
+        r.jobs().inTransit?.find((j) => j.id === job.id),
+        stored,
+      );
       assert.equal(r.company().reputation, rep0, "no penalty for an abort");
       assert.equal(r.events("job.abandoned").length, 0);
       assertBalanced(r);

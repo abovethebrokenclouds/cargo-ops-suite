@@ -1203,7 +1203,10 @@ export class EconomyEngine {
       this.flushBook();
       this.repo?.saveMission(updated);
     });
-    const costTotal = missionPayoutTotals([], settled.costs.map((c) => c.amount)).costTotal;
+    const costTotal = missionPayoutTotals(
+      [],
+      settled.costs.map((c) => c.amount),
+    ).costTotal;
     this.log(
       "info",
       `Flight ${record.id} of aborted mission ${m.id} ended at ${parkedAt?.ident ?? "no airport"}: costs $${costTotal}, wear ${settled.wear}`,

@@ -135,8 +135,8 @@ is general cargo, 840 kg, 1 unit, 287.7 nm. Replaying `demo-kmem-katl.jsonl`
   is available again, and a mission left `in_progress` goes back to `loaded` (its start,
   flown distance and departure payload check cleared). The first sample decides: on the
   ground within **3 nm** of the origin → it stays loaded and flies normally from the next
-  departure; otherwise (airborne or elsewhere) → `aborted` with `failure.code
-  flight_lost`, jobs back to accepted / transit cargo back at its stop, no penalty.
+  departure; otherwise (airborne or elsewhere) → `aborted` (failure code
+  `flight_lost`), jobs back to accepted / transit cargo back at its stop, no penalty.
   `mission.recovered {missionId, status}` is emitted either way.
 
 Reputation (0–100, start 50): on time with landing A+/A **+3**, B **+2**, C or no
