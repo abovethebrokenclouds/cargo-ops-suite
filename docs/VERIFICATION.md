@@ -211,7 +211,7 @@ One evening session, in this order (IDs refer to the table above). Keep
 3. **One real mission (a short hop, ≈ 45 min).** Start `--record` (PC-15) → refresh the board at
    your gate airport, accept and load (PC-25 start-at-origin, PC-30 buy/lease if needed) → PC-55 (4) Route panel reads Mission → PC-49 set the payload stations in the sim and watch the payload check → PC-52 note the origin/destination METAR category (weather bonus) →
    PC-24 fly it: PC-10 data rate in Diagnostics, PC-19 phases, PC-21 pause and 2× sim rate briefly,
-   PC-53 on a separate test flight, not this mission: a trip to the main menu and back (a
+   PC-53 on a separate test flight, not this mission: a trip to the main menu and back with PC-55 (6) (a
    flight reloaded elsewhere sets the teleport flag),
    PC-32 note IAS vs Vmo if you get close, PC-23 distance (no false teleport) → land: PC-18 /
    PC-20 / PC-27 landing grade and touchdown rate → park, engines off, brake set: payout and
