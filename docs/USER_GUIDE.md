@@ -59,6 +59,13 @@ Values are tagged `SIM`, `REPLAY` or `DEMO`; a dash means "no data", never a mad
    change then). The period list and the raw TAF are underneath. Many small airports publish no
    TAF; you then see a note instead. On the job board each contract has a **Weather** button with
    the same view. For simulation only: never use it for real-world flight planning.
+   The **Route** panel says where its destination comes from: **GPS plan** (the sim's active
+   GPS flight plan, best effort: MSFS 2024 may not report plans made in the EFB), **Manual**
+   (an airport you pick in the Route panel's search for this flight; it is forgotten when the
+   flight ends) or **Mission** (the loaded mission's destination, the default). An active GPS
+   plan always wins, then your pick, then the mission. For Manual and Mission the connector
+   computes the remaining distance from your position and the ETE from your ground speed
+   (no ETE below 30 kt); these are not GPS figures.
 2. Fly it. The **Map** (`g` `m`) follows the aircraft (`f` toggles follow), with route, trail,
    airports, your FBOs and demand events. Small coloured **METAR badges** (VFR green, MVFR blue,
    IFR red, LIFR magenta) sit up and to the right of the origin, the destination and the airports
