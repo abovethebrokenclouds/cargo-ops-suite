@@ -140,10 +140,7 @@ test.describe("demo mode (no connector)", () => {
     await card.getByTestId("job-weather-toggle").click();
     const weather = card.getByTestId("route-weather");
     await expect(weather.getByTestId("metar-station")).toHaveCount(2);
-    await expect(weather.locator('[data-station="KMEM"]')).toHaveAttribute(
-      "data-origin",
-      "sample",
-    );
+    await expect(weather.locator('[data-station="KMEM"]')).toHaveAttribute("data-origin", "sample");
     await expect(weather.locator(`[data-station="${destination}"]`)).toHaveAttribute(
       "data-origin",
       "sample",
