@@ -177,6 +177,7 @@ Direction: a premium aviation operations centre crossed with a high-end gaming c
 | `--accent`                                  | 0.82 0.14 205 (cyan)              | highlights, live indicators |
 | `--tertiary` (new)                          | 0.62 0.20 295 (violet)            | gradients, secondary glow   |
 | `--success` / `--warning` / `--destructive` | green 155 / amber 75 / red 25     | status lights               |
+| `--*-foreground` on fills                   | 0.13 (dark), ≥ 4.5:1 on each fill | button / badge labels       |
 | `--gradient-text`                           | 100° blue → cyan 45% → violet     | headings, key metrics       |
 | `--gradient-glow`                           | radial blue + violet at low alpha | body backdrop               |
 | `--shadow-glow`                             | blue glow                         | primary CTA                 |

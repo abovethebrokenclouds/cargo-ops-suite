@@ -69,10 +69,50 @@ describe("token contrast (WCAG AA)", () => {
     // The brand gradient runs primary → accent → tertiary; its dark label must clear the
     // darkest stop at the large-text/UI threshold (labels are semibold 14 px+ on the CTA).
     expect(contrastRatio(dark, rgb("tertiary"))).toBeGreaterThanOrEqual(3);
-    // The only destructive fill with text is the error status chip: bg-destructive/20 over the
-    // header with text-destructive-foreground (solid destructive buttons are not used).
+    // The error status chip: bg-destructive/20 over the header with text-foreground.
     const chip = over(rgb("destructive"), 0.2, background);
-    expect(contrastRatio(rgb("destructive-foreground"), chip)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(rgb("foreground"), chip)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // Every `--x` / `--x-foreground` token pair (bg-x text-x-foreground in Button, Badge,
+  // tooltip, toasts, status chips …) must meet AA for normal text, so a token edit cannot
+  // regress a solid fill. The app ships a single (dark) theme in :root.
+  describe("solid fill pairs (--x with --x-foreground) ≥ 4.5:1", () => {
+    const pairs = Object.keys(t)
+      .filter((name) => name.endsWith("-foreground") && name !== "foreground")
+      .map((name) => [name.replace(/-foreground$/, ""), name] as const)
+      .filter(([fill]) => fill in t);
+    pairs.push(["background", "foreground"]);
+
+    it("enumerates the expected token pairs", () => {
+      const fills = pairs.map(([fill]) => fill);
+      for (const fill of [
+        "background",
+        "card",
+        "popover",
+        "primary",
+        "secondary",
+        "muted",
+        "accent",
+        "tertiary",
+        "success",
+        "warning",
+        "destructive",
+      ]) {
+        expect(fills, fill).toContain(fill);
+      }
+    });
+
+    for (const [fill, fg] of pairs) {
+      it(`${fg} on ${fill}`, () => {
+        expect(contrastRatio(rgb(fg), rgb(fill))).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+
+    it("destructive button hover (bg-destructive/90 over the page) keeps its label ≥ 4.5:1", () => {
+      const hover = over(rgb("destructive"), 0.9, background);
+      expect(contrastRatio(rgb("destructive-foreground"), hover)).toBeGreaterThanOrEqual(4.5);
+    });
   });
 
   it("focus ring (primary) is visible against the page and panels ≥ 3:1", () => {
