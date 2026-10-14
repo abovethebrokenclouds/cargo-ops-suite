@@ -31,7 +31,7 @@ export const KIND_LABELS: Record<CargoKind, string> = {
   bush: "Bush",
 };
 
-/** Condition bonuses (plan §7). Not observable yet: IFR and weather need METAR (P5). */
+/** Condition flags (plan §7), not observed yet; the METAR weather bonus is in weather-bonus.ts. */
 export const CONDITION_BONUS = { ifr: 0.15, night: 0.15, weather: 0.2 } as const;
 
 /** Reputation multiplier per tier: × (1 + 0.02 × tier), tier = floor(reputation / 20). */

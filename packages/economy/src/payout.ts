@@ -8,8 +8,15 @@
 // become 1.00 and the landing multiplier is capped at 1.00 (penalties still apply).
 // payloadMismatch (the departure payload check found the sim payload clearly below
 // the cargo) has exactly the same effect, with its own note.
+// Weather bonus: + 5 % (IFR) or + 10 % (LIFR) on the conditions line from the live METAR
+// frozen at departure/arrival (weather-bonus.ts); removed by noBonus like every bonus.
 
-import type { CargoKind, PayoutBreakdown, PayoutFactor } from "../../protocol/src/economy";
+import type {
+  CargoKind,
+  MissionWeather,
+  PayoutBreakdown,
+  PayoutFactor,
+} from "../../protocol/src/economy";
 import type { LandingGrade } from "../../protocol/src/landing";
 import {
   CONDITION_BONUS,
@@ -26,6 +33,7 @@ import {
   REPUTATION_TIER_SIZE,
 } from "./constants";
 import { round2 } from "./geo";
+import { weatherBonus } from "./weather-bonus";
 
 /** atan(nm / 25) / atan(1): short legs pay less per nm, approaching 2 for long legs. */
 export function distanceCurve(nm: number): number {
@@ -63,8 +71,10 @@ export interface PayoutInput {
   distanceNm: number;
   units: number;
   reputation: number;
-  /** IFR/night/weather; all false until P5 (METAR, sun position on the sim clock). */
+  /** IFR/night/weather flags; all false until night/weather are observed. */
   conditions?: Conditions;
+  /** METAR flight category frozen at departure/arrival: the weather bonus (IFR/LIFR). */
+  weather?: MissionWeather | null;
   /** Board estimate: landing 1.00, on time. */
   estimate: boolean;
   landingGrade?: LandingGrade | null;
@@ -124,19 +134,25 @@ export function computePayout(input: PayoutInput): PayoutBreakdown {
   });
 
   const c = input.conditions ?? {};
+  const wx = weatherBonus(input.weather);
   const conditionValue = noBonus
     ? 1
     : 1 +
       (c.ifr ? CONDITION_BONUS.ifr : 0) +
       (c.night ? CONDITION_BONUS.night : 0) +
-      (c.weather ? CONDITION_BONUS.weather : 0);
+      (c.weather ? CONDITION_BONUS.weather : 0) +
+      wx.bonus;
   multiply({
     key: "conditions",
     label: "Conditions (IFR / night / weather)",
     value: conditionValue,
     note: noBonus
-      ? noBonusNote
-      : "Not observed yet: weather and night need METAR and the sim clock (P5)",
+      ? wx.bonus > 0
+        ? `${noBonusNote} (weather bonus +${Math.round(wx.bonus * 100)} % withheld)`
+        : noBonusNote
+      : input.estimate
+        ? "Estimate: no weather bonus until the flight's METARs are recorded"
+        : wx.note,
   });
 
   const tier = reputationTier(input.reputation);
@@ -218,6 +234,7 @@ export function computePayout(input: PayoutInput): PayoutBreakdown {
     estimate: input.estimate,
     noBonus,
     ...(mismatch ? { payloadMismatch: true } : {}),
+    ...(!noBonus && wx.bonus > 0 ? { weatherBonus: wx.bonus } : {}),
   };
 }
 

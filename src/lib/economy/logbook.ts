@@ -2,7 +2,7 @@
 // Only fetched when a connector session exists; the browser demo never invents flights.
 
 import { useEffect, useState } from "react";
-import type { Mission, PayloadCheck, Touchdown } from "@cargo-ops/protocol";
+import type { Mission, MissionWeather, PayloadCheck, Touchdown } from "@cargo-ops/protocol";
 import type { ClientSimState } from "@/lib/sim-state";
 import { connectorJson } from "@/lib/transport/connector-api";
 
@@ -32,6 +32,8 @@ export interface LogbookEntry {
     failure: { code: string; message: string } | null;
     /** Cargo vs sim payload frozen at departure; absent on older connectors/missions. */
     payloadCheck?: PayloadCheck | null;
+    /** METAR category at departure/arrival and the weather bonus; absent on older missions. */
+    weather?: MissionWeather | null;
   } | null;
 }
 

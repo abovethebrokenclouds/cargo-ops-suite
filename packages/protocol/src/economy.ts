@@ -44,6 +44,8 @@ export const payoutBreakdownSchema = z.object({
   noBonus: z.boolean(),
   /** The departure payload check found the sim payload clearly below the cargo (no bonuses). */
   payloadMismatch: z.boolean().optional(),
+  /** Weather bonus included in the conditions line (0.05 IFR, 0.10 LIFR); absent = none. */
+  weatherBonus: finite().nonnegative().optional(),
 });
 export type PayoutBreakdown = z.infer<typeof payoutBreakdownSchema>;
 
@@ -191,6 +193,43 @@ export const payloadCheckSchema = z.object({
 });
 export type PayloadCheck = z.infer<typeof payloadCheckSchema>;
 
+export const WEATHER_FLIGHT_CATEGORIES = ["VFR", "MVFR", "IFR", "LIFR"] as const;
+
+/**
+ * METAR flight category at one end of a mission, frozen when it happened: the origin at
+ * departure, the destination at arrival (docs/ECONOMY.md, "Weather bonus"). Only a live,
+ * current report under simulator telemetry is `eligible`; sample reports, replay/demo
+ * telemetry, stale or missing reports never earn a bonus (and never cost anything).
+ */
+export const weatherCheckSchema = z.object({
+  stage: z.enum(["departure", "arrival"]),
+  station: icao(),
+  /** FAA flight category of the report; null = unknown (no report or not decodable). */
+  category: z.enum(WEATHER_FLIGHT_CATEGORIES).nullable(),
+  /** live = aviationweather.gov; sample = built-in example (never real weather); null = none. */
+  metarOrigin: z.enum(["live", "sample"]).nullable(),
+  /** Telemetry source when the check was frozen (live simulator, replay or demo). */
+  source: z.enum(["sim", "replay", "demo"]),
+  /** Raw METAR text, observation time and fetch time of the report used (null = none). */
+  rawText: z.string().nullable(),
+  observedAt: z.string().nullable(),
+  fetchedAt: z.string().nullable(),
+  /** This end may count toward the weather bonus. */
+  eligible: z.boolean(),
+  message: z.string(),
+  /** Wall clock of the check, ISO 8601. */
+  checkedAt: z.string(),
+});
+export type WeatherCheck = z.infer<typeof weatherCheckSchema>;
+
+export const missionWeatherSchema = z.object({
+  departure: weatherCheckSchema.optional(),
+  arrival: weatherCheckSchema.optional(),
+  /** Bonus fraction actually applied to the payout at delivery (0 when bonuses were removed). */
+  bonus: finite().nonnegative().optional(),
+});
+export type MissionWeather = z.infer<typeof missionWeatherSchema>;
+
 export const missionSchema = z.object({
   id: z.string().min(1),
   status: missionStatusSchema,
@@ -229,6 +268,8 @@ export const missionSchema = z.object({
   wear: finite().nonnegative().optional(),
   /** Cargo vs sim payload: live preview while loaded, frozen at departure. */
   payloadCheck: payloadCheckSchema.optional(),
+  /** METAR flight category at departure (origin) and arrival (destination); weather bonus. */
+  weather: missionWeatherSchema.optional(),
 });
 export type Mission = z.infer<typeof missionSchema>;
 

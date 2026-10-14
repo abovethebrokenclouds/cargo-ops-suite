@@ -13,6 +13,9 @@
 //   stations the sim reports (minus a crew allowance) as a live preview; at the start
 //   the check is frozen on the mission. An underloaded departure removes the payout
 //   bonuses (like noBonus); no stations reported → unknown, never a penalty.
+// - weather: the METAR flight category the connector already holds is frozen for the
+//   origin at the start and for the destination at arrival; a live, current IFR/LIFR
+//   report under sim telemetry adds the weather bonus (sample/unknown → none).
 // - deliver: when the flight completes (Arrived: parked, engines off, brake set) the
 //   leg is verified (distance ≥ 90 % of the great circle, parked within 3 nm of the
 //   destination, no teleport, not invalidated) and every job is paid with a full
@@ -79,6 +82,7 @@ import {
   type FuelState,
   type PayloadCheck,
   type PayloadState,
+  type WeatherCheck,
 } from "../../protocol";
 import {
   ARRIVAL_RADIUS_NM,
@@ -102,6 +106,9 @@ import {
   boardSeed,
   checkAtOrigin,
   checkPayload,
+  checkWeather,
+  weatherBonus,
+  type WeatherReportInput,
   clampReputation,
   computePayout,
   deliveryReputationDelta,
@@ -144,7 +151,12 @@ export interface EconomyOptions {
   replay?: boolean;
   /** P5: where maintenance is available (default: large airports; the FBO lane extends it). */
   maintenance?: MaintenanceCapability;
+  /** The METAR the connector already holds for a station (no request); weather bonus. */
+  weather?: WeatherLookup | null;
 }
+
+/** Synchronous lookup of the connector's current METAR for a station (null = none). */
+export type WeatherLookup = (station: string) => WeatherReportInput | null;
 
 type Reason = { code: string; message: string };
 type Fail = { ok: false; code: string; message: string; reasons?: Reason[] };
@@ -188,8 +200,10 @@ export class EconomyEngine {
   private tanksDry = false;
   /** P5 part 2: AI arrivals observed in the connected simulator near own FBO airports. */
   private readonly aiDetector = new AiArrivalDetector();
+  private weatherLookup: WeatherLookup | null;
 
   constructor(options: EconomyOptions) {
+    this.weatherLookup = options.weather ?? null;
     this.store = options.store;
     this.repo = options.repo ?? null;
     this.airports = options.airports ? airportLookup(options.airports) : null;
@@ -621,6 +635,30 @@ export class EconomyEngine {
     });
   }
 
+  /** Where the weather comes from (set once the connector's weather service exists). */
+  setWeatherLookup(lookup: WeatherLookup | null): void {
+    this.weatherLookup = lookup;
+  }
+
+  /** Freeze the METAR flight category at one end of a mission (docs/ECONOMY.md). */
+  private weatherCheckNow(station: string, stage: WeatherCheck["stage"]): WeatherCheck {
+    let report: WeatherReportInput | null = null;
+    try {
+      report = this.weatherLookup?.(station) ?? null;
+    } catch (err) {
+      this.log("debug", `Weather lookup failed: ${err instanceof Error ? err.message : err}`);
+    }
+    const check = checkWeather({
+      stage,
+      station,
+      report,
+      source: this.store.source,
+      nowMs: this.now(),
+    });
+    this.log("info", `Weather (${check.source}) ${check.message}`);
+    return check;
+  }
+
   /** Recompute the preview of a loaded mission; true when what it shows changed. */
   private refreshPayloadPreview(): boolean {
     const m = this.mission;
@@ -726,6 +764,8 @@ export class EconomyEngine {
     const { startBlocked: _drop, ...rest } = m;
     // The payload check is frozen at departure with what the sim reports right now.
     const payloadCheck = this.payloadCheckNow(m, "departure");
+    // So is the origin's METAR flight category (weather bonus).
+    const departureWeather = this.weatherCheckNow(m.origin, "departure");
     this.mission = {
       ...rest,
       status: "in_progress",
@@ -734,6 +774,7 @@ export class EconomyEngine {
       flownNm: record.distanceNm,
       elapsedMin: record.blockMin,
       payloadCheck,
+      weather: { departure: departureWeather },
     };
     if (m.aircraftId) this.book.setFlying(m.aircraftId, true);
     const type = aircraftTypeByKey(m.aircraftKey);
@@ -895,6 +936,13 @@ export class EconomyEngine {
     }
 
     const reputation = this.company.reputation;
+    // The destination's METAR flight category, frozen at arrival (weather bonus).
+    const weather = {
+      ...m.weather,
+      arrival: this.weatherCheckNow(m.destination, "arrival"),
+    };
+    const removed = record.flags.noBonus || payloadMismatch(m.payloadCheck);
+    const appliedWeather = { ...weather, bonus: removed ? 0 : weatherBonus(weather).bonus };
     const breakdowns = m.jobs.map((job) =>
       computePayout({
         jobId: job.id,
@@ -910,6 +958,8 @@ export class EconomyEngine {
         noBonus: record.flags.noBonus,
         // An underloaded departure (sim payload clearly below the cargo) removes bonuses.
         payloadMismatch: payloadMismatch(m.payloadCheck),
+        // IFR/LIFR at either end (live METAR only); removed with the other bonuses.
+        weather,
         // P5 part 2: the demand factor promised on the board.
         ...(job.demandFactor !== undefined ? { demand: job.demandFactor } : {}),
       }),
@@ -941,6 +991,7 @@ export class EconomyEngine {
     this.mission = {
       ...base,
       status: "delivered",
+      weather: appliedWeather,
       payout,
       reputationDelta: delta,
       ...(grade ? { landingGrade: grade } : {}),

@@ -191,6 +191,22 @@ export class WeatherService {
     return { station, report: null, note: error ?? "Weather not fetched yet." };
   }
 
+  /**
+   * The report the connector already holds for `station`, without any request: the
+   * SAMPLE report in sample mode, the cached live report in online mode (null when none
+   * or older than WEATHER_STALE_MAX_MS; `stale` when past the TTL or a refresh failed).
+   * Used to freeze the weather at departure/arrival (weather bonus).
+   */
+  peek(station: string): MetarReport | null {
+    if (this.mode === "off") return null;
+    const now = this.now();
+    if (this.mode === "sample") return sampleMetar(station, new Date(now));
+    const c = this.cached(station);
+    if (!c?.report || now - c.fetchedAt > WEATHER_STALE_MAX_MS) return null;
+    const stale = now - c.fetchedAt > WEATHER_TTL_MS || this.lastError.has(station);
+    return { ...c.report, stale };
+  }
+
   private async fetchStations(stations: string[]): Promise<void> {
     const startedAt = this.now();
     for (const s of stations) this.lastAttempt.set(s, startedAt);

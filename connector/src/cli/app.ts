@@ -202,6 +202,8 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
     ...(options.now ? { now: options.now } : {}),
   });
   log("info", `Weather: ${weather.mode}`);
+  // Weather bonus: missions freeze the METAR the connector already holds (no extra requests).
+  session.economy?.setWeatherLookup((station) => weather.peek(station));
   const weatherRoutes = weatherApi(weather);
   const dataRoutes = dataApi({ backups, simbrief, databasePath: storage.path });
   const recorder = options.record ? new Recorder(resolve(options.record), session.store) : null;
