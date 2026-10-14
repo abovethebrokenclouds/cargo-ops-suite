@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -21,6 +21,53 @@ const rgb = (name: string): Rgb => {
   if (!v) throw new Error(`token --${name} missing`);
   return oklabToRgb(v);
 };
+
+interface StateFill {
+  file: string;
+  /** The state-prefixed class, e.g. `hover:bg-destructive/90`. */
+  cls: string;
+  fill: string;
+  alpha: number;
+  /** Colour token of the label shown in that state. */
+  label: string;
+}
+
+/**
+ * Scan every class string literal of the ui components for state-prefixed `bg-x[/NN]` and
+ * resolve the label colour the same state shows: the same-prefix `text-y`, else a `text-y`
+ * under any one of its prefixes, else the unprefixed `text-y`, else the inherited
+ * `foreground` (popover/card foregrounds are the same colour).
+ */
+function collectStateFills(dir: string): StateFill[] {
+  const out: StateFill[] = [];
+  const isColour = (name: string) => name in t;
+  for (const file of readdirSync(dir).filter((f) => f.endsWith(".tsx"))) {
+    const src = readFileSync(join(dir, file), "utf8");
+    for (const lit of src.matchAll(/"([^"\n]*)"|`([^`]*)`/g)) {
+      const classes = (lit[1] ?? lit[2] ?? "").split(/\s+/);
+      const textFor = (prefix: string): string | undefined =>
+        classes
+          .filter((c) => c.startsWith(`${prefix}text-`))
+          .map((c) => c.slice(prefix.length + 5))
+          .find((name) => isColour(name) && !/^\[|\//.test(name));
+      for (const cls of classes) {
+        const m = /^((?:[^\s:]+:)+)bg-([a-z-]+)(?:\/(\d+))?$/.exec(cls);
+        if (!m) continue;
+        const prefix = m[1] as string;
+        const fill = m[2] as string;
+        if (["transparent", "clip-text", "none"].includes(fill)) continue;
+        const parts = prefix.split(":").filter(Boolean);
+        const label =
+          textFor(prefix) ??
+          parts.map((p) => textFor(`${p}:`)).find(Boolean) ??
+          textFor("") ??
+          "foreground";
+        out.push({ file, cls, fill, alpha: m[3] ? Number(m[3]) / 100 : 1, label });
+      }
+    }
+  }
+  return out;
+}
 
 const background = rgb("background");
 // .panel / .panel-elevated: card at 80–88 % over the page; 80 % is the darker-contrast case
@@ -113,6 +160,63 @@ describe("token contrast (WCAG AA)", () => {
       const hover = over(rgb("destructive"), 0.9, background);
       expect(contrastRatio(rgb("destructive-foreground"), hover)).toBeGreaterThanOrEqual(4.5);
     });
+  });
+
+  // Every interactive-state fill in src/components/ui (hover:, active:, focus:, data-[…]:
+  // bg-x or bg-x/NN) is collected from the source, paired with the label it shows in that
+  // state, alpha-composited over each surface it can sit on, and held to 4.5:1. A new
+  // shadcn component or a hover tweak cannot slip below AA unnoticed.
+  describe("interactive state fills in src/components/ui ≥ 4.5:1", () => {
+    const states = collectStateFills(resolve(__dirname, "../../components/ui"));
+    // Fills without a parsed oklch token: `input` is translucent (switch track) and the
+    // `sidebar*` tokens are not defined in this theme, so those classes emit nothing.
+    const untokened = new Set(["input", "sidebar", "sidebar-accent", "sidebar-border"]);
+    // The switch track carries no text; its thumb (bg-background) is checked below at the
+    // 3:1 non-text threshold instead.
+    const audited = states.filter((s) => !untokened.has(s.fill) && s.file !== "switch.tsx");
+
+    it("finds the solid-variant hover states and only expected untokened fills", () => {
+      const ids = audited.map((s) => `${s.file} ${s.cls}`);
+      for (const id of [
+        "badge.tsx hover:bg-primary/80",
+        "badge.tsx hover:bg-secondary/80",
+        "badge.tsx hover:bg-destructive/90",
+        "button.tsx hover:bg-primary/90",
+        "button.tsx hover:bg-destructive/90",
+        "button.tsx hover:bg-secondary/80",
+        "button.tsx hover:bg-accent",
+        "toggle.tsx hover:bg-muted",
+        "toggle.tsx data-[state=on]:bg-accent",
+        "table.tsx hover:bg-muted/50",
+      ]) {
+        expect(ids, id).toContain(id);
+      }
+      for (const s of states) {
+        if (!(s.fill in t)) expect(untokened, `${s.file} ${s.cls}`).toContain(s.fill);
+      }
+    });
+
+    it("switch thumb (background) on the checked track (primary) ≥ 3:1", () => {
+      expect(states.map((s) => `${s.file} ${s.cls}`)).toContain(
+        "switch.tsx data-[state=checked]:bg-primary",
+      );
+      expect(contrastRatio(background, rgb("primary"))).toBeGreaterThanOrEqual(3);
+    });
+
+    const stateSurfaces: Record<string, Rgb> = {
+      background,
+      panel80,
+      panel88,
+      popover: rgb("popover"),
+    };
+    for (const s of audited) {
+      it(`${s.file} ${s.cls} with text-${s.label}`, () => {
+        for (const [surface, bg] of Object.entries(stateSurfaces)) {
+          const fill = over(rgb(s.fill), s.alpha, bg);
+          expect(contrastRatio(rgb(s.label), fill), surface).toBeGreaterThanOrEqual(4.5);
+        }
+      });
+    }
   });
 
   it("focus ring (primary) is visible against the page and panels ≥ 3:1", () => {
