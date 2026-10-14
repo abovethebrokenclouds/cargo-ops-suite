@@ -112,12 +112,23 @@ test("accept → load → fly (replay) → deliver: payout in the API and the lo
     checkedAt: "",
   });
   expect(fixtureCheck.loadedKg).toBe(830.1);
+  // The looping replay keeps flying while the test loads the mission, so by the time the
+  // strip is read the mission may already have auto-started at takeoff (check frozen as
+  // `departure`). The stage is asserted together with the mission status in ONE locator,
+  // so it is never read across a re-render: loaded ⇔ preview, started ⇔ departure. The
+  // check's values (status, source, numbers) are the same in both stages: the fixture's
+  // payload stations never change.
   const strip = page.getByTestId("mission-strip");
-  const preview = strip.getByTestId("payload-check");
-  await expect(preview).toHaveAttribute("data-stage", "preview");
-  await expect(preview).toHaveAttribute("data-source", "replay");
-  await expect(preview).toHaveAttribute("data-status", fixtureCheck.status);
-  await expect(preview.getByText("REPLAY")).toBeVisible();
+  const check = (status: string, stage: string) =>
+    page.locator(
+      `[data-testid="mission-strip"][data-status="${status}"] [data-testid="payload-check"][data-stage="${stage}"]` +
+        `[data-source="replay"][data-status="${fixtureCheck.status}"]`,
+    );
+  const preview = check("loaded", "preview")
+    .or(check("in_progress", "departure"))
+    .or(check("delivered", "departure"));
+  await expect(preview).toBeVisible();
+  await expect(strip.getByTestId("payload-check").getByText("REPLAY")).toBeVisible();
   await expect(strip.getByTestId("payload-check-numbers")).toContainText(
     `cargo ${job.weightKg.toLocaleString("en-US")} kg`,
   );
