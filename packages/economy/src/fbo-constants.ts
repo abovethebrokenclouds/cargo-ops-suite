@@ -215,6 +215,26 @@ export const INSURANCE = {
   deductible: 2_000,
 } as const;
 
+/**
+ * Insurer repair loans (plan §7.4: "repossession-free repair loans"): an insured aircraft's
+ * repair bill financed by the insurer. Fixed APR below the cheapest bank (Altocirrus 5.5 %),
+ * a short term, no origination fee. Missed payments follow the bank rules (late fee,
+ * −5 reputation, interest capitalised) but never repossess and never set the default flag;
+ * the third consecutive miss cancels the policy and moves the balance to cash.
+ */
+export const REPAIR_LOAN = {
+  lenderId: "insurer",
+  lenderName: "Hull insurer",
+  /** Percent, fixed. */
+  apr: 4,
+  minTermMonths: 6,
+  maxTermMonths: 24,
+  /** Smallest amount the insurer finances, dollars. */
+  minAmount: 500,
+  /** Consecutive misses that cancel the policy (the balance moves to cash). */
+  cancelAfterMisses: 3,
+} as const;
+
 // ---- milestones ----
 
 export const MILESTONES = {

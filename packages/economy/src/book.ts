@@ -15,6 +15,7 @@ import type {
   LedgerCategory,
   LedgerEntryState,
   LedgerState,
+  LoanKind,
   LoanQuote,
   LoanState,
   LoansState,
@@ -97,6 +98,7 @@ import {
   INSURANCE,
   MILESTONES,
   RAMP,
+  REPAIR_LOAN,
   REFERENCE_HANDLING_USD,
 } from "./fbo-constants";
 import {
@@ -138,6 +140,10 @@ import {
   insurancePremium,
   insuranceRisk,
   repairClaim,
+  repairLoanBill,
+  repairLoanCheck,
+  repairLoanPolicyCheck,
+  repairLoanTerms,
   writeOffClaim,
   type Incident,
 } from "./insurance";
@@ -364,6 +370,34 @@ export interface BookLoan {
   status: LoanState["status"];
   takenAt: number;
   takenGameMs: number;
+  /**
+   * Absent = `bank`. `repair`: an insurer repair loan; `collateral` names the aircraft whose
+   * repair it financed but is no lien (never repossessed; see `debitLoan`).
+   */
+  kind?: LoanKind | undefined;
+  /** Repair loans: the maintenance order financed. */
+  orderId?: string | undefined;
+}
+
+/** Insurer repair loans are `kind: "repair"`; every other loan is a bank loan. */
+export function isRepairLoan(l: Pick<BookLoan, "kind">): boolean {
+  return l.kind === "repair";
+}
+
+export type RepairKind = "overhaul" | "all" | "defect";
+
+/** A repair about to be ordered (shared by the cash and the insurer-financed paths). */
+interface RepairTarget {
+  a: BookAircraft;
+  kind: RepairKind;
+  cost: number;
+  hours: number;
+  shop: Shop;
+  defects: Defect[];
+  label: string;
+  memo: string;
+  /** Incident claim the policy pays when the order is placed (0 uninsured / no incident). */
+  claim: number;
 }
 
 export interface BookLedgerEntry {
@@ -432,6 +466,9 @@ export const CAPITAL_CATEGORIES: ReadonlySet<LedgerCategory> = new Set<LedgerCat
   // P5 part 2: FBO purchase, construction and module installs are capital.
   "fbo_purchase",
   "fbo_construction",
+  // Insurer repair loans: principal in and out (interest and late fees are operating).
+  "repair_loan_disbursement",
+  "repair_loan_payment",
 ]);
 const CAPITAL = CAPITAL_CATEGORIES;
 
@@ -961,13 +998,16 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       this.monthlyPilots();
     }
     // Loan auto-debits.
-    for (const loan of this.activeLoans()) {
-      if (loan.nextDueGameMs <= t) this.debitLoan(loan);
+    for (const l of this.activeLoans()) {
+      // Re-read: a repossession earlier in this loop may have called a repair loan.
+      const loan = this.loans.get(l.id);
+      if (loan && loan.status === "active" && loan.nextDueGameMs <= t) this.debitLoan(loan);
     }
   }
 
   private debitLoan(loan: BookLoan): void {
-    const lender = lenderById(loan.lenderId);
+    const name = loanLenderName(loan);
+    const repair = isRepairLoan(loan);
     const interest = monthInterest(loan.balance, loan.apr);
     const due = round2(Math.min(loan.payment, loan.balance + interest));
     const remaining = loan.termMonths - loan.paymentsMade;
@@ -981,14 +1021,14 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
           -interest,
           "loan",
           loan.id,
-          `${lender?.name ?? loan.lenderId} interest`,
+          `${name} ${repair ? "repair loan " : ""}interest`,
         );
       this.post(
-        "loan_payment",
+        repair ? "repair_loan_payment" : "loan_payment",
         -principal,
         "loan",
         loan.id,
-        `${lender?.name ?? loan.lenderId} principal`,
+        `${name} ${repair ? "repair loan " : ""}principal`,
       );
       const balance = round2(loan.balance - principal);
       const paid: BookLoan = {
@@ -1000,7 +1040,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
         status: balance < 0.005 ? "paid_off" : "active",
       };
       this.touchLoan(paid);
-      if (paid.status === "paid_off") this.releaseCollateral(paid);
+      if (paid.status === "paid_off" && !repair) this.releaseCollateral(paid);
       this.notice("loan.payment", {
         loanId: loan.id,
         amount,
@@ -1013,7 +1053,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     // Missed: late fee (cash may go negative), −5 reputation, the month's interest is
     // capitalised and the schedule moves one month.
     const fee = round2(Math.max(LATE_FEE_MIN_USD, amount * LATE_FEE_SHARE));
-    this.post("late_fee", -fee, "loan", loan.id, `${lender?.name ?? loan.lenderId} late fee`);
+    this.post("late_fee", -fee, "loan", loan.id, `${name} ${repair ? "repair loan " : ""}late fee`);
     this.adjustReputation(MISSED_PAYMENT_REPUTATION);
     const missed: BookLoan = {
       ...loan,
@@ -1028,8 +1068,69 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       amount,
       lateFee: fee,
       missedCount: missed.missedCount,
+      ...(repair ? { kind: "repair" } : {}),
     });
+    if (repair) {
+      // Repossession-free: the third miss cancels the policy and moves the balance to cash.
+      if (missed.missedCount >= REPAIR_LOAN.cancelAfterMisses) {
+        this.callRepairLoan(missed, "missed_payments");
+      }
+      return;
+    }
     if (missed.missedCount >= REPOSSESS_AFTER_MISSES) this.repossess(missed);
+  }
+
+  /** The active insurer repair loan on an aircraft, if any. */
+  openRepairLoan(aircraftId: string): BookLoan | null {
+    for (const l of this.loans.values()) {
+      if (l.status === "active" && isRepairLoan(l) && l.collateral.id === aircraftId) return l;
+    }
+    return null;
+  }
+
+  /**
+   * Call an insurer repair loan: the outstanding balance is debited from cash at once (cash
+   * may go negative, like a late fee) and the loan closes as `called`. After three missed
+   * payments the policy is cancelled as well. Never repossesses, never sets the default flag.
+   */
+  private callRepairLoan(
+    loan: BookLoan,
+    reason: "missed_payments" | "aircraft_repossessed" | "aircraft_written_off",
+  ): void {
+    const balance = loan.balance;
+    const a = this.fleet.get(loan.collateral.id);
+    const reg = a?.registration ?? loan.collateral.id;
+    const memo =
+      reason === "missed_payments"
+        ? `Insurer called the ${reg} repair loan after ${REPAIR_LOAN.cancelAfterMisses} missed payments: balance moved to cash`
+        : reason === "aircraft_repossessed"
+          ? `Insurer called the ${reg} repair loan: the aircraft was repossessed`
+          : `Balance of the ${reg} repair loan due after the write-off`;
+    if (balance > 0) this.post("repair_loan_payment", -balance, "loan", loan.id, memo);
+    this.touchLoan({ ...loan, balance: 0, status: "called" });
+    // Every call is announced with the amount moved to cash (third miss, repossession,
+    // write-off remainder).
+    this.notice("loan.called", {
+      loanId: loan.id,
+      kind: "repair",
+      aircraftId: loan.collateral.id,
+      registration: reg,
+      reason,
+      balanceMovedToCash: balance,
+    });
+    // A repossessed or written-off hull has left the fleet (no more premiums); only the
+    // missed-payment path cancels a policy on an aircraft the company keeps.
+    if (reason === "missed_payments" && a?.insurance) {
+      this.touchAircraft({ ...(this.fleet.get(a.id) ?? a), insurance: null });
+      this.event(a.id, "insurance.cancelled", { by: "insurer", reason, loanId: loan.id });
+      this.notice("insurance.cancelled", {
+        aircraftId: a.id,
+        registration: a.registration,
+        reason,
+        loanId: loan.id,
+        balanceMovedToCash: balance,
+      });
+    }
   }
 
   private repossess(loan: BookLoan): void {
@@ -1044,6 +1145,9 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       if (a) {
         this.touchAircraft({ ...a, status: "repossessed", loanId: null, readyAtGameMs: null });
         this.event(a.id, "repossessed", { loanId: loan.id, balance: loan.balance });
+        // The insurer's repair loan on it has no lien and is not written off: it is called.
+        const repairLoan = this.openRepairLoan(a.id);
+        if (repairLoan) this.callRepairLoan(repairLoan, "aircraft_repossessed");
         // A hired pilot flying it loses the aircraft now, not at its next departure.
         const pilot = this.pilotOf(a.id);
         if (pilot) {
@@ -1133,7 +1237,9 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     return { ok: true, data: { aircraft: this.fleet.get(a.id) ?? a, loan } };
   }
 
-  sell(aircraftId: string): BookResult<{ price: number; loanPaid: number }> {
+  sell(
+    aircraftId: string,
+  ): BookResult<{ price: number; loanPaid: number; repairLoanPaid?: number }> {
     const a = this.aircraft(aircraftId);
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
     if (a.ownership !== "owned") return fail("not_owned", "Leased aircraft are returned, not sold");
@@ -1144,10 +1250,15 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     const price = round2(this.aircraftValue(a) * SALE_SHARE);
     const loan = a.loanId ? this.loans.get(a.loanId) : undefined;
     const owed = loan && loan.status === "active" ? loan.balance : 0;
-    if (owed > price) {
+    // An insurer repair loan on it is settled from the proceeds as well.
+    const repairLoan = this.openRepairLoan(a.id);
+    const repairOwed = repairLoan ? repairLoan.balance : 0;
+    if (round2(owed + repairOwed) > price) {
       return fail(
         "underwater",
-        `The sale ($${price.toLocaleString("en-US")}) does not cover the loan balance ($${owed.toLocaleString("en-US")})`,
+        repairOwed > 0
+          ? `The sale ($${price.toLocaleString("en-US")}) does not cover the loan balances ($${owed.toLocaleString("en-US")} bank + $${repairOwed.toLocaleString("en-US")} insurer repair loan)`
+          : `The sale ($${price.toLocaleString("en-US")}) does not cover the loan balance ($${owed.toLocaleString("en-US")})`,
       );
     }
     this.post("sale", price, "aircraft", a.id, `Sold ${type.name} ${a.registration}`);
@@ -1161,12 +1272,29 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       );
       this.touchLoan({ ...loan, balance: 0, status: "paid_off" });
     }
+    if (repairLoan && repairOwed > 0) {
+      this.post(
+        "repair_loan_payment",
+        -repairOwed,
+        "loan",
+        repairLoan.id,
+        `Repair loan payoff from the sale of ${a.registration}`,
+      );
+    }
+    if (repairLoan) this.touchLoan({ ...repairLoan, balance: 0, status: "paid_off" });
     this.touchAircraft({ ...a, status: "sold", loanId: null });
-    this.event(a.id, "sold", { price, loanPaid: owed });
+    this.event(a.id, "sold", {
+      price,
+      loanPaid: owed,
+      ...(repairLoan ? { repairLoanPaid: repairOwed } : {}),
+    });
     if (this.company.selectedAircraftId === a.id) {
       this.company = { ...this.company, selectedAircraftId: null };
     }
-    return { ok: true, data: { price, loanPaid: owed } };
+    return {
+      ok: true,
+      data: { price, loanPaid: owed, ...(repairLoan ? { repairLoanPaid: repairOwed } : {}) },
+    };
   }
 
   lease(args: {
@@ -1226,33 +1354,194 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
   }
 
   repair(aircraftId: string): BookResult<{ cost: number; hours: number; readyAtGameMs: number }> {
-    const a = this.aircraft(aircraftId);
-    if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
-    if (a.status !== "available") return fail("aircraft_busy", busyMessage(a));
-    if (a.condition >= 100) return fail("no_wear", `${a.registration} needs no repair`);
-    const type = aircraftTypeByKey(a.typeKey);
-    if (!type) return fail("unknown_type", a.typeKey);
-    const cost = repairCost(type, a.condition);
-    const hours = repairHours(a.condition);
-    if (this.company.cash < cost) {
-      return fail("insufficient_cash", `The repair costs $${cost.toLocaleString("en-US")}`);
+    const t = this.repairTarget(aircraftId, "overhaul");
+    if (!t.ok) return t;
+    const cash = this.repairCashCheck(t.data, 0);
+    if (!cash.ok) return cash;
+    const order = this.placeRepair(t.data);
+    return {
+      ok: true,
+      data: { cost: t.data.cost, hours: t.data.hours, readyAtGameMs: order.readyAtGameMs },
+    };
+  }
+
+  /**
+   * What a repair would cost and do, with the same refusals as the cash commands: the wear
+   * overhaul needs the aircraft available; defect repairs queue behind running orders.
+   */
+  private repairTarget(
+    aircraftId: string,
+    kind: RepairKind,
+    defectId?: string,
+  ): BookResult<RepairTarget> {
+    if (kind === "overhaul") {
+      const a = this.aircraft(aircraftId);
+      if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
+      if (a.status !== "available") return fail("aircraft_busy", busyMessage(a));
+      if (a.condition >= 100) return fail("no_wear", `${a.registration} needs no repair`);
+      const type = aircraftTypeByKey(a.typeKey);
+      if (!type) return fail("unknown_type", a.typeKey);
+      const wear = round2(100 - a.condition);
+      return {
+        ok: true,
+        data: {
+          a,
+          kind,
+          cost: repairCost(type, a.condition),
+          hours: repairHours(a.condition),
+          shop: "maintenance",
+          defects: [],
+          label: `Overhaul (${wear} % wear)`,
+          memo: `${a.registration} repair (${wear} % wear)`,
+          claim: 0,
+        },
+      };
     }
-    this.post(
-      "repair",
-      -cost,
-      "aircraft",
-      a.id,
-      `${a.registration} repair (${round2(100 - a.condition)} % wear)`,
-    );
-    const order = this.openOrder(a, {
-      kind: "overhaul",
-      defectIds: [],
-      label: `Overhaul (${round2(100 - a.condition)} % wear)`,
-      shop: "maintenance",
-      cost,
-      hours,
+    const w = this.workable(aircraftId);
+    if (!w.ok) return w;
+    const a = w.data;
+    let defects: Defect[];
+    if (kind === "defect") {
+      const d = a.defects.find((x) => x.id === defectId && !x.hidden);
+      if (!d) return fail("unknown_defect", `No known defect ${defectId} on ${a.registration}`);
+      if (this.queued(a).has(d.id)) return fail("already_queued", `${d.title} is already queued`);
+      defects = [d];
+    } else {
+      const queued = this.queued(a);
+      defects = a.defects.filter((d) => !d.hidden && !queued.has(d.id));
+      if (defects.length === 0) return fail("no_defects", `${a.registration} has no open defects`);
+    }
+    const q = this.repairQuoteFor(a, defects);
+    const one = defects.length === 1 ? defects[0] : undefined;
+    return {
+      ok: true,
+      data: {
+        a,
+        kind,
+        cost: q.cost,
+        hours: q.hours,
+        shop: q.shop,
+        defects,
+        label: one ? one.title : `${defects.length} defects`,
+        memo:
+          kind === "defect" && one
+            ? `${a.registration} repair: ${one.title}`
+            : `${a.registration} repair of ${defects.length} defect(s)`,
+        claim: a.insurance ? this.incidentClaim(defects, q.shop).claim : 0,
+      },
+    };
+  }
+
+  /** Cash must cover the gross cost (less what the insurer lends); the claim comes after. */
+  private repairCashCheck(t: RepairTarget, financed: number): BookResult<null> {
+    // Financed by the insurer: its claim and its loan are booked before the shop bill in the
+    // same call, so only the rest of the bill (cost − claim − principal) needs cash. A cash
+    // repair needs the gross cost (the claim comes after, as in P5 part 2).
+    const needed = financed > 0 ? round2(t.cost - t.claim - financed) : t.cost;
+    if (this.company.cash < needed) {
+      const what = t.kind === "all" ? "The repairs cost" : "The repair costs";
+      return fail(
+        "insufficient_cash",
+        financed > 0
+          ? `${what} $${t.cost.toLocaleString("en-US")}: needs $${needed.toLocaleString("en-US")} in cash besides the incident claim and the repair loan`
+          : `${what} $${t.cost.toLocaleString("en-US")}`,
+      );
+    }
+    return { ok: true, data: null };
+  }
+
+  /**
+   * Book the repair (and its incident claim) and open the maintenance order. `claimFirst`
+   * (insurer-financed): the claim is booked before the shop bill so the running balance
+   * never dips below the cash the company pays itself.
+   */
+  private placeRepair(t: RepairTarget, claimFirst = false): MaintenanceOrder {
+    const a = t.a;
+    const claim = t.kind !== "overhaul";
+    if (claim && claimFirst) this.claimRepair(a.id, t.defects, t.shop);
+    this.post("repair", -t.cost, "aircraft", a.id, t.memo);
+    if (claim && !claimFirst) this.claimRepair(a.id, t.defects, t.shop);
+    return this.openOrder(this.fleet.get(a.id) ?? a, {
+      kind: t.kind === "overhaul" ? "overhaul" : "defect",
+      defectIds: t.defects.map((d) => d.id),
+      label: t.label,
+      shop: t.shop,
+      cost: t.cost,
+      hours: t.hours,
     });
-    return { ok: true, data: { cost, hours, readyAtGameMs: order.readyAtGameMs } };
+  }
+
+  /**
+   * Insurer repair loan (plan §7.4): order the repair and let the insurer finance up to its
+   * bill (cost − the incident claim it pays). Fixed APR, 6–24 months, no fee; auto-debited
+   * on the month boundary like a bank loan; never repossesses (see `debitLoan`).
+   */
+  repairLoan(args: {
+    aircraftId: string;
+    repair: RepairKind;
+    defectId?: string | undefined;
+    principal: number;
+    termMonths: number;
+  }): BookResult<{ loan: BookLoan; order: MaintenanceOrder; bill: number; claim: number }> {
+    const a0 = this.aircraft(args.aircraftId);
+    if (!a0) return fail("unknown_aircraft", `No aircraft ${args.aircraftId} in the fleet`);
+    // Aircraft and policy rules first (owned, not hired/flying, insured, one open loan),
+    // then what the repair itself refuses, then the amounts against its bill.
+    const policy = {
+      ownership: a0.ownership,
+      status: a0.status,
+      insured: a0.insurance !== null,
+      openRepairLoan: this.openRepairLoan(a0.id) !== null,
+    };
+    const pre = repairLoanPolicyCheck(policy);
+    if (!pre.ok) return fail(pre.code, `${a0.registration}: ${pre.message}`);
+    const t = this.repairTarget(a0.id, args.repair, args.defectId);
+    if (!t.ok) return t;
+    const bill = repairLoanBill(t.data.cost, t.data.claim);
+    const check = repairLoanCheck({
+      ...policy,
+      bill,
+      principal: args.principal,
+      termMonths: args.termMonths,
+    });
+    if (!check.ok) return fail(check.code, `${a0.registration}: ${check.message}`);
+    const principal = round2(args.principal);
+    const cash = this.repairCashCheck(t.data, principal);
+    if (!cash.ok) return cash;
+    const terms = repairLoanTerms(principal, args.termMonths);
+    const n = this.company.loanCounter + 1;
+    this.company = { ...this.company, loanCounter: n };
+    const id = `LN-${n}`;
+    // The insurer pays the shop: the disbursement first, so the running balance never dips.
+    this.post(
+      "repair_loan_disbursement",
+      principal,
+      "loan",
+      id,
+      `${REPAIR_LOAN.lenderName} repair loan for ${a0.registration}`,
+    );
+    const order = this.placeRepair(t.data, true);
+    const loan: BookLoan = {
+      id,
+      lenderId: REPAIR_LOAN.lenderId,
+      principal,
+      apr: terms.apr,
+      termMonths: args.termMonths,
+      payment: terms.payment,
+      balance: principal,
+      collateral: { type: "aircraft", id: a0.id },
+      nextDueGameMs: Math.floor(this.company.gameMs + GAME_MONTH_MS),
+      missedCount: 0,
+      paymentsMade: 0,
+      status: "active",
+      takenAt: this.now(),
+      takenGameMs: Math.floor(this.company.gameMs),
+      kind: "repair",
+      orderId: order.id,
+    };
+    this.touchLoan(loan);
+    this.event(a0.id, "repair_loan", { loanId: id, principal, order: order.id, bill });
+    return { ok: true, data: { loan, order, bill, claim: t.data.claim } };
   }
 
   select(aircraftId: string | null): BookResult<{ aircraftId: string | null }> {
@@ -1464,6 +1753,10 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     if (writtenOff) {
       this.event(a.id, "written_off", { condition });
       if (a.insurance) this.settleWriteOff(this.fleet.get(a.id) ?? next, valueBefore);
+      // An open repair loan implies a policy (cancelling is refused while one is open); should
+      // one remain anyway, the hull is gone and the balance is due at once.
+      const leftover = this.openRepairLoan(a.id);
+      if (leftover) this.callRepairLoan(leftover, "aircraft_written_off");
       if (this.company.selectedAircraftId === a.id) {
         this.company = { ...this.company, selectedAircraftId: null };
       }
@@ -1673,58 +1966,20 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
 
   /** Repair one known defect (queued behind any running order). */
   repairDefect(aircraftId: string, defectId: string): BookResult<{ order: MaintenanceOrder }> {
-    const w = this.workable(aircraftId);
-    if (!w.ok) return w;
-    const a = w.data;
-    const d = a.defects.find((x) => x.id === defectId && !x.hidden);
-    if (!d) return fail("unknown_defect", `No known defect ${defectId} on ${a.registration}`);
-    if (this.queued(a).has(d.id)) return fail("already_queued", `${d.title} is already queued`);
-    const q = this.repairQuoteFor(a, [d]);
-    if (this.company.cash < q.cost) {
-      return fail("insufficient_cash", `The repair costs $${q.cost.toLocaleString("en-US")}`);
-    }
-    this.post("repair", -q.cost, "aircraft", a.id, `${a.registration} repair: ${d.title}`);
-    this.claimRepair(a.id, [d], q.shop);
-    const order = this.openOrder(this.fleet.get(a.id) ?? a, {
-      kind: "defect",
-      defectIds: [d.id],
-      label: d.title,
-      shop: q.shop,
-      cost: q.cost,
-      hours: q.hours,
-    });
-    return { ok: true, data: { order } };
+    const t = this.repairTarget(aircraftId, "defect", defectId);
+    if (!t.ok) return t;
+    const cash = this.repairCashCheck(t.data, 0);
+    if (!cash.ok) return cash;
+    return { ok: true, data: { order: this.placeRepair(t.data) } };
   }
 
   /** Repair every known defect not already queued, as one order. */
   repairAll(aircraftId: string): BookResult<{ order: MaintenanceOrder }> {
-    const w = this.workable(aircraftId);
-    if (!w.ok) return w;
-    const a = w.data;
-    const queued = this.queued(a);
-    const open = a.defects.filter((d) => !d.hidden && !queued.has(d.id));
-    if (open.length === 0) return fail("no_defects", `${a.registration} has no open defects`);
-    const q = this.repairQuoteFor(a, open);
-    if (this.company.cash < q.cost) {
-      return fail("insufficient_cash", `The repairs cost $${q.cost.toLocaleString("en-US")}`);
-    }
-    this.post(
-      "repair",
-      -q.cost,
-      "aircraft",
-      a.id,
-      `${a.registration} repair of ${open.length} defect(s)`,
-    );
-    this.claimRepair(a.id, open, q.shop);
-    const order = this.openOrder(this.fleet.get(a.id) ?? a, {
-      kind: "defect",
-      defectIds: open.map((d) => d.id),
-      label: open.length === 1 ? (open[0]?.title ?? "Defect") : `${open.length} defects`,
-      shop: q.shop,
-      cost: q.cost,
-      hours: q.hours,
-    });
-    return { ok: true, data: { order } };
+    const t = this.repairTarget(aircraftId, "all");
+    if (!t.ok) return t;
+    const cash = this.repairCashCheck(t.data, 0);
+    if (!cash.ok) return cash;
+    return { ok: true, data: { order: this.placeRepair(t.data) } };
   }
 
   /** Annual inspection (also reveals hidden defects when it completes). */
@@ -2143,10 +2398,17 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       return fail("insufficient_cash", `The payoff is $${loan.balance.toLocaleString("en-US")}`);
     }
     const amount = loan.balance;
-    this.post("loan_payment", -amount, "loan", loan.id, "Early payoff (no penalty)");
+    const repair = isRepairLoan(loan);
+    this.post(
+      repair ? "repair_loan_payment" : "loan_payment",
+      -amount,
+      "loan",
+      loan.id,
+      repair ? "Repair loan early payoff (no penalty)" : "Early payoff (no penalty)",
+    );
     const paid: BookLoan = { ...loan, balance: 0, status: "paid_off" };
     this.touchLoan(paid);
-    this.releaseCollateral(paid);
+    if (!repair) this.releaseCollateral(paid);
     return { ok: true, data: { amount } };
   }
 
@@ -3005,6 +3267,33 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       ...(a.insurance ? { sinceGameMs: a.insurance.sinceGameMs } : {}),
       claims: a.insurance?.claims ?? 0,
       claimsPaid: a.insurance?.claimsPaid ?? 0,
+      repairLoan: this.repairLoanView(a),
+    };
+  }
+
+  /** Repair-loan terms, the bills an insurer would finance now, and the open loan. */
+  private repairLoanView(a: BookAircraft): NonNullable<InsuranceState["repairLoan"]> {
+    const bill = (kind: RepairKind): number | null => {
+      const t = this.repairTarget(a.id, kind);
+      return t.ok ? repairLoanBill(t.data.cost, t.data.claim) : null;
+    };
+    const open = this.openRepairLoan(a.id);
+    return {
+      apr: REPAIR_LOAN.apr,
+      minTermMonths: REPAIR_LOAN.minTermMonths,
+      maxTermMonths: REPAIR_LOAN.maxTermMonths,
+      minAmount: REPAIR_LOAN.minAmount,
+      overhaulBill: bill("overhaul"),
+      allDefectsBill: bill("all"),
+      open: open
+        ? {
+            loanId: open.id,
+            balance: open.balance,
+            payment: open.payment,
+            missedCount: open.missedCount,
+            nextDueGameMs: open.nextDueGameMs,
+          }
+        : null,
     };
   }
 
@@ -3045,19 +3334,31 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
     if (!a) return fail("unknown_aircraft", `No aircraft ${aircraftId} in the fleet`);
     if (a.status === "hired") return fail("aircraft_busy", busyMessage(a));
     if (!a.insurance) return fail("not_insured", `${a.registration} is not insured`);
+    const open = this.openRepairLoan(a.id);
+    if (open) {
+      return fail(
+        "repair_loan_open",
+        `${a.registration} has an open insurer repair loan (${open.id}, $${open.balance.toLocaleString("en-US")}): pay it off before cancelling the policy`,
+      );
+    }
     this.touchAircraft({ ...a, insurance: null });
     this.event(a.id, "insurance.cancelled", {});
     return { ok: true, data: { aircraftId } };
   }
 
   /** An insured repair of incident defects (hard landing, crash): 80 % above $2,000. */
+  /** Incident share of a repair (hard landing, crash defects) and the claim it would pay. */
+  private incidentClaim(defects: readonly Defect[], shop: Shop): { cost: number; claim: number } {
+    const claimable = defects.filter((d) => CLAIMABLE_CAUSES.has(d.cause));
+    if (claimable.length === 0) return { cost: 0, claim: 0 };
+    const cost = repairQuote(claimable, shop).cost;
+    return { cost, claim: repairClaim(cost) };
+  }
+
   private claimRepair(aircraftId: string, defects: readonly Defect[], shop: Shop): void {
     const a = this.fleet.get(aircraftId);
     if (!a?.insurance) return;
-    const claimable = defects.filter((d) => CLAIMABLE_CAUSES.has(d.cause));
-    if (claimable.length === 0) return;
-    const cost = repairQuote(claimable, shop).cost;
-    const claim = repairClaim(cost);
+    const { cost, claim } = this.incidentClaim(defects, shop);
     if (claim <= 0) return;
     this.post(
       "insurance_claim",
@@ -3097,11 +3398,32 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       a.id,
       `${a.registration} hull write-off claim (80 % of $${valueBefore.toLocaleString("en-US")})`,
     );
+    // The insurer nets its own repair loan off the payout first; the rest settles the bank
+    // loan. A repair-loan remainder the payout does not cover is due at once (from cash).
+    let left = claim;
+    let repairLoanPaid = 0;
+    const repairLoan = this.openRepairLoan(a.id);
+    if (repairLoan) {
+      repairLoanPaid = round2(Math.min(repairLoan.balance, left));
+      left = round2(left - repairLoanPaid);
+      if (repairLoanPaid > 0) {
+        this.post(
+          "repair_loan_payment",
+          -repairLoanPaid,
+          "loan",
+          repairLoan.id,
+          `Repair loan netted off the write-off claim for ${a.registration}`,
+        );
+      }
+      const rest = round2(repairLoan.balance - repairLoanPaid);
+      if (rest < 0.005) this.touchLoan({ ...repairLoan, balance: 0, status: "paid_off" });
+      else this.callRepairLoan({ ...repairLoan, balance: rest }, "aircraft_written_off");
+    }
     let loanPaid = 0;
     let loanId = a.loanId;
     const loan = a.loanId ? this.loans.get(a.loanId) : undefined;
-    if (loan && loan.status === "active" && claim > 0) {
-      loanPaid = round2(Math.min(loan.balance, claim));
+    if (loan && loan.status === "active" && left > 0) {
+      loanPaid = round2(Math.min(loan.balance, left));
       this.post(
         "loan_payment",
         -loanPaid,
@@ -3133,6 +3455,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       kind: "write_off",
       amount: claim,
       loanPaid,
+      ...(repairLoan ? { repairLoanPaid } : {}),
     });
   }
 
@@ -3925,11 +4248,17 @@ function emptyChanges(): BookChanges {
   };
 }
 
+/** Display name of a loan's lender (the insurer for repair loans). */
+export function loanLenderName(l: Pick<BookLoan, "kind" | "lenderId">): string {
+  if (isRepairLoan(l)) return REPAIR_LOAN.lenderName;
+  return lenderById(l.lenderId)?.name ?? l.lenderId;
+}
+
 export function loanState(l: BookLoan): LoanState {
   return {
     id: l.id,
     lenderId: l.lenderId,
-    lenderName: lenderById(l.lenderId)?.name ?? l.lenderId,
+    lenderName: loanLenderName(l),
     principal: l.principal,
     apr: l.apr,
     termMonths: l.termMonths,
@@ -3942,6 +4271,8 @@ export function loanState(l: BookLoan): LoanState {
     status: l.status,
     takenAt: new Date(l.takenAt).toISOString(),
     takenGameMs: l.takenGameMs,
+    ...(l.kind ? { kind: l.kind } : {}),
+    ...(l.orderId ? { orderId: l.orderId } : {}),
   };
 }
 

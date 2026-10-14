@@ -59,6 +59,11 @@ export const LEDGER_CATEGORIES = [
   // fuel and landing fees use the existing categories with refType "pilot".
   "pilot_wage",
   "hired_income",
+  // Insurer repair loans (docs/ECONOMY.md "Insurer repair loans"): the insurer pays the shop
+  // (disbursement) and the principal comes back monthly. Capital flows, like bank loans;
+  // their interest and late fees use `interest` and `late_fee`.
+  "repair_loan_disbursement",
+  "repair_loan_payment",
 ] as const;
 export const ledgerCategorySchema = z.enum(LEDGER_CATEGORIES);
 export type LedgerCategory = z.infer<typeof ledgerCategorySchema>;
@@ -195,7 +200,11 @@ export type FleetState = z.infer<typeof fleetDomainSchema>;
 
 // ---- loans ----
 
-export const LOAN_STATUSES = ["active", "paid_off", "defaulted"] as const;
+/**
+ * `called`: an insurer repair loan whose policy was cancelled after three missed payments;
+ * the outstanding balance moved to cash (no repossession, no default flag).
+ */
+export const LOAN_STATUSES = ["active", "paid_off", "defaulted", "called"] as const;
 export const loanStatusSchema = z.enum(LOAN_STATUSES);
 export type LoanStatus = z.infer<typeof loanStatusSchema>;
 
@@ -205,6 +214,15 @@ export const collateralSchema = z.object({
   id: z.string().min(1),
 });
 export type Collateral = z.infer<typeof collateralSchema>;
+
+/**
+ * `bank`: a lender's loan secured by its collateral (repossessed after three misses).
+ * `repair`: an insurer repair loan on an insured aircraft; `collateral` names the aircraft
+ * whose repair it financed but places no lien on it (never repossessed).
+ */
+export const LOAN_KINDS = ["bank", "repair"] as const;
+export const loanKindSchema = z.enum(LOAN_KINDS);
+export type LoanKind = z.infer<typeof loanKindSchema>;
 
 export const loanSchema = z.object({
   id: z.string().min(1),
@@ -227,6 +245,10 @@ export const loanSchema = z.object({
   status: loanStatusSchema,
   takenAt: z.string(),
   takenGameMs: finite().nonnegative(),
+  /** Absent = `bank` (every loan before insurer repair loans). */
+  kind: loanKindSchema.optional(),
+  /** Repair loans: the maintenance order it financed. */
+  orderId: z.string().optional(),
 });
 export type LoanState = z.infer<typeof loanSchema>;
 

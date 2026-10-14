@@ -1,5 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ClipboardList, Plane, Store, UserRound, Warehouse, Wrench } from "lucide-react";
+import {
+  ClipboardList,
+  Plane,
+  ShieldCheck,
+  Store,
+  UserRound,
+  Warehouse,
+  Wrench,
+} from "lucide-react";
 import { useState } from "react";
 
 import type { FleetAircraft } from "@cargo-ops/protocol";
@@ -14,6 +22,7 @@ import { SystemsPanel } from "@/components/fleet/Airworthiness";
 import { FleetCard } from "@/components/fleet/FleetCard";
 import { HiredPilots } from "@/components/fleet/HiredPilots";
 import { MaintenanceBoard } from "@/components/fleet/MaintenanceBoard";
+import { RepairFinancing } from "@/components/fleet/RepairFinancing";
 import { UsedMarket } from "@/components/fleet/UsedMarket";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SourceTag } from "@/components/status/SourceTag";
@@ -117,12 +126,14 @@ function Fleet() {
         <button
           type="button"
           className={ghostButton}
-          disabled={!connector || busy}
+          disabled={!connector || busy || (a.insurance.insured && !!a.insurance.repairLoan?.open)}
           title={
             disabledNote ??
-            (a.insurance.insured
-              ? `Covers ${Math.round(a.insurance.coverageShare * 100)} % of a write-off and of incident repairs above ${formatUsd(a.insurance.deductible)}; risk × ${a.insurance.riskFactor}`
-              : `Hull policy: ${formatUsd(a.insurance.premiumMonthly)} a month (risk × ${a.insurance.riskFactor})`)
+            (a.insurance.insured && a.insurance.repairLoan?.open
+              ? "An insurer repair loan is open: pay it off before cancelling the policy"
+              : a.insurance.insured
+                ? `Covers ${Math.round(a.insurance.coverageShare * 100)} % of a write-off and of incident repairs above ${formatUsd(a.insurance.deductible)}; risk × ${a.insurance.riskFactor}`
+                : `Hull policy: ${formatUsd(a.insurance.premiumMonthly)} a month (risk × ${a.insurance.riskFactor})`)
           }
           onClick={() =>
             void run(
@@ -307,6 +318,25 @@ function Fleet() {
                   <SystemsPanel
                     aircraft={detail}
                     enabled={connector}
+                    disabledNote={disabledNote}
+                    busy={busy}
+                    run={run}
+                  />
+                </Panel>
+              ) : null}
+
+              {detail && detail.ownership === "owned" && detail.insurance?.repairLoan ? (
+                <Panel
+                  className="col-span-12"
+                  eyebrow="Repairs"
+                  title={`Finance with insurer · ${detail.registration}`}
+                  icon={ShieldCheck}
+                  action={<SourceTag source={source} />}
+                >
+                  <RepairFinancing
+                    aircraft={detail}
+                    enabled={connector}
+                    demo={demo}
                     disabledNote={disabledNote}
                     busy={busy}
                     run={run}

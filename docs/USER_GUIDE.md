@@ -138,6 +138,10 @@ place where you switch aircraft).
   a grounding defect, an expired deferral, a system under 20 % or an overdue annual inspection
   blocks dispatch until fixed. Minor defects can be deferred. A **ferry permit** allows one
   no-revenue flight to the nearest maintenance airport. Optional hull **insurance** per aircraft.
+  An insured aircraft can **Finance with insurer**: the insurer lends up to the repair bill
+  (after its incident claim) at 4 % for 6–24 months. A missed payment costs a late fee and
+  reputation but never repossesses the aircraft; three in a row cancel the policy and the
+  balance comes out of your cash at once. Pay it off early from the loans list on Company.
 - **Used market**: cheaper aircraft with known and hidden defects. A pre-purchase **inspection**
   (fee) reveals hidden ones; without it a grounding defect may surface on the first dispatch.
 - **Loans**: three fictional lenders; the calculator shows the monthly payment; the aircraft or

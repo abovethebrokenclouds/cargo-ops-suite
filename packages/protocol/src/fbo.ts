@@ -227,6 +227,28 @@ export const insuranceStateSchema = z.object({
   sinceGameMs: finite().nonnegative().optional(),
   claims: z.number().int().nonnegative(),
   claimsPaid: finite().nonnegative(),
+  /** Insurer repair loans: terms, what could be financed now and the open loan (if any). */
+  repairLoan: z
+    .object({
+      apr: finite().nonnegative(),
+      minTermMonths: z.number().int().positive(),
+      maxTermMonths: z.number().int().positive(),
+      minAmount: finite().nonnegative(),
+      /** Wear overhaul bill now (no claim applies), null when there is nothing to repair. */
+      overhaulBill: finite().nonnegative().nullable(),
+      /** Every open known defect not yet queued: cost − the incident claim, null when none. */
+      allDefectsBill: finite().nonnegative().nullable(),
+      open: z
+        .object({
+          loanId: z.string().min(1),
+          balance: finite().nonnegative(),
+          payment: finite().nonnegative(),
+          missedCount: z.number().int().nonnegative(),
+          nextDueGameMs: finite().nonnegative(),
+        })
+        .nullable(),
+    })
+    .optional(),
 });
 export type InsuranceState = z.infer<typeof insuranceStateSchema>;
 
@@ -289,3 +311,22 @@ export const fboPricingArgsSchema = z
 export const insuranceArgsSchema = z.object({ aircraftId: z.string().min(1) }).strict();
 export const insuranceBuyArgsSchema = insuranceArgsSchema;
 export const insuranceCancelArgsSchema = insuranceArgsSchema;
+/**
+ * `insurance.repairLoan`: place a repair order on an insured aircraft and let the insurer
+ * finance up to its bill (cost − incident claim). `defectId` is required for `defect` and
+ * only allowed there.
+ */
+export const insuranceRepairLoanArgsSchema = z
+  .object({
+    aircraftId: z.string().min(1),
+    repair: z.enum(["overhaul", "all", "defect"]),
+    defectId: z.string().min(1).optional(),
+    principal: z.number().finite().positive(),
+    termMonths: z.number().int().positive(),
+  })
+  .strict()
+  .refine((a) => (a.repair === "defect") === (a.defectId !== undefined), {
+    message: 'defectId is required for repair "defect" and only allowed there',
+    path: ["defectId"],
+  });
+export type InsuranceRepairLoanArgs = z.infer<typeof insuranceRepairLoanArgsSchema>;

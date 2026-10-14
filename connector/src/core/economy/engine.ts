@@ -59,6 +59,7 @@ import {
   fboSellArgsSchema,
   insuranceBuyArgsSchema,
   insuranceCancelArgsSchema,
+  insuranceRepairLoanArgsSchema,
   pilotAssignArgsSchema,
   pilotFireArgsSchema,
   pilotHireArgsSchema,
@@ -1944,6 +1945,22 @@ export class EconomyEngine {
         const p = insuranceCancelArgsSchema.safeParse(args);
         if (!p.success) return bad(p.error);
         return done(this.book.cancelInsurance(p.data.aircraftId));
+      }
+      case "insurance.repairLoan": {
+        const p = insuranceRepairLoanArgsSchema.safeParse(args);
+        if (!p.success) return bad(p.error);
+        return (
+          onMission(p.data.aircraftId) ??
+          done(
+            this.book.repairLoan({
+              aircraftId: p.data.aircraftId,
+              repair: p.data.repair,
+              ...(p.data.defectId !== undefined ? { defectId: p.data.defectId } : {}),
+              principal: p.data.principal,
+              termMonths: p.data.termMonths,
+            }),
+          )
+        );
       }
       // ---- hired pilots (simulated operations) ----
       case "pilot.hire": {
