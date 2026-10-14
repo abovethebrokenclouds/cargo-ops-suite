@@ -47,7 +47,11 @@ function Flight() {
   const { state } = useSimConnection();
   const route = routeView(state);
   const title =
-    route.origin && route.destination ? `${route.origin} → ${route.destination}` : "In the air.";
+    route.origin && route.destination
+      ? `${route.origin} → ${route.destination}`
+      : route.destination
+        ? `To ${route.destination}.`
+        : "In the air.";
   return (
     <>
       <PageHero eyebrow="Live flight" title={title} sub={heroSub(state)} />

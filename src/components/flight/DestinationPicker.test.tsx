@@ -245,6 +245,17 @@ describe("LiveFlightView route source label", () => {
     });
   }, 20_000);
 
+  it("a destination without an origin reads 'To KATL'", () => {
+    const s = state({ active: true, basis: "manual", destination: "KATL", destDistanceNm: 149.3 });
+    render(
+      <SimConnectionContext.Provider value={{ state: s, send: () => {}, transportKind: "live" }}>
+        <LiveFlightView />
+      </SimConnectionContext.Provider>,
+    );
+    expect(screen.getByText("To KATL")).toBeInTheDocument();
+    expect(screen.getByTestId("distance-remaining")).toHaveTextContent("149");
+  });
+
   it("labels a demo plan without a basis as a GPS plan and disables the picker", () => {
     const s = state(
       { active: true, origin: "KMEM", destination: "KATL", destDistanceNm: 150 },

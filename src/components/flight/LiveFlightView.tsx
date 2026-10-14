@@ -354,7 +354,9 @@ export function LiveFlightView() {
         title={
           route.origin && route.destination
             ? `${route.origin} → ${route.destination}`
-            : "No flight plan"
+            : route.destination
+              ? `To ${route.destination}`
+              : "No flight plan"
         }
         icon={RouteIcon}
         action={
