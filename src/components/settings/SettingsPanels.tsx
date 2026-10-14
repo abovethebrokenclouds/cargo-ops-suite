@@ -174,19 +174,21 @@ export function ConnectorPanel({ ctx }: { ctx: SettingsContext }) {
         <summary className="cursor-pointer text-foreground">Port and token reset</summary>
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>
-            The connector listens on 127.0.0.1 only (default port 4311). Another port:{" "}
+            The connector listens on 127.0.0.1 only (default port 4311) unless you turn on LAN
+            access below. Another port:{" "}
             <code className="font-mono">scripts\start-cargo-ops.cmd --port 4312</code>, then open
             that port.
           </li>
           <li>
             The token only protects the local API from other web pages; this page fetches it itself
-            and never shows it in full.
+            and never shows it in full. It never leaves this PC: LAN devices pair and get their own.
           </li>
           <li>
             Reset it: stop the connector and start it with{" "}
             <code className="font-mono">--reset-token</code> (or delete{" "}
             <code className="font-mono">%LOCALAPPDATA%\CargoOps\config.json</code>), then reload
-            open tabs.
+            open tabs. <code className="font-mono">--reset-token</code> also unpairs every LAN
+            device.
           </li>
         </ul>
       </details>
@@ -457,7 +459,7 @@ export function DataPanel({ ctx }: { ctx: SettingsContext }) {
               <button
                 type="button"
                 className={primaryButton}
-                disabled={!enabled || backups.busy}
+                disabled={!enabled || backups.busy || backups.localOnly !== null}
                 onClick={() => void backups.create()}
                 data-testid="backup-now"
               >
@@ -474,7 +476,13 @@ export function DataPanel({ ctx }: { ctx: SettingsContext }) {
           </section>
         </div>
 
-        {backups.state.status === "error" ? (
+        {backups.localOnly ? (
+          <EmptyState
+            icon={Archive}
+            title="Backups are kept on the PC"
+            description={backups.localOnly}
+          />
+        ) : backups.state.status === "error" ? (
           <EmptyState
             icon={Archive}
             title="Backups could not be listed"

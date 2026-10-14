@@ -3,7 +3,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { loadOrCreateConfig } from "../core/config";
+import { loadOrCreateConfig, saveLanSetting } from "../core/config";
 import { createLogger } from "../core/logger";
 import { Recorder } from "../core/recorder";
 import { ConnectorSession } from "../core/session";
@@ -12,6 +12,7 @@ import { SimConnectSource } from "../sim/simconnect-source";
 import type { LogFn, SimSource } from "../sim/source";
 import { unverifiedSimVars } from "../sim/simvars";
 import { normalizeOrigin } from "../server/security";
+import { LanAccess, clearLanDevices, lanInterfaceAddresses, validateLanBind } from "../server/lan";
 import { startServer, type RunningServer } from "../server/server";
 import { openStorage, type Storage } from "../storage/db";
 import { FlightRepo, flightsApi } from "../storage/flights";
@@ -93,6 +94,17 @@ export interface ConnectorOptions {
   fetch?: typeof fetch;
   /** Clock for backups and SimBrief (tests). */
   now?: () => number;
+  /**
+   * LAN opt-in for this run: an address to bind ("0.0.0.0" or one interface IPv4), false to
+   * force it off, undefined to follow the setting saved from /settings (off by default).
+   */
+  lan?: string | false;
+  /** Non-loopback IPv4 addresses of this PC (tests inject addresses). */
+  lanInterfaces?: () => string[];
+  /** Which remote addresses count as this PC (tests; default loopback). */
+  isLocalAddress?: (address: string | undefined) => boolean;
+  /** Clock for pairing codes and lockouts (tests). */
+  lanNow?: () => number;
 }
 
 export interface RunningConnector {
@@ -108,6 +120,9 @@ export interface RunningConnector {
   backups: BackupManager;
   simbrief: SimbriefService;
   weather: WeatherService;
+  lan: LanAccess;
+  /** Address the LAN listener uses, or null when LAN access is off. */
+  lanBind: string | null;
   stop(): Promise<void>;
 }
 
@@ -127,6 +142,39 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
     ...(options.resetToken ? { resetToken: true } : {}),
   });
   if (created) log("info", "Generated a new access token (config.json)");
+  if (options.resetToken) {
+    clearLanDevices(options.dataDir);
+    log("info", "Token reset: every paired LAN device was forgotten");
+  }
+  const lanAccess = new LanAccess({
+    dataDir: options.dataDir,
+    log,
+    ...(options.lanNow ? { now: options.lanNow } : {}),
+  });
+  let lanSetting = config.lan ?? null;
+  const lanInterfaces = options.lanInterfaces ?? (() => lanInterfaceAddresses());
+  // Where the LAN choice comes from decides what an address that is not this PC's means:
+  // on the command line it is a mistake to fix now (refuse to start); a saved setting may
+  // simply be stale (DHCP gave the PC another address), so warn and stay on loopback.
+  let lanBind: string | null = null;
+  let lanWarning: string | null = null;
+  if (options.lan !== false && options.lan !== undefined) {
+    const problem = validateLanBind(options.lan, lanInterfaces());
+    if (problem) {
+      throw new Error(
+        `LAN address ${options.lan} from --lan on the command line: ${problem}. Pass one of this PC's addresses, --lan alone for every interface, or --no-lan to stay on 127.0.0.1.`,
+      );
+    }
+    lanBind = options.lan;
+  } else if (options.lan === undefined && lanSetting?.enabled) {
+    const problem = validateLanBind(lanSetting.address, lanInterfaces());
+    if (problem) {
+      lanWarning = `Saved LAN address ${lanSetting.address} (Settings → LAN access) cannot be used: ${problem}. LAN access stays off this run, 127.0.0.1 only. Choose again in Settings, or start with --lan / --no-lan.`;
+      log("warn", lanWarning);
+    } else {
+      lanBind = lanSetting.address;
+    }
+  }
 
   const source: SimSource =
     options.source ??
@@ -221,6 +269,17 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
       devOrigins,
       ...(options.pingIntervalMs ? { pingIntervalMs: options.pingIntervalMs } : {}),
       log,
+      lan: {
+        access: lanAccess,
+        bind: lanBind,
+        interfaces: lanInterfaces,
+        warning: lanWarning,
+        setting: () => lanSetting,
+        saveSetting: (setting) => {
+          lanSetting = saveLanSetting(options.dataDir, setting).lan ?? null;
+        },
+      },
+      ...(options.isLocalAddress ? { isLocalAddress: options.isLocalAddress } : {}),
       routes: async (req) =>
         flightRoutes(req) ?? economyRoutes(req) ?? (await dataRoutes(req)) ?? weatherRoutes(req),
       status: () => ({
@@ -280,6 +339,8 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
     backups,
     simbrief,
     weather,
+    lan: lanAccess,
+    lanBind,
     stop: async () => {
       if (clock) clearInterval(clock);
       if (backupTimer) clearInterval(backupTimer);

@@ -25,7 +25,8 @@ import {
 } from "@/lib/sim-state/reducer";
 import { DemoTransport } from "./demo-transport";
 import { getDemoFrames } from "./demo-fixture";
-import { LiveWsTransport, type WebSocketCtor } from "./live-ws-transport";
+import { LiveWsTransport, UNAUTHORIZED_ERROR, type WebSocketCtor } from "./live-ws-transport";
+import { resetConnectorToken } from "./connector-api";
 import { backoffDelay } from "./reconnect";
 import { defaultTimers, type Timers, type Transport } from "./types";
 
@@ -43,16 +44,100 @@ export function pickTransportKind(env: {
   return "demo";
 }
 
-const sessionSchema = z.object({ token: z.string().min(1), wsUrl: z.string().min(1) });
+const sessionSchema = z.object({
+  token: z.string().min(1),
+  wsUrl: z.string().min(1),
+  /** "local" = this PC (main token); "lan" = a paired LAN device (its own token). */
+  scope: z.enum(["local", "lan"]).optional(),
+  device: z.object({ id: z.string(), name: z.string() }).optional(),
+});
 export type ConnectorSession = z.infer<typeof sessionSchema>;
 
-/** GET /api/session (same origin) → token and WebSocket URL. */
+// ---- LAN pairing (connector --lan): the token of a paired device lives in this browser ----
+
+/** localStorage key of this browser's LAN device token (never the PC's main token). */
+export const LAN_TOKEN_KEY = "cargo-ops.lan-token";
+
+export function readLanToken(): string | null {
+  try {
+    return globalThis.localStorage?.getItem(LAN_TOKEN_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLanToken(token: string | null): void {
+  try {
+    if (token === null) globalThis.localStorage?.removeItem(LAN_TOKEN_KEY);
+    else globalThis.localStorage?.setItem(LAN_TOKEN_KEY, token);
+  } catch {
+    // Private mode or storage disabled: pairing then lasts for this page only.
+  }
+}
+
+/** The connector serves this page to a LAN device that has not paired (or was revoked). */
+export class PairingRequiredError extends Error {
+  constructor() {
+    super("pairing required");
+    this.name = "PairingRequiredError";
+  }
+}
+
+/**
+ * GET /api/session (same origin) → token and WebSocket URL. On this PC the connector answers
+ * with its token; on a LAN device it only confirms the stored LAN token, or asks to pair.
+ */
 export async function fetchSession(fetchImpl: typeof fetch): Promise<ConnectorSession> {
-  const res = await fetchImpl("/api/session", { headers: { Accept: "application/json" } });
+  const lanToken = readLanToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (lanToken) headers["Authorization"] = `Bearer ${lanToken}`;
+  const res = await fetchImpl("/api/session", { headers });
+  if (res.status === 403) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    if (body?.error === "pairing_required") {
+      if (lanToken) writeLanToken(null); // revoked or unknown: forget it
+      throw new PairingRequiredError();
+    }
+  }
   if (!res.ok) throw new Error(`connector session request failed (${res.status})`);
   const parsed = sessionSchema.safeParse(await res.json());
   if (!parsed.success) throw new Error("connector session response is invalid");
   return parsed.data;
+}
+
+export type PairResult = { ok: true; deviceName: string } | { ok: false; message: string };
+
+/** POST /api/lan/pair with the code shown on the PC; stores the LAN token on success. */
+export async function pairWithCode(
+  code: string,
+  name: string,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<PairResult> {
+  try {
+    const res = await fetchImpl("/api/lan/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ code, name }),
+    });
+    const body = (await res.json().catch(() => null)) as {
+      token?: string;
+      message?: string;
+      error?: string;
+      device?: { name?: string };
+    } | null;
+    if (!res.ok || typeof body?.token !== "string") {
+      return { ok: false, message: body?.message ?? body?.error ?? `HTTP ${res.status}` };
+    }
+    writeLanToken(body.token);
+    return { ok: true, deviceName: body.device?.name ?? name };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Pairing failed" };
+  }
+}
+
+/** Forget this browser's LAN pairing (it must pair again). */
+export function forgetLanPairing(): void {
+  writeLanToken(null);
 }
 
 /** Resolve a possibly relative wsUrl against the page and switch http(s) to ws(s). */
@@ -73,6 +158,10 @@ export interface SimConnectionValue {
   transportKind: TransportKind | null;
   /** Command round-trip; absent in test fixtures that only render state. */
   command?: CommandFn;
+  /** This page runs on a LAN device that must pair before it gets any data. */
+  pairingRequired?: boolean;
+  /** Fetch the session again (after pairing). */
+  reconnect?: () => void;
 }
 
 /** How long a command waits for its result, ms. */
@@ -107,6 +196,8 @@ export function SimConnectionProvider(props: {
   const resyncSent = useRef(false);
   const pending = useRef(new Map<string, (r: Result) => void>());
   const commandSeq = useRef(0);
+  const [pairingRequired, setPairingRequired] = useState(false);
+  const restartRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     // Everything browser-specific happens here, never at render or module time.
@@ -125,6 +216,11 @@ export function SimConnectionProvider(props: {
     const attach = (transport: Transport) => {
       transportRef.current = transport;
       unsubscribe = transport.subscribe((ev) => {
+        if (ev.type === "status" && ev.status === "error" && ev.error === UNAUTHORIZED_ERROR) {
+          // Token refused (reset on the PC, or this LAN device was revoked): ask again.
+          restartRef.current();
+          return;
+        }
         if (ev.type === "status") {
           dispatch(
             ev.error === undefined
@@ -159,6 +255,7 @@ export function SimConnectionProvider(props: {
         fetchSession(fetchImpl)
           .then((session) => {
             if (cancelled) return;
+            setPairingRequired(false);
             const url = toWebSocketUrl(session.wsUrl, options.href ?? window.location.href);
             const wsOptions = options.WebSocketImpl
               ? { timers, WebSocketImpl: options.WebSocketImpl }
@@ -167,6 +264,12 @@ export function SimConnectionProvider(props: {
           })
           .catch((err: unknown) => {
             if (cancelled) return;
+            if (err instanceof PairingRequiredError) {
+              // No retry loop: nothing changes until the player pairs this device.
+              setPairingRequired(true);
+              dispatch({ type: "status", status: "disconnected", error: err.message });
+              return;
+            }
             dispatch({
               type: "status",
               status: "disconnected",
@@ -174,6 +277,18 @@ export function SimConnectionProvider(props: {
             });
             retryHandle = timers.setTimeout(start, backoffDelay(attempt++));
           });
+      };
+      restartRef.current = () => {
+        if (cancelled) return;
+        unsubscribe();
+        unsubscribe = () => {};
+        transportRef.current?.disconnect();
+        transportRef.current = null;
+        if (retryHandle !== null) timers.clearTimeout(retryHandle);
+        retryHandle = null;
+        attempt = 0;
+        resetConnectorToken();
+        start();
       };
       start();
     }
@@ -222,9 +337,11 @@ export function SimConnectionProvider(props: {
     });
   }, []);
 
+  const reconnect = useCallback(() => restartRef.current(), []);
+
   const value = useMemo(
-    () => ({ state, send, transportKind, command }),
-    [state, send, transportKind, command],
+    () => ({ state, send, transportKind, command, pairingRequired, reconnect }),
+    [state, send, transportKind, command, pairingRequired, reconnect],
   );
   return createElement(SimConnectionContext.Provider, { value }, props.children);
 }

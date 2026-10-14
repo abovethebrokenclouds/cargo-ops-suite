@@ -11,6 +11,7 @@ import {
   WeatherPanel,
   type SettingsContext,
 } from "@/components/settings/SettingsPanels";
+import { LanPanel } from "@/components/settings/LanPanel";
 import { useSimConnection } from "@/lib/transport/useSimConnection";
 
 export const Route = createFileRoute("/settings")({
@@ -19,12 +20,14 @@ export const Route = createFileRoute("/settings")({
       { title: "Settings — Cargo Ops" },
       {
         name: "description",
-        content: "Units, connector, basemap, backups, career export and SimBrief import.",
+        content:
+          "Units, connector, LAN access, basemap, backups, career export and SimBrief import.",
       },
       { property: "og:title", content: "Settings — Cargo Ops" },
       {
         property: "og:description",
-        content: "Units, connector, basemap, backups, career export and SimBrief import.",
+        content:
+          "Units, connector, LAN access, basemap, backups, career export and SimBrief import.",
       },
     ],
   }),
@@ -52,6 +55,7 @@ function SettingsPage() {
         <WeatherPanel ctx={ctx} />
         <DemoPanel ctx={ctx} />
         <DataPanel ctx={ctx} />
+        <LanPanel ctx={ctx} />
         <SimbriefPanel ctx={ctx} />
       </div>
     </>

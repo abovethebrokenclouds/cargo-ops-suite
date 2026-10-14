@@ -259,7 +259,11 @@ describe("connector server (FakeSource over a real WebSocket)", () => {
   it("/api/session: same-origin only", async () => {
     const noOrigin = await rawGet(port, "/api/session");
     assert.equal(noOrigin.status, 200);
-    assert.deepEqual(JSON.parse(noOrigin.body), { token: connector.token, wsUrl: "/ws" });
+    assert.deepEqual(JSON.parse(noOrigin.body), {
+      token: connector.token,
+      wsUrl: "/ws",
+      scope: "local",
+    });
     assert.equal(noOrigin.headers["cache-control"], "no-store");
 
     const own = await rawGet(port, "/api/session", { Origin: origin });

@@ -29,9 +29,18 @@ export function defaultDataDir(
   );
 }
 
+/** Persisted LAN opt-in (toggled from the local /settings; applies on the next start). */
+const lanSettingSchema = z.object({
+  enabled: z.boolean(),
+  /** "0.0.0.0" (every interface) or one IPv4 address of this PC. */
+  address: z.string().default("0.0.0.0"),
+});
+export type LanSetting = z.infer<typeof lanSettingSchema>;
+
 const configSchema = z.object({
   token: z.string().regex(/^[0-9a-f]{64}$/),
   createdAt: z.string(),
+  lan: lanSettingSchema.optional(),
 });
 export type ConnectorConfig = z.infer<typeof configSchema>;
 
@@ -52,16 +61,31 @@ export function loadOrCreateConfig(
   options: { resetToken?: boolean } = {},
 ): { config: ConnectorConfig; created: boolean } {
   mkdirSync(dataDir, { recursive: true });
+  const existing = readConfig(dataDir);
+  if (!options.resetToken && existing) return { config: existing, created: false };
+  const config: ConnectorConfig = {
+    token: generateToken(),
+    createdAt: new Date().toISOString(),
+    // A token reset keeps the LAN preference (paired devices are cleared separately).
+    ...(existing?.lan ? { lan: existing.lan } : {}),
+  };
+  writeConfig(dataDir, config);
+  return { config, created: true };
+}
+
+function readConfig(dataDir: string): ConnectorConfig | null {
   const path = configPath(dataDir);
-  if (!options.resetToken && existsSync(path)) {
-    try {
-      const parsed = configSchema.safeParse(JSON.parse(readFileSync(path, "utf8")));
-      if (parsed.success) return { config: parsed.data, created: false };
-    } catch {
-      // Fall through and regenerate.
-    }
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = configSchema.safeParse(JSON.parse(readFileSync(path, "utf8")));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
   }
-  const config: ConnectorConfig = { token: generateToken(), createdAt: new Date().toISOString() };
+}
+
+function writeConfig(dataDir: string, config: ConnectorConfig): void {
+  const path = configPath(dataDir);
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, path);
@@ -70,5 +94,12 @@ export function loadOrCreateConfig(
   } catch {
     // Not supported on every filesystem (and a no-op on Windows).
   }
-  return { config, created: true };
+}
+
+/** Persist the LAN opt-in for the next start (the running server is not rebound). */
+export function saveLanSetting(dataDir: string, lan: LanSetting): ConnectorConfig {
+  const { config } = loadOrCreateConfig(dataDir);
+  const next: ConnectorConfig = { ...config, lan: lanSettingSchema.parse(lan) };
+  writeConfig(dataDir, next);
+  return next;
 }

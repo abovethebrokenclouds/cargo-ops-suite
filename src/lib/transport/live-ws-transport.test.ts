@@ -217,3 +217,35 @@ describe("LiveWsTransport", () => {
     }
   });
 });
+
+describe("LiveWsTransport: refused token", () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("stops and reports unauthorized on close 4401 instead of retrying the same token", () => {
+    const { transport, events } = setup();
+    transport.connect();
+    latest().serverOpen();
+    latest().serverSend(welcome);
+    latest().readyState = 3;
+    latest().onclose?.({ code: 4401 });
+    expect(events.at(-1)).toEqual({ type: "status", status: "error", error: "unauthorized" });
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(transport.reconnectState.phase).toBe("stopped");
+  });
+
+  it("still retries after an ordinary close", () => {
+    const { transport } = setup();
+    transport.connect();
+    latest().serverOpen();
+    latest().onclose?.({ code: 1006 });
+    vi.advanceTimersByTime(60_000);
+    expect(FakeWebSocket.instances.length).toBeGreaterThan(1);
+  });
+});

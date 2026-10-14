@@ -8,6 +8,7 @@
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File scripts\start-cargo-ops.ps1 [connector args]
 # Example: ... -File scripts\start-cargo-ops.ps1 --sim fake --loop
+#          ... -File scripts\start-cargo-ops.ps1 --lan   (LAN opt-in, SETUP_WINDOWS.md section 15)
 # Pass -NoOpen to keep the browser closed and -Rebuild to rebuild the web app.
 
 # No param() block on purpose: connector flags such as --sim must reach the

@@ -12,8 +12,21 @@ export interface OriginPolicy {
   hosts: Set<string>;
 }
 
-export function buildOriginPolicy(port: number, devOrigins: readonly string[] = []): OriginPolicy {
-  const own = [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
+/**
+ * Own origins (127.0.0.1 and localhost on `port`), optional dev origins, and with LAN on the
+ * IPv4 literals of the interfaces the server actually bound (never a hostname: a Host header
+ * naming anything else is refused, which is the DNS-rebinding guard).
+ */
+export function buildOriginPolicy(
+  port: number,
+  devOrigins: readonly string[] = [],
+  lanAddresses: readonly string[] = [],
+): OriginPolicy {
+  const own = [
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+    ...lanAddresses.map((a) => `http://${a}:${port}`),
+  ];
   const origins = new Set<string>([...own, ...devOrigins.map(normalizeOrigin)]);
   const hosts = new Set<string>();
   for (const origin of origins) {

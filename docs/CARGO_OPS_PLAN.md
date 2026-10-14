@@ -147,7 +147,12 @@ C→S resync    { lastSeq }
 
 Rates: position/motion at 5 Hz in flight (10 Hz below 1,000 ft AGL), fuel/weights/plan at 1 Hz, everything else on change. Client reconnect: exponential backoff 0.5 s→30 s with jitter, server ping every 15 s, client watchdog 30 s.
 
-Security: bind `127.0.0.1` only; reject WebSocket upgrades whose `Origin` is not the connector's own origin (or the Vite dev origin in development); 32-byte random token generated on first run into `%LOCALAPPDATA%\CargoOps\config.json`, delivered to the page via same-origin `GET /api/session`; `/api/*` requires `Authorization: Bearer`. LAN access is a later explicit opt-in.
+Security: bind `127.0.0.1` only; reject WebSocket upgrades whose `Origin` is not the connector's own origin (or the Vite dev origin in development); 32-byte random token generated on first run into `%LOCALAPPDATA%\CargoOps\config.json`, delivered to the page via same-origin `GET /api/session`; `/api/*` requires `Authorization: Bearer`. LAN access is an explicit opt-in (`--lan [IPv4]` or
+the setting saved from `/settings`, applied on restart; off by default): the main token stays
+loopback-only, a LAN device pairs with a one-time 5-minute code shown on the PC's `/settings`
+(rate-limited, locked out after repeated failures) for its own revocable token, Host/Origin
+allow only the bound IPv4 literals with the port, and career import, backups, deletes and LAN
+management stay local-only (connector/README.md "LAN access").
 
 Demo separation: `mode` in `welcome` and `source` on every frame drive a persistent status chip. Demo/replay flights are written to `demo.db`, never to the career database.
 
