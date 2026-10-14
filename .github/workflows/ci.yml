@@ -71,6 +71,9 @@ jobs:
       - name: Build connector
         working-directory: connector
         run: npm ci && npm run build
+      # The demo project runs on the production SSR build (.output), the replay project on
+      # the local SPA build (dist) served by the connector.
+      - run: bun run build
       - run: bun run build:local
       - run: npx playwright install --with-deps chromium
       - run: bun run e2e
