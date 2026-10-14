@@ -54,6 +54,8 @@ export const EVENT_NAMES = [
   // Transit cargo (additive).
   "job.in_transit",
   "job.abandoned",
+  // Connector restart during a mission flight (additive).
+  "mission.recovered",
 ] as const;
 export const eventNameSchema = z.enum(EVENT_NAMES);
 export type EventName = z.infer<typeof eventNameSchema>;

@@ -5,6 +5,7 @@ import {
   basePay,
   checkAtOrigin,
   computePayout,
+  missionPayoutTotals,
   deliveryReputationDelta,
   destinationCandidates,
   distanceCurve,
@@ -404,5 +405,31 @@ describe("stacking and route finder", () => {
     expect(routes.some((r) => r.legs.some((l) => l.destination === "KMEM"))).toBe(false);
     const oneHop = findRoutes({ start: "KMEM", jobs, aircraft: c208, maxHops: 1 });
     expect(oneHop.map((r) => r.totalPayout)).toEqual([2000, 1000]);
+  });
+});
+
+describe("mission payout totals (cents, like the ledger)", () => {
+  it("sums in cents: no float drift in what is persisted and emitted", () => {
+    // A raw float sum gives 0.30000000000000004.
+    expect([0.1, 0.2].reduce((s, x) => s + x, 0)).not.toBe(0.3);
+    expect(missionPayoutTotals([0.1, 0.2], [])).toEqual({ total: 0.3, costTotal: 0, net: 0.3 });
+    expect(missionPayoutTotals([0.1, 0.2, 0.3], [0.2, 0.1])).toEqual({
+      total: 0.6,
+      costTotal: 0.3,
+      net: 0.3,
+    });
+  });
+
+  it("rounds each amount to cents first, exactly as post() books it", () => {
+    // post() books round2(1000.006) = 1000.01 and round2(2.004) = 2; the totals match those rows.
+    const t = missionPayoutTotals([1000.006, 2.004], [123.456]);
+    expect(t).toEqual({ total: 1002.01, costTotal: 123.46, net: 878.55 });
+    expect(missionPayoutTotals([], [])).toEqual({ total: 0, costTotal: 0, net: 0 });
+  });
+
+  it("whole-dollar job totals are unchanged", () => {
+    const totals = [12_345, 6_789];
+    expect(missionPayoutTotals(totals, [512.37, 300]).total).toBe(19_134);
+    expect(missionPayoutTotals(totals, [512.37, 300]).net).toBe(18_321.63);
   });
 });

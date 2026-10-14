@@ -73,4 +73,5 @@ done
 Environment knobs: `E2E_PORT` (demo server port, default 5180; `scripts/gate.sh` picks a free
 one so parallel worktrees never collide), `E2E_REUSE_SERVER=1` (reuse a server already on that
 port, never in CI), `E2E_DEMO_DEV=1` (demo project on the dev server), `E2E_CPU_THROTTLE=6`
-(demo pages run with Chromium's CPU throttling, to reproduce slow-runner timing locally).
+(demo and replay pages run with Chromium's CPU throttling, to reproduce slow-runner timing
+locally).

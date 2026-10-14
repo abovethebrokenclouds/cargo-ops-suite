@@ -252,3 +252,19 @@ export function computePayout(input: PayoutInput): PayoutBreakdown {
 function round2Precise(n: number): number {
   return Math.round(n * 10_000) / 10_000;
 }
+
+/**
+ * Totals of a delivered mission, in cents like every ledger entry (`CompanyBook.post`): the
+ * payout is the sum of the job totals, the costs the sum of the cost amounts, net = payout −
+ * costs. Summing in integer cents keeps what is persisted, emitted and exported equal to the
+ * ledger rows (no float drift such as 0.1 + 0.2).
+ */
+export function missionPayoutTotals(
+  jobTotals: readonly number[],
+  costAmounts: readonly number[],
+): { total: number; costTotal: number; net: number } {
+  const cents = (xs: readonly number[]) => xs.reduce((s, x) => s + Math.round(x * 100), 0);
+  const total = cents(jobTotals);
+  const costTotal = cents(costAmounts);
+  return { total: total / 100, costTotal: costTotal / 100, net: (total - costTotal) / 100 };
+}

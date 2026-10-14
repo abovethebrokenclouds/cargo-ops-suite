@@ -21,7 +21,8 @@
 //   destination, no teleport, not invalidated) and every job is paid with a full
 //   breakdown. Crash → mission failed, no payout, −20 reputation. A flight that is
 //   aborted (flight.end abort, session reset) aborts the mission; its jobs go back to
-//   accepted.
+//   accepted. mission.abort in the air aborts at once and books the flight's costs when it
+//   ends; a connector restart never leaves a mission in progress or an aircraft in flight.
 // - transit cargo (docs/ECONOMY.md "Transit cargo"): `mission.load {destination}` may end a
 //   leg at an intermediate airport. Jobs going further are unloaded there `in_transit`
 //   (stored, possibly in an own cargo terminal with free storage hours) and loaded again
@@ -137,6 +138,7 @@ import {
   jobLocation,
   legReputationDelta,
   missionLegTerms,
+  missionPayoutTotals,
   transitStorage,
   LONG_HAUL_JOBS_PER_BOARD,
   TRANSIT_ABANDON_REPUTATION,
@@ -215,6 +217,16 @@ export class EconomyEngine {
   private lastExpiryCheck = 0;
   /** P5: a ferry flight in progress (aircraft with a permit, no mission). */
   private ferry: { aircraftId: string; flightId: string } | null = null;
+  /**
+   * A mission aborted (mission.abort) while its flight was still running: the aircraft keeps
+   * flying and the flight's real costs are booked on that mission when the flight ends.
+   */
+  private abortedFlight: { mission: Mission; flightId: string } | null = null;
+  /**
+   * A mission found in progress at startup: its flight was lost with the restart, so it was
+   * put back to loaded; the first sample decides whether it stays loaded or is aborted.
+   */
+  private recovering: string | null = null;
   /** P5: fuel at block-out and whether the tanks ran dry on the current tracked flight. */
   private fuelAtStartLb: number | null = null;
   private tanksDry = false;
@@ -238,7 +250,93 @@ export class EconomyEngine {
     ) ?? [])
       this.jobs.set(job.id, job);
     this.mission = this.persistRead(() => this.repo?.openMission() ?? null);
+    this.recoverAfterRestart();
     if (!this.airports) this.log("warn", "No airport data: job boards are disabled");
+  }
+
+  /**
+   * A fresh connector has no running flight, so nothing it loaded can still be flying
+   * (docs/ECONOMY.md "Mission lifecycle", connector restart). The flight tracker's state (distance, fuel,
+   * landings) was in memory and is gone: a lost flight is never resumed or billed.
+   * - Every aircraft left `in_flight` (mission, ferry or aborted flight) is available again.
+   * - A mission left `in_progress` goes back to `loaded` with its start cleared; the first
+   *   sample then keeps it loaded when the aircraft is on the ground within 3 nm of the
+   *   origin, and otherwise aborts it (jobs back to accepted, transit cargo back at its stop
+   *   with its clock unchanged, no penalty) — `mission.recovered` either way.
+   */
+  private recoverAfterRestart(): void {
+    this.recovering = null;
+    for (const a of this.book.activeFleet()) {
+      if (a.status !== "in_flight") continue;
+      this.book.setFlying(a.id, false);
+      this.log("warn", `${a.registration} was in flight when the connector stopped; released`);
+    }
+    const m = this.mission;
+    if (m?.status === "in_progress") {
+      const {
+        flightId: _f,
+        startedAt: _s,
+        startedGameMs: _g,
+        flownNm: _n,
+        elapsedMin: _e,
+        payloadCheck: _p,
+        startBlocked: _b,
+        ...rest
+      } = m;
+      this.mission = {
+        ...rest,
+        status: "loaded",
+        ...missionLegTerms(m.jobs, m.destination, this.company.gameMs, this.company.reputation),
+      };
+      this.recovering = m.id;
+      this.persistMission();
+      this.log(
+        "warn",
+        `Mission ${m.id} was in progress when the connector stopped; its flight cannot be resumed`,
+      );
+    }
+    this.flushBook();
+  }
+
+  /** First sample after a restart with a recovered mission: keep it loaded or abort it. */
+  private resolveRecovery(s: FlightSample, onGround: boolean | null): void {
+    const m = this.mission;
+    if (!this.recovering || !m || m.id !== this.recovering || m.status !== "loaded") {
+      this.recovering = null;
+      return;
+    }
+    if (onGround === null) return; // not known yet: wait for the next sample
+    this.recovering = null;
+    const origin = this.airports?.get(m.origin) ?? null;
+    const atOrigin =
+      onGround === true && origin !== null && greatCircleNm(origin, s) <= ARRIVAL_RADIUS_NM;
+    if (atOrigin) {
+      this.log("info", `Mission ${m.id} is loaded again at ${m.origin}`);
+      this.store.event("mission.recovered", { missionId: m.id, status: "loaded" });
+      return;
+    }
+    const failure = {
+      code: "flight_lost",
+      message:
+        "The connector restarted during the flight and the aircraft was not back at the origin",
+    };
+    this.mission = {
+      ...m,
+      status: "aborted",
+      endedAt: new Date(this.now()).toISOString(),
+      failure,
+    };
+    this.repoTx(() => {
+      this.returnJobs(m, "accepted");
+      this.persistMission();
+    });
+    this.log("warn", `Mission ${m.id} aborted: ${failure.message}; jobs returned`);
+    this.store.event("mission.recovered", {
+      missionId: m.id,
+      status: "aborted",
+      code: failure.code,
+      message: failure.message,
+    });
   }
 
   /** Company, fleet, loans and recent ledger from the database (or a new company). */
@@ -257,16 +355,17 @@ export class EconomyEngine {
       ...newCompanyCore(STARTING_CASH),
     };
     if (stored && this.repo) {
-      // P3 records: count the ledger and rebuild the monthly P&L once.
+      // P3 records: count the ledger; a company without a monthly P&L but with ledger rows
+      // (a P3 database or an old import) gets it rebuilt from the ledger.
       const totals = this.persistRead(() => this.repo?.ledgerTotals() ?? null);
       if (totals && company.ledgerCount !== totals.count) {
         company = { ...company, ledgerCount: totals.count };
-        if (company.pnl.length === 0) {
-          company = {
-            ...company,
-            pnl: this.persistRead(() => this.repo?.pnlFromLedger() ?? []) ?? [],
-          };
-        }
+      }
+      if (totals && totals.count > 0 && company.pnl.length === 0) {
+        company = {
+          ...company,
+          pnl: this.persistRead(() => this.repo?.pnlFromLedger() ?? []) ?? [],
+        };
       }
     }
     const book = new CompanyBook<CompanyRecord>({
@@ -788,10 +887,13 @@ export class EconomyEngine {
       this.ticker.addSim(s.tMs - this.lastTMs);
     }
     this.lastTMs = s.tMs;
+    const recovering = this.recovering !== null;
+    if (recovering) this.resolveRecovery(s, onGround);
     const flying = this.mission;
     const tracked =
       (flying && flying.status === "in_progress" && flight && flight.id === flying.flightId) ||
-      (this.ferry !== null && flight !== null && flight.id === this.ferry.flightId);
+      (this.ferry !== null && flight !== null && flight.id === this.ferry.flightId) ||
+      (this.abortedFlight !== null && flight !== null && flight.id === this.abortedFlight.flightId);
     if (tracked) {
       if (this.overspeed.update(s.iasKt, s.tMs)) {
         this.log("warn", `Overspeed: ${Math.round(s.iasKt)} kt IAS above Vmo (wear +5 %)`);
@@ -810,7 +912,7 @@ export class EconomyEngine {
       }
     }
     this.tick();
-    let changed = false;
+    let changed = recovering && this.recovering === null;
     if (this.simMinSinceBoard >= BOARD_REFRESH_SIM_MIN && this.company.boards[0]) {
       this.log("info", "Scheduled job board refresh (in-game time)");
       this.generateBoard(this.company.boards[0].origin);
@@ -956,6 +1058,10 @@ export class EconomyEngine {
       this.endFerry(record, last);
       return;
     }
+    if (this.abortedFlight && this.abortedFlight.flightId === record.id) {
+      this.endAbortedFlight(record, last);
+      return;
+    }
     const m = this.mission;
     if (!m || m.status !== "in_progress" || m.flightId !== record.id) return;
     const endedAt = new Date(this.now()).toISOString();
@@ -1095,7 +1201,6 @@ export class EconomyEngine {
         ...(t.legs > 1 ? { chain: { legs: t.legs, chainMin: t.chainMin } } : {}),
       });
     });
-    const total = breakdowns.reduce((s, b) => s + b.total, 0);
     const delta = legReputationDelta(
       grade,
       terms.map((t) => t.lateMin),
@@ -1133,13 +1238,12 @@ export class EconomyEngine {
     if (finals.length > 0) {
       this.book.recordDelivery({ origin: m.origin, destination: m.destination, grade });
     }
-    const costTotal = round2(settled.costs.reduce((s, c) => s + c.amount, 0));
-    const payout = {
-      total,
-      jobs: breakdowns,
-      costs: settled.costs,
-      net: round2(total - costTotal),
-    };
+    // In cents, like the ledger rows: persisted, emitted and exported totals match them.
+    const { total, costTotal, net } = missionPayoutTotals(
+      breakdowns.map((b) => b.total),
+      settled.costs.map((c) => c.amount),
+    );
+    const payout = { total, jobs: breakdowns, costs: settled.costs, net };
     const appliedWeather = this.deliveredWeather(weather, terms, breakdowns);
     this.mission = {
       ...base,
@@ -1181,6 +1285,49 @@ export class EconomyEngine {
       });
     }
     this.store.event("mission.delivered", { missionId: m.id, flightId: record.id, payout });
+    this.publish();
+  }
+
+  /**
+   * The flight of a mission aborted in the air ended: its real costs (fuel at the landing
+   * airport's price, the landing fee where it parked, lease hours) and wear are booked on the
+   * aborted mission and the aircraft is released, like a flight.end abort. No payout and no
+   * reputation change; the jobs were returned at the abort.
+   */
+  private endAbortedFlight(record: FlightRecord, last: FlightSample | null): void {
+    const pending = this.abortedFlight;
+    if (!pending) return;
+    this.abortedFlight = null;
+    const m = pending.mission;
+    const origin = this.airports?.get(m.origin) ?? null;
+    const parkedAt =
+      last && this.airports
+        ? (nearestAirport(this.airports.list, last, ARRIVAL_RADIUS_NM)?.airport ?? null)
+        : null;
+    const crashed = record.status === "failed" && record.flags.crashed;
+    const settled = crashed
+      ? this.settle(m, record, origin, null, true)
+      : this.settle(m, record, parkedAt ?? origin, parkedAt, false);
+    const updated: Mission = {
+      ...m,
+      flownNm: record.distanceNm,
+      elapsedMin: record.blockMin,
+      ...(settled.costs.length ? { costs: settled.costs } : {}),
+      wear: settled.wear,
+    };
+    if (this.mission?.id === m.id) this.mission = updated;
+    this.repoTx(() => {
+      this.flushBook();
+      this.repo?.saveMission(updated);
+    });
+    const costTotal = missionPayoutTotals(
+      [],
+      settled.costs.map((c) => c.amount),
+    ).costTotal;
+    this.log(
+      "info",
+      `Flight ${record.id} of aborted mission ${m.id} ended at ${parkedAt?.ident ?? "no airport"}: costs $${costTotal}, wear ${settled.wear}`,
+    );
     this.publish();
   }
 
@@ -1370,7 +1517,16 @@ export class EconomyEngine {
         const m = this.mission;
         if (!m || (m.status !== "loaded" && m.status !== "in_progress"))
           return fail("no_mission", "No mission is open");
-        this.mission = { ...m, status: "aborted", endedAt: new Date(this.now()).toISOString() };
+        const aborted: Mission = {
+          ...m,
+          status: "aborted",
+          endedAt: new Date(this.now()).toISOString(),
+        };
+        this.mission = aborted;
+        // In the air: the aircraft keeps flying; the flight's costs are booked when it ends.
+        if (m.status === "in_progress" && m.flightId) {
+          this.abortedFlight = { mission: aborted, flightId: m.flightId };
+        }
         this.returnJobs(m, "accepted");
         this.persistMission();
         this.publish();
@@ -1959,6 +2115,7 @@ export class EconomyEngine {
   /** Reload everything from the database (after an import). */
   reload(): void {
     this.ferry = null;
+    this.abortedFlight = null;
     this.aiDetector.reset();
     this.book = this.loadBook();
     this.jobs.clear();
@@ -1967,6 +2124,7 @@ export class EconomyEngine {
     ) ?? [])
       this.jobs.set(job.id, job);
     this.mission = this.persistRead(() => this.repo?.openMission() ?? null);
+    this.recoverAfterRestart();
     this.publishedMissionId = null;
     this.store.apply({ mission: null });
     this.publish();
@@ -1974,6 +2132,8 @@ export class EconomyEngine {
 
   /** True while a mission is flying (imports are refused then). */
   get missionInProgress(): boolean {
-    return this.mission?.status === "in_progress" || this.ferry !== null;
+    return (
+      this.mission?.status === "in_progress" || this.ferry !== null || this.abortedFlight !== null
+    );
   }
 }

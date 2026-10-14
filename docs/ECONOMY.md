@@ -227,7 +227,22 @@ sim-stamped test frames and hand-made live reports):
   `failed`, no payout, no reputation change; `mission.failed` event. Jobs end
   `failed`.
 - **abort**: `mission.abort`, `flight.end {abort:true}` or a session reset (replay
-  restart) → mission `aborted`, jobs back to accepted, no penalty.
+  restart) → mission `aborted`, jobs back to accepted (transit cargo back at its stop,
+  clock unchanged), no penalty. A `mission.abort` while the flight is still running
+  aborts the mission at once, but the aircraft stays `in_flight` until that flight ends;
+  then the flight's real costs (fuel at the parking airport's price, the landing fee where
+  it parked, lease hours) and wear are booked on the aborted mission (`mission.costs`) and
+  the aircraft is released where it parked. No payout, no reputation change (a crash on
+  that flight is settled as a crash, without the −20: no cargo was being flown for pay).
+- **connector restart**: a fresh connector has no running flight and the tracker's
+  in-memory leg (distance, fuel, landings) is gone, so a lost flight is never resumed or
+  billed. At startup every aircraft left `in_flight` (mission, ferry or an aborted flight)
+  is available again, and a mission left `in_progress` goes back to `loaded` (its start,
+  flown distance and departure payload check cleared). The first sample decides: on the
+  ground within **3 nm** of the origin → it stays loaded and flies normally from the next
+  departure; otherwise (airborne or elsewhere) → `aborted` (failure code
+  `flight_lost`), jobs back to accepted / transit cargo back at its stop, no penalty.
+  `mission.recovered {missionId, status}` is emitted either way.
 
 Reputation (0–100, start 50): on time with landing A+/A **+3**, B **+2**, C or no
 grade **+1**; landing D/E/F **−5**; **−3 per started late hour** (and no clean
@@ -464,7 +479,10 @@ Code: `packages/economy/src/{company-constants,clock,costs,fleet-rules,finance,b
   `insurance` (placeholder, nothing books it yet) and `adjustment` (tests/tools only).
 - **Operating P&L** per in-game month = all categories except the capital flows
   (`loan_disbursement`, `loan_payment`, `purchase`, `sale`); revenue = positive entries,
-  expense = negative ones. The last 24 months are kept on the company record.
+  expense = negative ones. The last 24 months are kept on the company record; a company
+  with ledger rows but no P&L (a P3 database, an import) gets it rebuilt from the ledger.
+- A delivered mission's `payout.total`, cost total and `net` are summed in cents
+  (`missionPayoutTotals`), so they equal the `mission_payout` / cost ledger rows exactly.
 - **Net worth** = cash + Σ owned aircraft market value − outstanding loan principal.
 - **New company**: $250,000, reputation 50 and one owned Cessna 208B at the base (the
   starter aircraft; not a cash change). A P3 company without a fleet gets the same
@@ -672,7 +690,8 @@ The company record gains startingCash, gameMs, monthBilled, defaultUntilGameMs, 
 loan counters, selectedAircraftId, pnl and ledgerCount, all with defaults so P3 rows
 load. Career export **version 2** adds `fleet`, `loans` and `aircraftEvents` (and ledger
 `gameMs`/`balance`); version 1 imports are accepted (`job_payout` mapped, balances
-recomputed, starter aircraft granted on reload). API: `GET /api/ledger`,
+recomputed, the monthly P&L rebuilt from the imported ledger, starter aircraft granted on
+reload). API: `GET /api/ledger`,
 `/api/fleet`, `/api/loans` (Bearer token; see `connector/README.md`).
 
 ## Demo
