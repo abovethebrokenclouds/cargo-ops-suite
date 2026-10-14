@@ -6,7 +6,9 @@ import {
   WEATHER_BONUS_CAP,
   WEATHER_BONUS_MAX_FETCH_AGE_MIN,
   WEATHER_BONUS_MAX_OBS_AGE_MIN,
+  trustedWeather,
   weatherBonus,
+  weatherOutcome,
   type WeatherReportInput,
 } from "../src/index";
 
@@ -244,5 +246,85 @@ describe("worked examples (docs/ECONOMY.md, weather bonus)", () => {
     expect(cond?.note).toMatch(/Estimate: no weather bonus/);
     expect(est.weatherBonus).toBeUndefined();
     expect(est.total).toBe(plain.total);
+  });
+});
+
+describe("only sim + live + known category ever pays (a stored flag is not trusted)", () => {
+  it("a forged check (demo telemetry, SAMPLE METAR, eligible: true) pays nothing", () => {
+    const forged: WeatherCheck = {
+      ...check("departure", "LIFR", { origin: "sample" }, "demo"),
+      eligible: true,
+    };
+    expect(weatherBonus({ departure: forged }).bonus).toBe(0);
+    expect(example1({ departure: forged }).total).toBe(1317);
+    expect(example1({ departure: forged }).weatherBonus).toBeUndefined();
+  });
+
+  it("eligible: true is ignored for replay/demo telemetry, sample METARs or unknown categories", () => {
+    const live = check("arrival", "LIFR");
+    expect(weatherBonus({ arrival: live }).bonus).toBe(0.1);
+    expect(weatherBonus({ arrival: { ...live, source: "replay" } }).bonus).toBe(0);
+    expect(weatherBonus({ arrival: { ...live, source: "demo" } }).bonus).toBe(0);
+    expect(weatherBonus({ arrival: { ...live, metarOrigin: "sample" } }).bonus).toBe(0);
+    expect(weatherBonus({ arrival: { ...live, metarOrigin: null } }).bonus).toBe(0);
+    expect(weatherBonus({ arrival: { ...live, category: null } }).bonus).toBe(0);
+  });
+
+  it("trustedWeather clears eligible on imported checks that are not sim + live", () => {
+    const live = check("departure", "IFR");
+    const forged = { ...check("arrival", "LIFR", { origin: "sample" }, "demo"), eligible: true };
+    const out = trustedWeather({ departure: live, arrival: forged, bonus: 0.1 });
+    expect(out.departure?.eligible).toBe(true);
+    expect(out.arrival?.eligible).toBe(false);
+    // Everything else is kept as recorded.
+    expect(out.bonus).toBe(0.1);
+    expect(out.arrival?.category).toBe("LIFR");
+    expect(trustedWeather({ departure: live })).toEqual({ departure: live });
+    expect(trustedWeather(undefined)).toBeUndefined();
+  });
+});
+
+describe("checkWeather: reports from the future are not current", () => {
+  it("observedAt or fetchedAt more than 5 min ahead of the check do not count", () => {
+    expect(check("departure", "LIFR", { observedAt: iso(-6) }).eligible).toBe(false);
+    expect(check("departure", "LIFR", { fetchedAt: iso(-6) }).eligible).toBe(false);
+    expect(check("departure", "LIFR", { observedAt: iso(-24 * 60) }).eligible).toBe(false);
+    // Small clock skew is tolerated.
+    expect(check("departure", "LIFR", { observedAt: iso(-4), fetchedAt: iso(-4) }).eligible).toBe(
+      true,
+    );
+    expect(check("departure", "LIFR", { fetchedAt: iso(-6) }).message).toMatch(/in the future/);
+  });
+});
+
+describe("weatherOutcome: what the mission records about the bonus", () => {
+  const terms = { noBonus: false, payloadMismatch: false };
+  it("applied: the end that set it", () => {
+    const o = weatherOutcome(
+      { departure: check("departure", "IFR"), arrival: check("arrival", "VFR") },
+      terms,
+    );
+    expect(o).toEqual({ outcome: "applied", bonus: 0.05, bonusFrom: "departure" });
+  });
+  it("withheld by the sim rate or by the payload check", () => {
+    const w = { arrival: check("arrival", "LIFR") };
+    expect(weatherOutcome(w, { noBonus: true, payloadMismatch: false })).toEqual({
+      outcome: "withheld_rate",
+      bonus: 0,
+      bonusFrom: "arrival",
+    });
+    expect(weatherOutcome(w, { noBonus: true, payloadMismatch: true }).outcome).toBe(
+      "withheld_payload",
+    );
+  });
+  it("no IFR/LIFR at live ends, or nothing live at all", () => {
+    expect(weatherOutcome({ departure: check("departure", "VFR") }, terms)).toEqual({
+      outcome: "no_ifr",
+      bonus: 0,
+    });
+    expect(
+      weatherOutcome({ departure: check("departure", "LIFR", { origin: "sample" }) }, terms),
+    ).toEqual({ outcome: "not_live", bonus: 0 });
+    expect(weatherOutcome({}, terms)).toEqual({ outcome: "not_live", bonus: 0 });
   });
 });

@@ -9,12 +9,18 @@
 //   - the telemetry is from the simulator (replays and the demo never earn it);
 //   - the connector's copy is current: not stale (no failed refresh since), fetched at
 //     most WEATHER_BONUS_MAX_FETCH_AGE_MIN before the check, observed at most
-//     WEATHER_BONUS_MAX_OBS_AGE_MIN before the check;
+//     WEATHER_BONUS_MAX_OBS_AGE_MIN before the check, and neither time more than
+//     WEATHER_BONUS_MAX_FUTURE_MIN after it (a report from the future is not current);
 //   - the flight category is known.
 // Anything else is "unknown": no bonus and no penalty.
+//
+// The payout never trusts a stored `eligible` flag on its own: an end only counts when it is
+// also recorded as sim telemetry with a live METAR and a known category (a forged or
+// imported check claiming eligibility without them pays nothing).
 
 import type {
   MissionWeather,
+  WeatherBonusOutcome,
   WeatherCheck,
   WEATHER_FLIGHT_CATEGORIES,
 } from "../../protocol/src/economy";
@@ -34,6 +40,8 @@ export const WEATHER_BONUS_CAP = 0.1;
 export const WEATHER_BONUS_MAX_FETCH_AGE_MIN = 15;
 /** The observation must be at most this old at the check (METARs are hourly). */
 export const WEATHER_BONUS_MAX_OBS_AGE_MIN = 90;
+/** Clock skew tolerated: observation or fetch times further ahead than this are not current. */
+export const WEATHER_BONUS_MAX_FUTURE_MIN = 5;
 
 /** What the check needs from a METAR report (structurally a `MetarReport`). */
 export interface WeatherReportInput {
@@ -103,10 +111,16 @@ export function checkWeather(input: WeatherCheckInput): WeatherCheck {
   if (source !== "sim") return no(`${source} telemetry, no weather bonus`);
   if (report.stale) return no("report is stale, no bonus");
   const fetched = ageMin(report.fetchedAt, nowMs);
+  const observed = ageMin(report.observedAt, nowMs);
+  if (
+    (fetched !== null && fetched < -WEATHER_BONUS_MAX_FUTURE_MIN) ||
+    (observed !== null && observed < -WEATHER_BONUS_MAX_FUTURE_MIN)
+  ) {
+    return no(`report time is in the future, not current, no bonus`);
+  }
   if (fetched === null || fetched > WEATHER_BONUS_MAX_FETCH_AGE_MIN) {
     return no(`report fetched more than ${WEATHER_BONUS_MAX_FETCH_AGE_MIN} min ago, no bonus`);
   }
-  const observed = ageMin(report.observedAt, nowMs);
   if (observed === null || observed > WEATHER_BONUS_MAX_OBS_AGE_MIN) {
     return no(`observation older than ${WEATHER_BONUS_MAX_OBS_AGE_MIN} min, no bonus`);
   }
@@ -130,7 +144,41 @@ export interface WeatherBonus {
   note: string;
 }
 
-/** The larger of the two eligible ends, capped at WEATHER_BONUS_CAP. Pure. */
+/**
+ * An end may count toward the bonus: frozen as eligible AND recorded under sim telemetry
+ * with a live METAR and a known category. The stored flag alone is never enough.
+ */
+export function weatherEndCounts(c: WeatherCheck | undefined): boolean {
+  return (
+    c !== undefined &&
+    c.eligible &&
+    c.source === "sim" &&
+    c.metarOrigin === "live" &&
+    c.category !== null
+  );
+}
+
+/**
+ * A mission's weather as read from outside (a career import): ends claiming eligibility
+ * without sim telemetry, a live METAR and a known category are marked not eligible. Every
+ * other recorded field is kept. Pure.
+ */
+export function trustedWeather<W extends MissionWeather | undefined>(weather: W): W {
+  if (!weather) return weather;
+  const fix = (c: WeatherCheck | undefined) =>
+    c && c.eligible && !weatherEndCounts(c) ? { ...c, eligible: false } : c;
+  const out: MissionWeather = { ...weather };
+  if (weather.departure) out.departure = fix(weather.departure);
+  if (weather.arrival) out.arrival = fix(weather.arrival);
+  if (weather.chain) {
+    out.chain = { ...weather.chain };
+    if (weather.chain.departure) out.chain.departure = fix(weather.chain.departure);
+    if (weather.chain.arrival) out.chain.arrival = fix(weather.chain.arrival);
+  }
+  return out as W;
+}
+
+/** The larger of the two counting ends, capped at WEATHER_BONUS_CAP. Pure. */
 export function weatherBonus(weather: MissionWeather | null | undefined): WeatherBonus {
   const ends = [weather?.departure, weather?.arrival].filter(
     (c): c is WeatherCheck => c !== undefined,
@@ -138,7 +186,7 @@ export function weatherBonus(weather: MissionWeather | null | undefined): Weathe
   let best: WeatherCheck | null = null;
   let bonus = 0;
   for (const c of ends) {
-    const b = c.eligible && c.category ? WEATHER_BONUS[c.category] : 0;
+    const b = weatherEndCounts(c) && c.category ? WEATHER_BONUS[c.category] : 0;
     if (b > bonus) {
       bonus = b;
       best = c;
@@ -155,7 +203,7 @@ export function weatherBonus(weather: MissionWeather | null | undefined): Weathe
   if (ends.length === 0) {
     return { bonus: 0, end: null, note: "No weather recorded: no weather bonus" };
   }
-  const known = ends.filter((c) => c.eligible);
+  const known = ends.filter((c) => weatherEndCounts(c));
   return {
     bonus: 0,
     end: null,
@@ -164,4 +212,33 @@ export function weatherBonus(weather: MissionWeather | null | undefined): Weathe
         ? `Weather: ${known.map((c) => `${c.category} at ${c.station}`).join(", ")}, no IFR/LIFR bonus`
         : "Weather unknown or not live: no weather bonus",
   };
+}
+
+export interface WeatherOutcome {
+  outcome: WeatherBonusOutcome;
+  /** Fraction actually paid (0 unless applied). */
+  bonus: number;
+  /** The counted end that set the bonus (applied or withheld). */
+  bonusFrom?: WeatherCheck["stage"];
+}
+
+/**
+ * What a delivery records about the weather bonus, from the ends the payout counted (the
+ * chain's ends on a final transit leg) and whether bonuses were removed. Pure.
+ */
+export function weatherOutcome(
+  counted: MissionWeather,
+  terms: { noBonus: boolean; payloadMismatch: boolean },
+): WeatherOutcome {
+  const wx = weatherBonus(counted);
+  if (wx.bonus > 0 && wx.end) {
+    const outcome: WeatherBonusOutcome = terms.payloadMismatch
+      ? "withheld_payload"
+      : terms.noBonus
+        ? "withheld_rate"
+        : "applied";
+    return { outcome, bonus: outcome === "applied" ? wx.bonus : 0, bonusFrom: wx.end.stage };
+  }
+  const anyLive = [counted.departure, counted.arrival].some((c) => weatherEndCounts(c));
+  return { outcome: anyLive ? "no_ifr" : "not_live", bonus: 0 };
 }

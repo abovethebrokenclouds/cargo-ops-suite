@@ -93,11 +93,43 @@ export const weatherCheckSchema = z.object({
 });
 export type WeatherCheck = z.infer<typeof weatherCheckSchema>;
 
+/**
+ * What happened to the weather bonus at a delivered arrival (docs/ECONOMY.md "Weather
+ * bonus"): applied; earned but withheld (sim rate above 1× or the payload check on any leg);
+ * no IFR/LIFR at the counted live ends; nothing live and current to count; or the leg only
+ * carried transit cargo (decided at the final delivery).
+ */
+export const WEATHER_BONUS_OUTCOMES = [
+  "applied",
+  "withheld_rate",
+  "withheld_payload",
+  "no_ifr",
+  "not_live",
+  "in_transit",
+] as const;
+export const weatherBonusOutcomeSchema = z.enum(WEATHER_BONUS_OUTCOMES);
+export type WeatherBonusOutcome = z.infer<typeof weatherBonusOutcomeSchema>;
+
 export const missionWeatherSchema = z.object({
   departure: weatherCheckSchema.optional(),
   arrival: weatherCheckSchema.optional(),
   /** Bonus fraction actually applied to the payout at delivery (0 when bonuses were removed). */
   bonus: finite().nonnegative().optional(),
+  /** Set by the connector at a delivered arrival; absent on older saves and before arrival. */
+  outcome: weatherBonusOutcomeSchema.optional(),
+  /** The counted end that set the bonus (applied or withheld); absent = none. */
+  bonusFrom: z.enum(["departure", "arrival"]).optional(),
+  /**
+   * The ends the payout counted when they are not this mission's own: on the final leg of a
+   * transit chain, the FIRST leg's departure and this arrival. Absent = the own ends counted.
+   */
+  chain: z
+    .object({
+      legs: z.number().int().min(2),
+      departure: weatherCheckSchema.optional(),
+      arrival: weatherCheckSchema.optional(),
+    })
+    .optional(),
 });
 export type MissionWeather = z.infer<typeof missionWeatherSchema>;
 
