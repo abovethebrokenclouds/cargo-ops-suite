@@ -21,6 +21,26 @@ test.describe("replay mode against the local connector (--sim fake)", () => {
     expect(external).toEqual([]);
   });
 
+  test("/flight weather in a replay comes from the connector as SAMPLE, never live", async ({
+    page,
+  }) => {
+    const weatherCalls: string[] = [];
+    page.on("request", (req) => {
+      if (req.url().includes("/api/weather/metar")) weatherCalls.push(req.url());
+    });
+    await page.goto("/flight");
+    const weather = page.getByTestId("route-weather");
+    const origin = weather.locator('[data-testid="metar-station"][data-station="KMEM"]');
+    await expect(origin).toHaveAttribute("data-origin", "sample", { timeout: 15_000 });
+    await expect(origin.getByTestId("flight-category")).toHaveText("VFR");
+    await expect(weather.getByTestId("weather-status")).toHaveAttribute(
+      "data-weather-mode",
+      "sample",
+    );
+    await expect(weather.locator('[data-metar-origin="live"]')).toHaveCount(0);
+    expect(weatherCalls.some((u) => u.includes("ids=KMEM"))).toBe(true);
+  });
+
   test("/flight shows connector-computed phases and a graded landing", async ({ page }) => {
     // The connector recomputes phases and the touchdown from raw telemetry (FakeSource
     // strips the fixture's authored ones). At 20× a pass lasts ~19 s.

@@ -20,6 +20,9 @@ import { economyApi } from "../server/economy-api";
 import { loadAirportsData } from "../core/economy/airports-data";
 import { SimbriefService } from "../core/simbrief";
 import { dataApi } from "../server/data-api";
+import { WeatherService } from "../core/weather";
+import { weatherApi } from "../server/weather-api";
+import type { WeatherMode } from "../weather";
 import { BACKUP_CHECK_INTERVAL_MS, BackupManager, DEFAULT_BACKUP_KEEP } from "../storage/backups";
 import type { EconomyAirport } from "../economy";
 
@@ -84,7 +87,9 @@ export interface ConnectorOptions {
   backupKeep?: number;
   /** Daily backups (default: on for the live database, off for replays). */
   dailyBackups?: boolean;
-  /** fetch used for SimBrief (tests). */
+  /** Weather source (default: "online" for a live sim, "sample" for replays). */
+  weather?: WeatherMode;
+  /** fetch used for SimBrief and METARs (tests). */
   fetch?: typeof fetch;
   /** Clock for backups and SimBrief (tests). */
   now?: () => number;
@@ -102,6 +107,7 @@ export interface RunningConnector {
   recorder: Recorder | null;
   backups: BackupManager;
   simbrief: SimbriefService;
+  weather: WeatherService;
   stop(): Promise<void>;
 }
 
@@ -187,6 +193,16 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.now ? { now: options.now } : {}),
   });
+  const weather = new WeatherService({
+    mode: options.weather ?? (source.mode === "live" ? "online" : "sample"),
+    version,
+    log,
+    db: storage.db,
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+    ...(options.now ? { now: options.now } : {}),
+  });
+  log("info", `Weather: ${weather.mode}`);
+  const weatherRoutes = weatherApi(weather);
   const dataRoutes = dataApi({ backups, simbrief, databasePath: storage.path });
   const recorder = options.record ? new Recorder(resolve(options.record), session.store) : null;
   if (recorder) log("info", `Recording frames to ${recorder.path}`);
@@ -203,11 +219,13 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
       devOrigins,
       ...(options.pingIntervalMs ? { pingIntervalMs: options.pingIntervalMs } : {}),
       log,
-      routes: (req) => flightRoutes(req) ?? economyRoutes(req) ?? dataRoutes(req),
+      routes: async (req) =>
+        flightRoutes(req) ?? economyRoutes(req) ?? (await dataRoutes(req)) ?? weatherRoutes(req),
       status: () => ({
         dataDir: options.dataDir,
         database: storage.path,
         recording: recorder?.path ?? null,
+        weather: weather.mode,
         recordedLines: recorder?.lines ?? 0,
         store: session.store.stats(),
       }),
@@ -259,6 +277,7 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
     recorder,
     backups,
     simbrief,
+    weather,
     stop: async () => {
       if (clock) clearInterval(clock);
       if (backupTimer) clearInterval(backupTimer);

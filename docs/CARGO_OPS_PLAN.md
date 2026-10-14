@@ -363,7 +363,7 @@ Start requires on-ground + brake + within 3 nm of origin. Distance integrated by
 - Online fallback: OpenFreeMap `https://tiles.openfreemap.org/styles/dark` (no key, no stated limits, donation-funded, no SLA). Attribution: `© OpenStreetMap contributors · © OpenMapTiles`.
 - Offline floor: `world-atlas` 110m TopoJSON as a fill/line source so the map never renders blank.
 - Airports: `data/ourairports/*.csv` snapshot with a refresh script and date stamp; loaded into SQLite on first run; MSFS facilities override when the sim is connected.
-- Weather: aviationweather.gov `api/data/metar` and `taf` JSON, custom `User-Agent: CargoOps/<version> (private use)`, 10-minute cache, max 1 request/min per station, failure degrades gracefully.
+- Weather: aviationweather.gov `api/data/metar` and `taf` JSON, custom `User-Agent: CargoOps/<version> (private use)`, 10-minute cache, max 1 request/min per station, failure degrades gracefully. _Status after the METAR lane:_ METAR implemented (connector `src/core/weather.ts`, `GET /api/weather/metar`, `packages/weather`, per-browser **Online weather** switch, SAMPLE reports in demo/replay); delivered over HTTP rather than the `weather` snapshot domain. TAF, map METAR badges and the IFR/weather payout bonuses are not implemented yet.
 - Never: Mapbox, MapTiler, Stadia, `tile.openstreetmap.org`, Navigraph, openAIP (key + non-commercial), X-Plane apt.dat (GPL).
 
 ---

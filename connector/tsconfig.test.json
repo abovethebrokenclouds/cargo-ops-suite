@@ -4,5 +4,5 @@
   "compilerOptions": {
     "outDir": "dist-test"
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "../packages/protocol/src/**/*.ts", "../packages/economy/src/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "../packages/protocol/src/**/*.ts", "../packages/economy/src/**/*.ts", "../packages/weather/src/**/*.ts"]
 }
