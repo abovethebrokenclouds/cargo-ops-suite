@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cargo Ops toolbar panel: package tool project. Build it with scripts\build-msfs-panel.ps1
+     (runs <SDK>\Tools\bin\fspackagetool.exe on this file). See msfs-panel\README.md. -->
+<Project Version="2" Name="cargo-ops-toolbar-panel" FolderName="Packages">
+  <OutputDirectory>.</OutputDirectory>
+  <TemporaryOutputDirectory>_PackageInt</TemporaryOutputDirectory>
+  <Packages>
+    <Package>PackageDefinitions\cargo-ops-toolbar-panel.xml</Package>
+  </Packages>
+</Project>

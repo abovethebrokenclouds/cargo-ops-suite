@@ -11,6 +11,8 @@ export interface CliOptions {
   dataDir?: string;
   basemapDir?: string;
   devOrigins: string[];
+  /** Extra frame ancestors for /panel (validated in the app; "any" lifts the restriction). */
+  panelFrameAncestors: string[];
   open: boolean;
   /**
    * LAN opt-in for this run: a bind address ("0.0.0.0" for every interface, or one IPv4 of
@@ -57,6 +59,11 @@ Server
                           Settings on this PC; career import, backups and deleting data stay
                           on this PC. Windows asks for firewall access: allow Private only
   --no-lan                Stay on 127.0.0.1 for this run even if LAN access is saved as on
+  --panel-frame-ancestor <source>
+                          Also let this origin (http://host:port) or scheme (name:) show the
+                          read-only /panel page in a frame (repeatable). The in-sim toolbar
+                          panel (coui:) is allowed by default; "any" lifts the restriction
+                          for /panel only. Every other page can never be framed
 
 Data
   --data-dir <dir>        Config, databases and logs (default: %LOCALAPPDATA%\\CargoOps on
@@ -91,6 +98,7 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
     loop: false,
     port: 4311,
     devOrigins: [],
+    panelFrameAncestors: [],
     open: false,
     resetToken: false,
     backupKeep: 14,
@@ -147,6 +155,13 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
         if (next === undefined)
           options.devOrigins.push("http://localhost:8080", "http://127.0.0.1:8080");
         else options.devOrigins.push(next);
+        break;
+      }
+      case "--panel-frame-ancestor": {
+        const value = takeValue(flag, inline);
+        if (typeof value !== "string") return { ok: false, error: value.error };
+        if (value.trim() === "") return { ok: false, error: "--panel-frame-ancestor is empty" };
+        options.panelFrameAncestors.push(value);
         break;
       }
       case "--sim":

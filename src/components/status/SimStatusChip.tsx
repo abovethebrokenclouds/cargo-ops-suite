@@ -12,6 +12,8 @@ export type SimStatusChipProps = {
   /** Overrides the default label for the status (e.g. "CONNECTOR OFFLINE"). */
   label?: string;
   className?: string;
+  /** No pulsing dot (the in-sim toolbar panel shows nothing animated). */
+  still?: boolean;
 };
 
 type Look = { chip: string; dot: string; pulse: boolean };
@@ -57,6 +59,7 @@ export function SimStatusChip({
   detail,
   label: labelOverride,
   className,
+  still = false,
 }: SimStatusChipProps) {
   const look = looks[status];
   const label = labelOverride ?? simStatusLabel(status, simName, protocol);
@@ -75,7 +78,7 @@ export function SimStatusChip({
       <span
         aria-hidden="true"
         className={cn("status-dot", look.dot)}
-        data-live={look.pulse ? "true" : undefined}
+        data-live={look.pulse && !still ? "true" : undefined}
       />
       <span className="truncate">{label}</span>
       {detail ? <span className="sr-only">{`: ${detail}`}</span> : null}

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cargo Ops toolbar icon, drawn for this project (project licence): a cargo crate with a
+     rising flight path. One colour (white) on a transparent background, 64 x 64. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <g fill="none" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M8 30 L30 22 L52 30 L52 52 L30 60 L8 52 Z" />
+    <path d="M8 30 L30 38 L52 30" />
+    <path d="M30 38 L30 60" />
+    <path d="M19 26.5 L41 34.5" />
+    <path d="M12 17 C22 10 36 8 52 10" />
+    <path d="M45 4 L53 10 L46 16" />
+  </g>
+</svg>

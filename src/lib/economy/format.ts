@@ -17,6 +17,22 @@ export function missionTimeLeftMin(m: Mission): number | null {
   return m.timeLimitMin - (m.elapsedMin ?? 0);
 }
 
+/**
+ * Deadline line for an active mission (MissionStrip, /panel): time left once started, the
+ * limit counted from block-out before that. `late` marks a missed deadline.
+ */
+export function missionDeadline(m: Mission): { text: string; late: boolean } {
+  const left = missionTimeLeftMin(m);
+  if (left === null) {
+    return m.timeLimitMin < 0
+      ? { text: `${formatMinutes(-m.timeLimitMin)} late already`, late: true }
+      : { text: `${formatMinutes(m.timeLimitMin)} from block-out`, late: false };
+  }
+  return left >= 0
+    ? { text: `${formatMinutes(left)} left`, late: false }
+    : { text: `${formatMinutes(-left)} late`, late: true };
+}
+
 export const TRANSIT_STORAGE_LABELS: Record<TransitStorage, string> = {
   airport: "Airport ramp",
   own_fbo: "Own FBO",

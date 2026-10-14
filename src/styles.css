@@ -611,6 +611,23 @@
   color: var(--muted-foreground);
 }
 
+/* In-sim toolbar panel (/panel, about 400 x 600): compact, large type, nothing moves. */
+@utility panel-compact {
+  display: block;
+  min-height: 100vh;
+  padding: 0.625rem;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 1rem;
+  &,
+  & *,
+  & *::before,
+  & *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 /* Status-board lamp. `data-state` go | hold | nogo | info lights it; nodata stays dark grey. */
 @utility lamp {
   border: 1px solid var(--console-bezel);

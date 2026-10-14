@@ -260,7 +260,7 @@ Motion: `tw-animate-css` for enter/exit, `motion` for number counters, page tran
 
 ### P6 — Polish and packaging
 
-- Animations, empty states, keyboard shortcuts, PWA manifest for an installable window, backups/export UI, optional `@yao-pkg/pkg` connector exe (node-simconnect kept unbundled for LGPL), auto-start instructions, SimBrief OFP import (free fetch API, optional), in-sim toolbar panel (optional).
+- Animations, empty states, keyboard shortcuts, PWA manifest for an installable window, backups/export UI, optional `@yao-pkg/pkg` connector exe (node-simconnect kept unbundled for LGPL), auto-start instructions, SimBrief OFP import (free fetch API, optional), in-sim toolbar panel (optional; `msfs-panel/` package source built locally with the free SDK by `scripts/build-msfs-panel.ps1`, showing the read-only `/panel` page; PC-58).
 - Acceptance: final `VERIFICATION.md` with cloud-verified vs PC-verified matrix; inventory complete.
 
 Explicitly out of scope: multi-user, auth, billing, leaderboards, cloud sync, paid data.

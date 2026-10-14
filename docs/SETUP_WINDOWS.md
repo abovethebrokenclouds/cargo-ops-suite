@@ -358,3 +358,58 @@ and the installable app (PWA) only works on this PC. IPv4 only. On this PC keep 
 <http://127.0.0.1:4311>: opening the LAN address on the PC itself counts as a LAN device and
 asks for a code. Do not forward the port on your router: LAN access is for your home network,
 never the internet.
+
+## 16. Toolbar panel inside the simulator (optional)
+
+A **Cargo Ops** button in the simulator's toolbar opens a small window (about 400 x 600) with
+the compact, read-only Cargo Ops page: the chip, your active mission, the route source with
+distance and ETE, fuel, the payload check, the GO / NO-GO lamps and the weather category at both
+ends. It is the page <http://127.0.0.1:4311/panel> shown inside the sim, so Cargo Ops itself
+must be running. You build the toolbar package once on this PC; nothing of the SDK is part of
+Cargo Ops.
+
+**1. Install the free MSFS SDK (one time).** In the simulator: Options → General →
+Developers → turn **Developer Mode** on. In the Developer Mode menu bar open **Help → SDK
+Installer** and run the installer (free). SDK pages:
+<https://docs.flightsimulator.com/html/Introduction/SDK_Overview.htm> (MSFS 2020) and
+<https://docs.flightsimulator.com/msfs2024/html/1_Introduction/SDK_Overview.htm> (MSFS 2024).
+Afterwards close every Command Prompt window, so new ones see the SDK's `MSFS_SDK` (or
+`MSFS2024_SDK`) environment variable. You can turn Developer Mode off again.
+
+**2. Build and install the panel.** Close the simulator, then double-click
+`scripts\build-msfs-panel.cmd` (or run it from a Command Prompt in the repository folder). It:
+
+1. finds the SDK (`MSFS_SDK`, else `MSFS2024_SDK`; or `-SdkPath "C:\MSFS SDK"`),
+2. copies `msfs-panel\` to `%LOCALAPPDATA%\CargoOps\msfs-panel-build` and writes the port into
+   it (`-Port 4312` if you start Cargo Ops with `--port 4312`),
+3. runs the SDK's `fspackagetool.exe` on it (the package tool may start the simulator in the
+   background for this and take a few minutes),
+4. copies the built `cargo-ops-toolbar-panel` folder into your **Community** folder, which it
+   finds in the simulator's `UserCfg.opt` (`InstalledPackagesPath`, Microsoft Store and Steam,
+   2020 and 2024). Built with the 2020 SDK it goes to `Community` (MSFS 2024 reads 2020
+   packages from there too); built with the 2024 SDK to MSFS 2024's `Community2024`.
+
+No administrator rights are needed. `-DetectOnly` only shows which Community folder(s) it
+would use; `-Community "D:\Path\To\Community"` uses that folder instead; `-WhatIf` shows every
+step without doing it. Without the SDK it stops with "MSFS SDK not found" and the links above.
+
+**3. Use it.** Start Cargo Ops (`scripts\start-cargo-ops.cmd`), then the simulator, and load a
+flight. The **Cargo Ops** button (a crate with an arrow) is in the toolbar at the top of the
+screen; if it is not, open the toolbar's edit / customise mode and switch it on. Click it to
+open the window; move and resize it like the other toolbar windows. If Cargo Ops is not running
+the window says **Start Cargo Ops (scripts\start-cargo-ops.cmd)** and connects by itself as soon
+as it is. The window has no buttons: it never changes anything.
+
+**Remove it:** `scripts\build-msfs-panel.cmd -Remove` (deletes `cargo-ops-toolbar-panel` from the
+Community folder(s); restart the simulator).
+
+**Security.** The connector lets only `/panel` be shown inside another page, and only by the
+simulator's own pages (`coui:`); every other Cargo Ops page refuses to be framed, and the access
+token is still only handed to pages from this PC's own address. If the window stays on "Start
+Cargo Ops" although Cargo Ops runs, start it once with
+`scripts\start-cargo-ops.cmd --panel-frame-ancestor any` (lifts the frame restriction for
+`/panel` only) and note in `docs/VERIFICATION.md` (PC-58) whether that helped.
+
+**Honest status:** the package format follows the SDK documentation and community panels, but
+it has never been built with the real SDK or shown in a real simulator; that is PC-58. Details
+and sources: `msfs-panel\README.md`.

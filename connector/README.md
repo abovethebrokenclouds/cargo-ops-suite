@@ -53,6 +53,11 @@ for you; see `docs/SETUP_WINDOWS.md`.
 --lan [address]         LAN opt-in: also listen on 0.0.0.0 or one IPv4 of this PC
                         (pairing required, see "LAN access" below)
 --no-lan                Stay on 127.0.0.1 even if LAN access is saved as on
+--panel-frame-ancestor <source>
+                        Also let this origin or scheme frame the read-only /panel page
+                        (repeatable; "any" lifts it for /panel only). Default: 'self' coui:
+                        (the in-sim toolbar panel, msfs-panel/); every other path is never
+                        framable (X-Frame-Options DENY, frame-ancestors 'none')
 --help, --version
 ```
 

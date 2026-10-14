@@ -13,6 +13,15 @@ Everything runs on your PC; there are no accounts. Setup details: `docs/SETUP_WI
    Your browser opens <http://127.0.0.1:4311>. Keep the window open while you play.
 2. Optional: install it as an app (Edge/Chrome "Install Cargo Ops", setup guide §11) and create
    shortcuts or start it with Windows (`scripts\create-shortcut.ps1`, §12).
+3. Optional: a **Cargo Ops button in the simulator's toolbar** (setup guide §16). It opens a
+   small read-only window inside the sim with the chip, your active mission (route, cargo,
+   deadline, payload check), the route source with distance and ETE, fuel and endurance, the
+   GO / NO-GO lamps and the weather category at origin and destination. You build it once with
+   the free MSFS SDK (`scripts\build-msfs-panel.cmd`). If Cargo Ops is not running the window
+   says **Start Cargo Ops (scripts\start-cargo-ops.cmd)** and connects by itself once it is.
+   It shows the same tags as the other pages (REPLAY, DEMO; LIVE only with the sim connected)
+   and has no buttons: everything you change, you change in the browser. The same compact page
+   is at <http://127.0.0.1:4311/panel> in a normal browser window too.
 
 ## 2. Connect
 

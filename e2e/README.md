@@ -42,6 +42,10 @@ Playwright specs, two projects:
   age, the layer toggle) and the per-browser Online weather switch; `replay.spec.ts` checks that
   a replay's connector serves SAMPLE METARs and TAFs, never live ones. No spec reaches
   aviationweather.gov.
+  Toolbar panel: `panel.replay.spec.ts` starts its connector with `--panel-frame-ancestor` for a
+  small local host page on another 127.0.0.1 port (another origin) and shows `/panel` in that
+  page's iframe: REPLAY, never LIVE, read-only, the host hears the `ready` message; an origin that
+  was not allowed is refused, and `/flight`, `/settings` and `/` cannot be framed at all.
 
   LAN opt-in: `lan.replay.spec.ts` starts its connector with `--lan <first non-loopback IPv4>`
   and plays the tablet on `http://<that address>:<port>` (a real non-loopback client) and the

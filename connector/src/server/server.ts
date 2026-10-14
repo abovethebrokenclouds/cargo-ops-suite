@@ -9,7 +9,8 @@
 //   *    /api/lan…     LAN status, pairing code, devices, setting: this PC only (main token)
 //   GET  /ws           WebSocket; allowed Origin AND token (query `token` or first `hello`)
 //   GET  /tiles/<name>.pmtiles  local basemap with byte ranges (see tiles.ts)
-//   GET  /*            static SPA build with fallback to the shell
+//   GET  /*            static SPA build with fallback to the shell; never framable except
+//                      GET /panel (in-sim toolbar panel; see security.ts)
 
 import {
   createServer,
@@ -48,6 +49,8 @@ import {
   isAllowedHost,
   isAllowedOptionalOrigin,
   isAllowedRequiredOrigin,
+  panelFramingHeaders,
+  DEFAULT_PANEL_FRAME_ANCESTORS,
   tokensEqual,
   type OriginPolicy,
 } from "./security";
@@ -121,6 +124,11 @@ export interface ServerOptions {
   /** Folder holding basemap.pmtiles (and other archives) served under /tiles/. */
   basemapDir?: string;
   devOrigins?: string[];
+  /**
+   * Extra frame ancestors allowed for /panel on top of 'self' and coui: (validated with
+   * normalizeFrameAncestor; "any" drops the restriction for /panel only).
+   */
+  panelFrameAncestors?: string[];
   pingIntervalMs?: number;
   log: LogFn;
   /** Extra fields for the authenticated /api/status response. */
@@ -192,6 +200,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
   let lanAddresses: string[] = lanBind === null ? [] : boundLanAddresses(lanBind, interfaces());
   let policy: OriginPolicy = buildOriginPolicy(listenPort, options.devOrigins, lanAddresses);
   let lastInterfaceRefresh = Date.now();
+  const panelAncestors = [...DEFAULT_PANEL_FRAME_ANCESTORS, ...(options.panelFrameAncestors ?? [])];
   const webDir = webRootUsable(options.webDir) ? options.webDir : undefined;
   if (options.webDir && !webDir) {
     log("warn", `No web build found in ${options.webDir}; only the API is served`);
@@ -241,6 +250,13 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     } catch {
       sendText(res, 400, "Bad request");
       return;
+    }
+    // /panel alone may be framed (the in-sim toolbar panel, see security.ts).
+    const framing = panelFramingHeaders(pathname, panelAncestors);
+    if (framing) {
+      res.removeHeader("X-Frame-Options");
+      if (framing.csp === null) res.removeHeader("Content-Security-Policy");
+      else res.setHeader("Content-Security-Policy", framing.csp);
     }
     if (pathname === "/api" || pathname.startsWith("/api/")) {
       handleApi(req, res, pathname).catch((err: unknown) => {

@@ -1,0 +1,89 @@
+/* Cargo Ops toolbar panel. The window chrome comes from the simulator (ingame-ui); this only
+   sizes the iframe to fill it and styles the "not running" fallback. The colours are the web
+   app's own tokens (src/styles.css: --background, --foreground, --muted-foreground, --warning),
+   repeated here once as custom properties because this page runs inside the simulator, not the
+   app; written as sRGB hex of those oklch values, since the simulator's HTML engine may not
+   understand oklch(). */
+
+cargo-ops-panel {
+  --cargo-ops-background: #030713;
+  --cargo-ops-foreground: #eff6fd;
+  --cargo-ops-muted: #939fb1;
+  --cargo-ops-warning: #f9ad26;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+ingame-ui#CargoOpsPanel {
+  display: flex;
+  flex-direction: column;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+ingame-ui#CargoOpsPanel .ingameUiWrapper,
+ingame-ui#CargoOpsPanel .ingameUiContent {
+  display: flex !important;
+  flex-direction: column !important;
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+#CargoOpsWrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--cargo-ops-background);
+}
+
+#CargoOpsFrame {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--cargo-ops-background);
+}
+
+#CargoOpsFallback {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.75em;
+  flex: 1 1 auto;
+  padding: 1.25em;
+  color: var(--cargo-ops-foreground);
+  font-size: 1.1em;
+  line-height: 1.4;
+}
+
+#CargoOpsFallback .cargo-ops-title {
+  margin: 0;
+  color: var(--cargo-ops-warning);
+  font-weight: bold;
+  font-size: 1.2em;
+}
+
+#CargoOpsFallback .cargo-ops-action {
+  margin: 0;
+  font-weight: bold;
+}
+
+#CargoOpsFallback .cargo-ops-detail {
+  margin: 0;
+  color: var(--cargo-ops-muted);
+  font-size: 0.9em;
+}
+
+#CargoOpsWrap .is-hidden {
+  display: none !important;
+}

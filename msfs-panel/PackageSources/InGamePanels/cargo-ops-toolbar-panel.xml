@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="Windows-1252"?>
+<!-- Cargo Ops toolbar panel: the in-game panel definition (compiled to an .spb by the package
+     tool). url points at the panel page in html_ui; icon names the toolbar icon file
+     html_ui\Textures\Menu\toolbar\ICON_TOOLBAR_CARGO_OPS.svg; id must match panel-id in
+     CargoOpsPanel.html. The window aims at about 400 x 600 pixels on a 1920 x 1080 screen; the
+     size attributes follow community panels, which give them as percentages of the screen
+     (not verified against the SDK: adjust them if the window opens at the wrong size). -->
+<SimBase.Document Type="InGamePanels" version="1,0">
+  <Filename>cargo-ops-toolbar-panel.spb</Filename>
+  <InGamePanels.InGamePanelDefinition id="PANEL_CARGO_OPS" Name="CargoOps" url="html_ui/InGamePanels/CargoOpsPanel/CargoOpsPanel.html" resizeDirections="Both" minWidth="16" minHeight="35" defaultWidth="21" defaultHeight="56" defaultTop="12" defaultRight="2" icon="ICON_TOOLBAR_CARGO_OPS" buttonVisible="true">
+  </InGamePanels.InGamePanelDefinition>
+</SimBase.Document>
