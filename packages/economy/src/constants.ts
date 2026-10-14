@@ -108,3 +108,19 @@ export const SHORT_BAND_SHARE = 0.35;
 export const SHORT_BAND_MIN_NM = 60;
 
 export const STARTING_CASH = 250_000;
+
+/**
+ * Payload check (docs/ECONOMY.md "Payload check"): the sim payload may fall short of the
+ * cargo by max(PAYLOAD_TOLERANCE_MIN_KG, PAYLOAD_TOLERANCE_SHARE × cargo) before the
+ * flight is flagged underloaded.
+ */
+export const PAYLOAD_TOLERANCE_MIN_KG = 25;
+export const PAYLOAD_TOLERANCE_SHARE = 0.1;
+/**
+ * Pilot allowance when no payload station is named like a crew seat and the player has
+ * not set one: one adult of 170 lb (77.1 kg), the weight the replay fixture's Pilot
+ * station carries.
+ */
+export const DEFAULT_CREW_ALLOWANCE_KG = 77.1;
+/** Station names counted as crew seats (case-insensitive). */
+export const CREW_STATION_PATTERN = /\b(pilot|co-?pilot|crew|captain|first officer)\b/i;

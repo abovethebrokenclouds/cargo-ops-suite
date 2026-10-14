@@ -6,6 +6,8 @@
 //
 // noBonus (sim rate went above 1×) removes the bonuses: conditions and reputation
 // become 1.00 and the landing multiplier is capped at 1.00 (penalties still apply).
+// payloadMismatch (the departure payload check found the sim payload clearly below
+// the cargo) has exactly the same effect, with its own note.
 
 import type { CargoKind, PayoutBreakdown, PayoutFactor } from "../../protocol/src/economy";
 import type { LandingGrade } from "../../protocol/src/landing";
@@ -71,6 +73,8 @@ export interface PayoutInput {
   /** Touchdown peak G, for the fragile damage check. */
   peakG?: number | null;
   noBonus?: boolean;
+  /** Departure payload check underloaded: bonuses removed like noBonus (docs/ECONOMY.md). */
+  payloadMismatch?: boolean;
   /**
    * P5 part 2: local demand × own cargo terminal factor fixed on the job board; absent or
    * 1 adds no line (P4/P5 payouts are unchanged).
@@ -81,7 +85,14 @@ export interface PayoutInput {
 const fmt = (n: number, d = 2) => n.toFixed(d);
 
 export function computePayout(input: PayoutInput): PayoutBreakdown {
-  const noBonus = input.noBonus === true;
+  const mismatch = input.payloadMismatch === true;
+  const noBonus = input.noBonus === true || mismatch;
+  const noBonusNote =
+    input.noBonus === true
+      ? mismatch
+        ? "No bonuses: sim rate went above 1× and the sim payload was below the cargo"
+        : "No bonuses: sim rate went above 1×"
+      : "No bonuses: the sim payload was below the cargo at departure";
   const base = basePay(input.weightKg, input.distanceNm);
   const factors: PayoutFactor[] = [
     {
@@ -124,7 +135,7 @@ export function computePayout(input: PayoutInput): PayoutBreakdown {
     label: "Conditions (IFR / night / weather)",
     value: conditionValue,
     note: noBonus
-      ? "No bonuses: sim rate went above 1×"
+      ? noBonusNote
       : "Not observed yet: weather and night need METAR and the sim clock (P5)",
   });
 
@@ -133,9 +144,7 @@ export function computePayout(input: PayoutInput): PayoutBreakdown {
     key: "reputation",
     label: `Reputation tier ${tier}`,
     value: noBonus ? 1 : 1 + REPUTATION_STEP * tier,
-    note: noBonus
-      ? "No bonuses: sim rate went above 1×"
-      : `1 + 0.02 × ${tier} (reputation ${Math.round(input.reputation)})`,
+    note: noBonus ? noBonusNote : `1 + 0.02 × ${tier} (reputation ${Math.round(input.reputation)})`,
   });
 
   if (input.demand !== undefined && input.demand !== 1) {
@@ -208,6 +217,7 @@ export function computePayout(input: PayoutInput): PayoutBreakdown {
     total,
     estimate: input.estimate,
     noBonus,
+    ...(mismatch ? { payloadMismatch: true } : {}),
   };
 }
 

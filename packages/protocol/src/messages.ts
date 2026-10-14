@@ -34,6 +34,8 @@ export const EVENT_NAMES = [
   "mission.started",
   "mission.delivered",
   "mission.failed",
+  // Payload check at departure (additive).
+  "mission.payload_check",
   // P4 company, fleet and finance (additive).
   "loan.payment",
   "loan.missed",
