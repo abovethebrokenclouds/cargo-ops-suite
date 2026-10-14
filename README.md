@@ -22,3 +22,13 @@ cd <repository-name>
 npm i
 npm run dev
 ```
+
+The lockfile is `bun.lock`, so `bun install` gives the exact tested versions; npm resolves
+the `package.json` ranges itself. Use Node.js 24 LTS (npm 11). On Node.js 22, whose
+bundled npm 10 crashes on this dependency tree with
+`Cannot read properties of null (reading 'edgesOut')`, install with
+`npm i --legacy-peer-deps` (what `scripts\build-local.ps1` does automatically).
+
+To run Cargo Ops on the Windows PC with the simulator, follow
+[`docs/SETUP_WINDOWS.md`](docs/SETUP_WINDOWS.md); `scripts\start-cargo-ops.cmd` needs
+Node.js 22.13 or newer (24 LTS recommended) and uses bun when it is installed.
