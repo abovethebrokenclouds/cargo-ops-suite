@@ -82,7 +82,7 @@ function session(
         : { connected: false },
     },
   });
-  const base = { ...cruise, sim: { ...cruise.sim, connected } };
+  const base = { ...cruise, sim: { connected, paused: false, simRate: 1 } };
   const state = opts.withMission ? { ...base, mission: mission(source) } : base;
   s = simReducer(s, {
     type: "snapshot",
