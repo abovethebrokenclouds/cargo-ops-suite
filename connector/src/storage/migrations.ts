@@ -297,4 +297,20 @@ export const MIGRATIONS: readonly Migration[] = [
       INSERT OR REPLACE INTO settings (key, json) VALUES ('economy.phase', '9');
     `,
   },
+  {
+    // MSFS facilities override (plan §6.1, §8, §14.3): airport data the connected simulator
+    // returned for one ICAO (requestFacilityData), as the protocol's MsfsAirport JSON. Only
+    // sim answers are stored (`source` is always 'msfs'); misses are never cached here.
+    // Idempotent (IF NOT EXISTS).
+    version: 10,
+    sql: `
+      CREATE TABLE IF NOT EXISTS msfs_airports (
+        icao TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT 'msfs' CHECK (source = 'msfs'),
+        sim TEXT,
+        fetched_at INTEGER NOT NULL,
+        json TEXT NOT NULL
+      );
+    `,
+  },
 ];

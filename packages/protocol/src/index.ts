@@ -9,3 +9,4 @@ export * from "./maintenance";
 export * from "./fbo";
 export * from "./pilots";
 export * from "./simbrief";
+export * from "./facilities";

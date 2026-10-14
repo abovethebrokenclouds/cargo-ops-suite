@@ -294,7 +294,7 @@ Explicitly out of scope: multi-user, auth, billing, leaderboards, cloud sync, pa
 
 System events: `Pause`, `Pause_EX1`, `SimStart`, `SimStop`, `FlightLoaded`, `AircraftLoaded`, `Crashed`, `CrashReset`, `1sec`. Also `RequestSystemState("Sim")` on connect.
 
-Facilities: `requestFacilitiesListEx1` for nearby airports; `addToFacilityDefinition` + `requestFacilityData` per ICAO; cached in SQLite because of known 2024 regressions.
+Facilities: `requestFacilitiesListEx1` for nearby airports; `addToFacilityDefinition` + `requestFacilityData` per ICAO; cached in SQLite because of known 2024 regressions. _Status after the facilities lane:_ per-ICAO only (no list calls; the "nearby" airports are the nearest bundled airports in job range), airport + runway members, cached in `msfs_airports` (migration 10), merged field by field over OurAirports with an MSFS / OurAirports label on Jobs (docs/SIMVARS.md "Facility definition", docs/ECONOMY.md "MSFS airport data"); emulator-tested, PC-57 open.
 
 ### 6.2 Flight phase FSM
 

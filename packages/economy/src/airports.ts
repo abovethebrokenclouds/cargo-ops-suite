@@ -17,6 +17,8 @@ export interface EconomyAirport {
   country?: string;
   /** IATA code (P5 part 2: stands in for scheduled service in the FBO size score). */
   iata?: string;
+  /** Field elevation, ft. */
+  elevFt?: number;
   longestRwyFt?: number;
   surface?: string;
 }
