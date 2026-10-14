@@ -16,8 +16,8 @@ function Footer({ state }: { state: MetarState }) {
   if (mode === "sample") {
     return (
       <span data-testid="weather-status" data-weather-mode="sample">
-        SAMPLE METARs built into Cargo Ops for demonstration: not real weather. Never use them for
-        flight planning.
+        SAMPLE METARs built into Cargo Ops, for illustration only: not real weather. Never use them
+        for flight planning.
       </span>
     );
   }

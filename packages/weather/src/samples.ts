@@ -26,7 +26,7 @@ const GENERIC = [
   "21010KT P6SM SKC 25/09 A3005",
 ];
 
-export const SAMPLE_NOTE = "Sample METAR for demonstration, not real weather";
+export const SAMPLE_NOTE = "Sample METAR for illustration, not real weather";
 
 /** The sample observation time: the most recent hh:53Z not after `now`. */
 export function sampleObservationTime(now: Date): Date {

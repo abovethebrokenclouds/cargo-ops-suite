@@ -22,7 +22,7 @@ export function MetarOriginTag({ origin, stale }: { origin: "live" | "sample"; s
     return (
       <span
         className={cn(tagBase, "bg-warning/15 text-warning")}
-        title="Built-in sample for demonstration, not real weather"
+        title="Built-in sample for illustration, not real weather"
         data-metar-origin="sample"
       >
         SAMPLE
