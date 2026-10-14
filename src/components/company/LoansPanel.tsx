@@ -91,6 +91,7 @@ export function LoansPanel({
   );
   const totalInterest = schedule.reduce((s, r) => s + r.interest, 0);
   const maxPrincipal = collateral && offer ? Math.floor(collateral.value * offer.maxLtv) : 0;
+  const registrations = new Map((fleet?.aircraft ?? []).map((a) => [a.id, a.registration]));
   const active = (loans?.loans ?? []).filter((l) => l.status === "active");
   const closed = (loans?.loans ?? []).filter((l) => l.status !== "active");
   return (
@@ -100,10 +101,22 @@ export function LoansPanel({
       ) : (
         <ul className="flex flex-col gap-2" data-testid="active-loans">
           {active.map((l) => (
-            <li key={l.id} className="panel-inset flex flex-col gap-2 p-3">
+            <li
+              key={l.id}
+              className="panel-inset flex flex-col gap-2 p-3"
+              data-testid="active-loan"
+              data-kind={l.kind ?? "bank"}
+            >
               <div className="flex items-baseline justify-between gap-2">
                 <p className="text-sm font-semibold text-foreground">
-                  {l.lenderName}{" "}
+                  {l.lenderName}
+                  {l.kind === "repair" ? (
+                    <span className="font-normal text-muted-foreground">
+                      {" "}
+                      · repair loan, {registrations.get(l.collateral.id) ?? l.collateral.id} (no
+                      collateral)
+                    </span>
+                  ) : null}{" "}
                   <span className="font-mono text-xs text-muted-foreground">{l.id}</span>
                 </p>
                 <p className="font-mono text-sm text-accent font-tabular">
@@ -127,8 +140,10 @@ export function LoansPanel({
               </p>
               {l.missedCount > 0 ? (
                 <p className="text-xs text-destructive">
-                  {l.missedCount} missed payment{l.missedCount > 1 ? "s" : ""}: three in a row
-                  repossess the collateral.
+                  {l.missedCount} missed payment{l.missedCount > 1 ? "s" : ""}:{" "}
+                  {l.kind === "repair"
+                    ? "three in a row cancel the hull policy and move the balance to cash (no repossession)."
+                    : "three in a row repossess the collateral."}
                 </p>
               ) : null}
               <div>
@@ -148,7 +163,14 @@ export function LoansPanel({
       )}
       {closed.length > 0 ? (
         <p className="text-xs text-muted-foreground">
-          Closed: {closed.map((l) => `${l.id} ${l.status.replace("_", " ")}`).join(" · ")}
+          Closed:{" "}
+          {closed
+            .map((l) =>
+              l.status === "called"
+                ? `${l.id} called by the insurer (balance moved to cash)`
+                : `${l.id} ${l.kind === "repair" ? "repair loan " : ""}${l.status.replace("_", " ")}`,
+            )
+            .join(" · ")}
         </p>
       ) : null}
 

@@ -160,6 +160,8 @@ export const LEDGER_LABELS: Record<string, string> = {
   insurance_claim: "Insurance claim",
   pilot_wage: "Hired pilot wage",
   hired_income: "Hired pilot income (simulated)",
+  repair_loan_disbursement: "Repair loan (insurer)",
+  repair_loan_payment: "Repair loan principal",
 };
 
 export const OWNERSHIP_LABELS = {
