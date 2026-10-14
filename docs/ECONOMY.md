@@ -1212,7 +1212,113 @@ landing gear repair at KMEM pays **$13,952**. **An insured write-off settles its
 the payout** (`loan_payment` up to the balance; the loan is `paid_off` when covered, else the
 rest stays active); an uninsured write-off keeps the loan active, as in P5 part 1. Ledger:
 `insurance` (premiums), `insurance_claim`; event `insurance.claim`. Owned aircraft only
-(`not_owned`); `insurance.cancel` stops the next premiums (no refund).
+(`not_owned`); `insurance.cancel` stops the next premiums (no refund) and is refused with
+`repair_loan_open` while an insurer repair loan on the aircraft is open (below). With a
+repair loan open, the write-off payout nets that loan off **first** and settles the bank loan
+from the rest.
+
+## Insurer repair loans (plan §7.4)
+
+The policy's "repossession-free repair loans": an insured aircraft can have its repair bill
+financed by the insurer. Code: `packages/economy/src/insurance.ts` (`repairLoanCheck`,
+`repairLoanBill`, `repairLoanTerms`, constants `REPAIR_LOAN` in `fbo-constants.ts`) and
+`CompanyBook.repairLoan`; tests `packages/economy/test/repair-loans.test.ts` (rule matrix and
+book) and `connector/test/repair-loans.test.ts` (through the session and SQLite).
+
+```
+bill     = repair cost − the incident claim the policy pays on it      (≥ 0, cents)
+APR      = 4 % fixed (the cheapest bank starts at 5.5 %), no origination fee
+term     = 6–24 in-game months; amount $500 … bill
+payment  = standard amortisation (same formula and rounding as bank loans)
+```
+
+- **Command** `insurance.repairLoan {aircraftId, repair: overhaul|all|defect, defectId?,
+principal, termMonths}` orders the repair (the P4 wear overhaul, every open known defect, or
+  one defect — exactly the cash commands' orders) and takes the loan in one step. Cash must
+  cover cost − principal (the claim is paid when the order is placed, as for a cash repair).
+  Ledger, in order: `repair_loan_disbursement +principal` (the insurer pays the shop), `repair
+−cost`, then `insurance_claim +claim` for incident defects.
+- **Eligibility** (first failing rule wins; `repairLoanCheck`): owned (`not_owned`) → not
+  assigned to a hired pilot and not flying (`aircraft_busy`) → an active policy
+  (`not_insured`) → no open repair loan on that aircraft (`repair_loan_open`, one per aircraft)
+  → then the repair's own refusals (`no_wear`, `no_defects`, `unknown_defect`,
+  `already_queued`; the overhaul also needs the aircraft available) → a bill to finance
+  (`no_repair_bill`) → term 6–24 (`bad_term`) → at least $500 (`bad_principal`) → at most the
+  bill (`exceeds_bill`) → cash (`insufficient_cash`). An aircraft on a loaded mission is refused
+  with `aircraft_on_mission`.
+- **No lien**: the loan names the aircraft (`collateral`) but `kind: "repair"` places no
+  charge on it: the aircraft stays unencumbered for a bank loan (`financed` is about bank
+  loans only).
+- **Auto-debit** on the existing schedule (taken + 1 in-game month, then monthly): `interest`
+  (operating) and `repair_loan_payment` (principal, capital) entries, event `loan.payment`.
+- **Missed payment** (cash < payment), as for bank loans: late fee max($100, 5 % of the
+  payment) booked even if cash goes negative, **−5 reputation**, the month's interest is
+  capitalised, the term extends a month, `loan.missed` (with `kind: "repair"`). A successful
+  payment resets the count. **Never a repossession and never the 12-month default flag**: the
+  credit score is not halved.
+- **Third consecutive miss**: the insurer **cancels the policy** and **calls the loan**: the
+  whole capitalised balance is debited from cash at once (`repair_loan_payment`, cash may go
+  negative, like a late fee), the loan closes with status **`called`**, event
+  `insurance.cancelled {reason: "missed_payments", balanceMovedToCash}`. The aircraft stays in
+  the fleet, uninsured; a new policy can be bought later at the current premium.
+- **Early payoff**: `loan.payoff {loanId}` (any time, no penalty), booked as
+  `repair_loan_payment`; afterwards the policy can be cancelled.
+- **Sale**: `fleet.sell` settles the repair loan from the proceeds (`repair_loan_payment`)
+  after the bank loan; refused with `underwater` when 90 % of the value does not cover both.
+- **Write-off** (insured, as every open repair loan is): the claim nets off the repair loan
+  first (`repair_loan_payment`, loan `paid_off`), then the bank loan; a repair-loan remainder
+  the claim cannot cover is debited from cash and the loan is `called`.
+- **Bank repossession** of an aircraft with an open repair loan: the repair loan is called
+  (balance from cash, `called`).
+- Repair loans count as **debt** (net worth, credit-score debt ratio, debt-to-income on
+  /company). The **Debt-free** milestone needs every loan `paid_off`, so a called loan (like a
+  defaulted one) never counts as repaid.
+
+### Worked examples (exact cents, `repair-loans.test.ts`)
+
+**Incident repair.** A $19,440 hard-landing gear repair at KMEM: claim 80 % × ($19,440 −
+$2,000) = $13,952 → bill **$5,488**. Financed in full over 12 months: payment **$467.30**,
+month 1 interest $18.29 / principal $449.01, the 12th payment $467.33, total interest
+**$119.63**. `$5,488.01` is refused (`exceeds_bill`). Ledger: `repair_loan_disbursement
++5,488`, `repair −19,440`, `insurance_claim +13,952` (net cash $0 for the repair today).
+
+**Overhaul.** A C208B at 19.5 % condition: overhaul $173,880 (no claim: wear is not an
+incident) → bill $173,880. Financed $150,000 over 24 months (cash needed $23,880): payment
+**$6,513.74**; month 1 interest **$500.00**, principal **$6,013.74**, balance
+**$143,986.26**; month 24 pays $6,513.68; total interest **$6,329.70** — every debit equals an
+integer-cent reference schedule computed independently in the test.
+
+**Three misses** (the same $150,000 loan, cash $0 at every due date, reputation 50):
+
+| Due date | Payment due | Late fee | Interest capitalised | Balance    | Reputation | Result                    |
+| -------- | ----------- | -------- | -------------------- | ---------- | ---------- | ------------------------- |
+| Month 1  | 6,513.74    | −325.69  | 500.00               | 150,500.00 | 45         | `loan.missed` (1)         |
+| Month 2  | 6,513.74    | −325.69  | 501.67               | 151,001.67 | 40         | `loan.missed` (2)         |
+| Month 3  | 6,513.74    | −325.69  | 503.34               | 151,505.01 | 35         | `loan.missed` (3), called |
+
+At the third miss the ledger books `repair_loan_payment −151,505.01` ("balance moved to
+cash"): the loan is `called` with balance 0, the policy is cancelled
+(`insurance.cancelled`), the aircraft stays in the fleet (no `aircraft.repossessed`),
+`defaultUntilGameMs` stays null. The loan's cash effect over the three months is −3 × 325.69 −
+151,505.01 = **−$152,482.08** (plus the premiums billed on those month boundaries, as for any
+insured aircraft); Σ ledger = cash − starting cash still holds to the cent, and later months
+book nothing more for the loan.
+
+### Storage, export and UI
+
+No migration: repair loans are rows of the P4 `loans` table (`lender` = `insurer`,
+`collateral_type/id` = the aircraft) with `kind: "repair"` and `orderId` in the row's JSON;
+`status` may be `called`. Career export **version 5** carries them as optional loan fields
+(absent = bank loan, so older v5 files import unchanged). A career that ever took one cannot
+move to an older connector: its ledger has `repair_loan_disbursement` rows, which an older
+connector refuses as invalid instead of misreading the loan as a repossessable bank loan.
+`GET /api/loans` and the `loans` domain list them (`kind`, `orderId`, lender "Hull insurer");
+fleet aircraft carry `insurance.repairLoan` (terms, `overhaulBill`, `allDefectsBill`, the open
+loan). UI: **Finance with insurer** on /fleet (the selected aircraft: wear overhaul or every
+open defect, amount ≤ bill, 6–24 months with a live quote, the reason when it is locked) and
+the loans list on /company (repair loan, no collateral, the no-repossession miss rule, called
+loans). In demo mode the panel is tagged DEMO with every control disabled; the demo company
+takes no repair loan.
 
 ## Milestones
 
@@ -1235,7 +1341,9 @@ the company record), announced with `milestone.reached`, listed on `/company`:
 `fbo_income` (daily modelled traffic, AI bonuses), `fbo_upkeep` (modules + land lease),
 `fbo_purchase` and `fbo_construction` (purchase, construction, module installs and upgrades:
 **capital**, excluded from the operating P&L like aircraft purchases), `insurance`,
-`insurance_claim`. The Company page shows a monthly P&L line per FBO (income, upkeep, net,
+`insurance_claim`; insurer repair loans add `repair_loan_disbursement` and
+`repair_loan_payment` (**capital**, like bank-loan principal; their interest and late fees use
+`interest` and `late_fee`). The Company page shows a monthly P&L line per FBO (income, upkeep, net,
 own-fleet savings).
 
 ## Storage, export, API (P5 part 2)
