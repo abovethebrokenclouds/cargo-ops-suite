@@ -1,6 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Filter, Package, PackageCheck, RefreshCw, Route as RouteIcon, Truck } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import {
+  Filter,
+  MapPin,
+  Package,
+  PackageCheck,
+  RefreshCw,
+  Route as RouteIcon,
+  Truck,
+} from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { CARGO_KINDS, type CargoKind, type Job } from "@cargo-ops/protocol";
 import { KIND_LABELS } from "@cargo-ops/economy";
@@ -11,6 +19,7 @@ import { DemandEvents } from "@/components/cargo/DemandEvents";
 import { KindBadge, MissionCard } from "@/components/cargo/MissionCard";
 import { EnteredPayload } from "@/components/cargo/EnteredPayload";
 import { MissionStrip } from "@/components/cargo/MissionStrip";
+import { AirportFacts } from "@/components/cargo/AirportFacts";
 import { PayoutBreakdown } from "@/components/cargo/PayoutBreakdown";
 import { RouteFinder } from "@/components/cargo/RouteFinder";
 import { TransitCargo } from "@/components/cargo/TransitCargo";
@@ -26,6 +35,7 @@ import {
   useJobBoard,
 } from "@/lib/economy/board";
 import { useCompanyView } from "@/lib/economy/company";
+import { useFacilityLookup } from "@/lib/economy/facilities";
 import { arrivalEtaMs, routeView } from "@/lib/flight/flight-view";
 import { useNow } from "@/lib/sim-state/hooks";
 import { formatInt, formatUsd } from "@/lib/format";
@@ -156,6 +166,15 @@ function Jobs() {
   const { state } = useSimConnection();
   const command = useCommand();
   const lookup = useAirportLookup();
+  // MSFS facilities override: the live sim's airport data merged over OurAirports, the same
+  // way the connector's job generator sees it (per-field MSFS / OurAirports labels).
+  const airports = useFacilityLookup(state, lookup);
+  const live = state.connection === "live";
+  // Opening the job board asks the connector to request the board airports from the sim.
+  useEffect(() => {
+    if (live) void command("jobs.list", {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
   const [demoType, setDemoType] = useState<string | null>(null);
   const board = useJobBoard(state, { demoTypeKey: demoType, lookup });
   const { jobs, company, mission, source, connector } = board;
@@ -215,9 +234,9 @@ function Jobs() {
         j.distanceNm <= maxNm &&
         j.weightKg >= minKg &&
         j.weightKg <= maxKg &&
-        (!filters.suitableOnly || jobSuitability(j, type, lookup).every((b) => b.ok !== false)),
+        (!filters.suitableOnly || jobSuitability(j, type, airports).every((b) => b.ok !== false)),
     );
-  }, [available, filters, type, lookup, currentBoard]);
+  }, [available, filters, type, airports, currentBoard]);
   const openPayout = visible.reduce((s, j) => s + j.payoutEstimate, 0);
   const boards = jobs?.boards ?? [];
   const startAirport =
@@ -400,6 +419,16 @@ function Jobs() {
           source={demandSource}
           lookup={lookup}
         />
+
+        <Panel
+          className="col-span-12"
+          eyebrow="Board airport"
+          title="Airport data"
+          icon={MapPin}
+          action={<SourceTag source={source} />}
+        >
+          <AirportFacts ident={currentBoard} lookup={airports} />
+        </Panel>
 
         <Panel
           className="col-span-12"
@@ -590,7 +619,7 @@ function Jobs() {
                   key={job.id}
                   job={job}
                   type={type}
-                  lookup={lookup}
+                  lookup={airports}
                   source={source}
                   action={acceptButton(job)}
                 />
