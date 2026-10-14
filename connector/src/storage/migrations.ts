@@ -256,16 +256,27 @@ export const MIGRATIONS: readonly Migration[] = [
     `,
   },
   {
+    // Weather: TAF cache next to the v1 metar_cache (same columns; survives restarts).
+    version: 7,
+    sql: `
+      CREATE TABLE IF NOT EXISTS taf_cache (
+        station TEXT PRIMARY KEY,
+        fetched_at INTEGER NOT NULL,
+        json TEXT NOT NULL
+      );
+    `,
+  },
+  {
     // Transit cargo (docs/ECONOMY.md "Transit cargo"): a job can wait at an intermediate
     // airport with status 'in_transit'. `location` is the airport its cargo is at now (the
     // origin until the first transit leg); the stop, the chain clock and every flown leg live
     // in the row's JSON (`transit`). Existing rows get their origin.
-    version: 7,
+    version: 8,
     sql: `
       ALTER TABLE jobs ADD COLUMN location TEXT;
       UPDATE jobs SET location = origin WHERE location IS NULL;
       CREATE INDEX IF NOT EXISTS jobs_location ON jobs (location, status);
-      INSERT OR REPLACE INTO settings (key, json) VALUES ('economy.phase', '7');
+      INSERT OR REPLACE INTO settings (key, json) VALUES ('economy.phase', '8');
     `,
   },
 ];

@@ -414,7 +414,7 @@ export class EconomyRepo {
         JSON.stringify(job),
         ms(job.createdAt),
         job.missionId ?? null,
-        // Transit cargo: where the cargo is now (migration 7).
+        // Transit cargo: where the cargo is now (migration 8).
         job.transit?.location ?? job.origin,
       );
   }

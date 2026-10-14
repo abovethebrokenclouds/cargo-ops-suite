@@ -22,7 +22,13 @@ import type { ClientSimState } from "@/lib/sim-state";
 import type { TransportKind } from "@/lib/transport/useSimConnection";
 import { cn } from "@/lib/utils";
 
-const LAYERS: Record<OverlayGroup, boolean> = { airports: false, trail: true, route: true };
+// No METAR badges on the front wall: the WX console next to it shows the route weather.
+const LAYERS: Record<OverlayGroup, boolean> = {
+  airports: false,
+  trail: true,
+  route: true,
+  weather: false,
+};
 
 function sameEnd(a: RouteEnd | null, b: RouteEnd | null): boolean {
   if (!a || !b) return a === b;

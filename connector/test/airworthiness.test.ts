@@ -476,16 +476,16 @@ describe("P5 storage: migration from P4, career v3, /api/market", () => {
       db.prepare(
         "INSERT INTO ledger (at, category, amount, ref_type, ref_id, memo, balance, game_at) VALUES (?, 'repair', -10000, 'aircraft', 'AC-1', 'p4', 240000, 0)",
       ).run(T0);
-      assert.deepEqual(migrate(db), [5, 6, 7]);
+      assert.deepEqual(migrate(db), [5, 6, 7, 8]);
       assert.deepEqual(migrate(db), []);
       const phase = db.prepare("SELECT json FROM settings WHERE key = 'economy.phase'").get() as {
         json: string;
       };
-      assert.equal(phase.json, "7");
+      assert.equal(phase.json, "8");
       db.close();
 
       const r = rig(tmp.dir);
-      assert.equal(r.storage.schemaVersion(), 7);
+      assert.equal(r.storage.schemaVersion(), 8);
       const a = r.aircraft("AC-1");
       assert.equal(a?.condition, 87.5);
       assert.ok(a?.systems?.every((s) => s.condition === 87.5 && s.defects.length === 0));

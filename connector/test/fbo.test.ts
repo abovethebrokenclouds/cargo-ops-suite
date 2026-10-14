@@ -466,7 +466,7 @@ describe("P5 part 2 storage: migration 6 from schema 5, career v4", () => {
       db.prepare(
         "INSERT INTO ledger (at, category, amount, ref_type, ref_id, memo, balance, game_at) VALUES (?, 'adjustment', 650000, NULL, NULL, 'p5', 900000, 0)",
       ).run(T0);
-      assert.deepEqual(migrate(db), [6, 7]);
+      assert.deepEqual(migrate(db), [6, 7, 8]);
       assert.deepEqual(migrate(db), []);
       // Idempotent SQL: re-running migration 6 by hand changes nothing and does not fail.
       const six = MIGRATIONS.find((m) => m.version === 6);
@@ -489,12 +489,12 @@ describe("P5 part 2 storage: migration 6 from schema 5, career v4", () => {
       const phase = db.prepare("SELECT json FROM settings WHERE key = 'economy.phase'").get() as {
         json: string;
       };
-      // "6": re-running migration 6 by hand above rewrote the marker (migration 7 had set 7).
+      // "6": re-running migration 6 by hand above rewrote the marker (migration 8 had set 8).
       assert.equal(phase.json, "6");
       db.close();
 
       const r = rig(tmp.dir);
-      assert.equal(r.storage.schemaVersion(), 7);
+      assert.equal(r.storage.schemaVersion(), 8);
       assert.equal(r.company().cash, 900_000);
       assert.equal(r.fleet().aircraft[0]?.insurance?.insured, false);
       assert.equal(r.company().milestones?.length, 8);

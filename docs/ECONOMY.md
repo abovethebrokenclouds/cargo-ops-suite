@@ -305,8 +305,8 @@ minutes) and freeze at block-out.
 
 ### Storage and export
 
-Migration **7**: `jobs.location` (the airport the cargo is at now; existing rows get their
-origin) and an index on `(location, status)`; settings `economy.phase = 7`. The transit
+Migration **8**: `jobs.location` (the airport the cargo is at now; existing rows get their
+origin) and an index on `(location, status)`; settings `economy.phase = 8`. The transit
 record lives in the job row's JSON. Career export **version 5** may contain `in_transit`
 jobs, long-haul jobs and missions with `transitJobIds`; versions 1–4 import unchanged (they
 have no transit cargo), and an older connector refuses a version 5 file rather than misread

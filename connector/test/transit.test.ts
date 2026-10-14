@@ -195,7 +195,7 @@ describe("transit cargo: KMEM → KRDU via KATL on two replayed legs", () => {
         Math.round(arrived + (job.timeLimitMin - (stored.transit?.elapsedMin ?? 0)) * 60_000),
       );
       assert.ok(!r.jobs().accepted.some((j) => j.id === job.id));
-      // Persisted with its location (migration 7).
+      // Persisted with its location (migration 8).
       const row = r.storage.db
         .prepare("SELECT status, location, origin FROM jobs WHERE id = ?")
         .get(job.id) as { status: string; location: string; origin: string };

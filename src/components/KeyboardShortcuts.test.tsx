@@ -7,9 +7,9 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { TOGGLE_FOLLOW_EVENT } from "@/lib/shortcuts";
+import { CHORD_TICK_MS, TOGGLE_FOLLOW_EVENT } from "@/lib/shortcuts";
 
 import { KeyboardShortcuts, ShortcutsButton } from "./KeyboardShortcuts";
 
@@ -94,6 +94,45 @@ describe("KeyboardShortcuts", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
     expect(await screen.findByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+  });
+
+  it("a main thread blocked between g and the letter does not drop the chord", async () => {
+    const router = setup("/");
+    await screen.findByText("/");
+    let t = 10_000;
+    const spy = vi.spyOn(performance, "now").mockImplementation(() => t);
+    try {
+      press("g");
+      // No timer ran for 3 s (a long task), then the letter arrives.
+      t += 3_000;
+      press("j");
+    } finally {
+      spy.mockRestore();
+    }
+    await waitFor(() => expect(router.state.location.pathname).toBe("/jobs"));
+  });
+
+  it("an idle g still expires after the chord timeout", async () => {
+    const router = setup("/");
+    await screen.findByText("/");
+    let t = 50_000;
+    const spy = vi.spyOn(performance, "now").mockImplementation(() => t);
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      press("g");
+      for (let i = 0; i < 20; i++) {
+        t += CHORD_TICK_MS;
+        vi.advanceTimersByTime(CHORD_TICK_MS);
+      }
+      press("j");
+    } finally {
+      vi.useRealTimers();
+      spy.mockRestore();
+    }
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(router.state.location.pathname).toBe("/");
   });
 
   it("f toggles map follow on /map only", async () => {

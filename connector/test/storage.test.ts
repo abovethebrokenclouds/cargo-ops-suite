@@ -17,6 +17,7 @@ const TABLES = [
   "missions",
   "schema_migrations",
   "settings",
+  "taf_cache",
   "telemetry",
 ];
 
