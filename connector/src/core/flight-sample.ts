@@ -83,11 +83,18 @@ export function sampleFrom(domains: SampleDomains, tMs: number): FlightSample | 
  * (`sim.simTimeSec`), so by default it advances by the receive clock × sim rate
  * and stops while paused. When `simTimeSec` is present its increments are used
  * instead (still stopped while paused). Never goes backwards.
+ *
+ * An interval counts only when the updates at BOTH of its ends are unpaused: the
+ * interval that ends a pause belongs to the pause. That matters when no frames arrive
+ * while paused (back in the main menu after SimStop, docs/SIMVARS.md "Effective pause"):
+ * the first update after SimStart must not add the whole menu time. With frames at
+ * 5–10 Hz it costs at most one frame interval of running time per pause.
  */
 export class SimClock {
   private simMs = 0;
   private lastRecvMs: number | null = null;
   private lastSimTimeSec: number | null = null;
+  private lastPaused = false;
 
   get nowMs(): number {
     return this.simMs;
@@ -101,7 +108,10 @@ export class SimClock {
       const rate = Number.isFinite(sim.simRate) && sim.simRate > 0 ? sim.simRate : 1;
       delta = (recvMs - this.lastRecvMs) * rate;
     }
-    if (!sim.paused && Number.isFinite(delta) && delta > 0) this.simMs += delta;
+    if (!sim.paused && !this.lastPaused && Number.isFinite(delta) && delta > 0) {
+      this.simMs += delta;
+    }
+    this.lastPaused = sim.paused;
     this.lastRecvMs = recvMs;
     this.lastSimTimeSec = sim.simTimeSec ?? null;
     return this.simMs;
@@ -111,6 +121,12 @@ export class SimClock {
     this.simMs = 0;
     this.lastRecvMs = null;
     this.lastSimTimeSec = null;
+    this.lastPaused = false;
+  }
+
+  /** Whether the latest update was paused (FlightCore marks pause changes without motion). */
+  get paused(): boolean {
+    return this.lastPaused;
   }
 
   /**

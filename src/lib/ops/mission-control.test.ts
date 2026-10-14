@@ -287,6 +287,15 @@ describe("event loop", () => {
     );
     expect(describeEvent(ev(4, "touchdown", {})).text).toBe("TOUCHDOWN");
     expect(describeEvent(ev(5, "sim.paused", { paused: false })).text).toBe("SIM RESUMED");
+    expect(describeEvent(ev(5, "sim.paused", { paused: true, event: "SimStop" })).text).toBe(
+      "SIM STOPPED · MAIN MENU",
+    );
+    expect(describeEvent(ev(5, "sim.paused", { paused: false, event: "SimStart" })).text).toBe(
+      "SIM RESUMED",
+    );
+    expect(
+      describeEvent(ev(5, "sim.paused", { paused: false, event: "stuck_pause", flags: 4 })).text,
+    ).toBe("SIM RESUMED · STUCK PAUSE IGNORED");
     expect(describeEvent(ev(6, "sim.rate", { rate: 4 })).text).toBe("SIM RATE ×4");
     expect(describeEvent(ev(7, "loan.missed", null)).text).toBe("LOAN MISSED");
     expect(describeEvent(ev(7, "loan.missed", null)).tone).toBe("nogo");

@@ -14,6 +14,11 @@
 // on the first sample after the reconnect, where the usual checks apply (a position jump
 // sets the teleport flag). Without a running flight the phase and a half-begun leg are
 // forgotten, as at session start.
+//
+// SimStop (back to the main menu) is not a link loss: the link stays up and the source
+// reports it as a pause (effective pause = pause flag OR sim not running, see
+// sim/pause-state.ts), so the running flight keeps its id and phase, its clock (block time,
+// air time, the economy's sim minutes) stops at the stop and resumes at SimStart.
 
 import { randomUUID } from "node:crypto";
 import {
@@ -148,9 +153,26 @@ export class FlightCore {
     this.simLinked = true;
   }
 
-  /** A data patch was applied to the store; samples are taken on motion updates. */
+  /**
+   * A data patch was applied to the store; samples are taken on motion updates. A pause
+   * change without motion (SimStop / SimStart, a pause event) still marks the sim clock, so
+   * the time until the next frame is attributed to the right state: no frames arrive in the
+   * main menu, and the first frame after SimStart must not count the menu time.
+   */
   onData(patch: SimStatePatch, atMs: number): void {
-    if (patch.motion) this.process(atMs);
+    if (patch.motion) {
+      this.process(atMs);
+      return;
+    }
+    if (patch.sim === undefined) return;
+    const sim = this.store.getDomain("sim") as SimDomainState | null | undefined;
+    const paused = sim?.paused ?? false;
+    if (paused === this.clock.paused) return;
+    this.clock.advance(atMs, {
+      paused,
+      simRate: sim?.simRate ?? 1,
+      ...(sim?.simTimeSec !== undefined ? { simTimeSec: sim.simTimeSec } : {}),
+    });
   }
 
   /** A simulator event passed through the store. */
