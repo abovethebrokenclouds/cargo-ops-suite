@@ -11,6 +11,7 @@ import {
 import { MetricTile } from "@/components/dashboard/MetricTile";
 import { Panel } from "@/components/dashboard/Panel";
 import { SourceTag, StaleTag } from "@/components/status/SourceTag";
+import { RouteWeatherPanel } from "@/components/weather/RouteWeather";
 import {
   displayAglFt,
   enduranceStatus,
@@ -318,6 +319,14 @@ export function LiveFlightView() {
           />
         </div>
       </Panel>
+
+      {/* Origin / destination weather */}
+      <RouteWeatherPanel
+        className="col-span-12"
+        eyebrow="Weather en route"
+        origin={route.origin ?? sim.mission?.origin}
+        destination={route.destination ?? sim.mission?.destination}
+      />
 
       {/* Secondary instruments */}
       <MetricTile

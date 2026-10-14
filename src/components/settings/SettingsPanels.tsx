@@ -1,6 +1,7 @@
 import {
   Archive,
   CloudDownload,
+  CloudSun,
   Database,
   Download,
   FlaskConical,
@@ -34,8 +35,9 @@ import {
   useSimbrief,
 } from "@/lib/settings/connector-data";
 import { useOnlineMapsSetting } from "@/lib/settings/map-settings";
+import { useOnlineWeatherSetting } from "@/lib/settings/weather-settings";
 import { useUnits } from "@/lib/settings/units";
-import { downloadExport } from "@/lib/transport/connector-api";
+import { connectorJson, downloadExport } from "@/lib/transport/connector-api";
 import type { ClientSimState } from "@/lib/sim-state";
 import { cn } from "@/lib/utils";
 
@@ -253,6 +255,75 @@ function OnlineMapsSwitch() {
         onCheckedChange={setEnabled}
         aria-label="Allow online maps (OpenFreeMap)"
         data-testid="online-maps-switch"
+      />
+    </span>
+  );
+}
+
+// ---- Weather ----
+
+const WEATHER_MODE_LABEL: Record<string, string> = {
+  online: "Online (aviationweather.gov)",
+  sample: "Sample METARs (not real weather)",
+  off: "Off (--weather off)",
+};
+
+export function WeatherPanel({ ctx }: { ctx: SettingsContext }) {
+  const [mode, setMode] = useState<string | null>(null);
+  const enabled = ctx.served && ctx.connected;
+  useEffect(() => {
+    if (!enabled) {
+      setMode(null);
+      return;
+    }
+    let alive = true;
+    connectorJson<{ weather?: string }>("/api/status")
+      .then((s) => alive && setMode(s.weather ?? null))
+      .catch(() => alive && setMode(null));
+    return () => {
+      alive = false;
+    };
+  }, [enabled]);
+  return (
+    <Panel className="col-span-12 md:col-span-6" eyebrow="METAR" title="Weather" icon={CloudSun}>
+      <dl className="flex flex-col divide-y divide-border">
+        <SettingRow label="Source">
+          <span data-testid="weather-mode">
+            {!ctx.served
+              ? "Sample METARs (demo, no network)"
+              : mode
+                ? (WEATHER_MODE_LABEL[mode] ?? mode)
+                : "needs the connector"}
+          </span>
+        </SettingRow>
+        <SettingRow label="Online weather (aviationweather.gov)">
+          <OnlineWeatherSwitch />
+        </SettingRow>
+      </dl>
+      <p className="mt-3 text-xs text-muted-foreground">
+        With the switch on, the connector fetches origin and destination METARs from the NOAA
+        Aviation Weather Center (aviationweather.gov: public US Government data, no key), caches
+        them for 10 minutes and shows them on Live Flight and the job board. Off, no weather request
+        leaves your PC. Replays and the demo show SAMPLE METARs, never real weather.
+      </p>
+    </Panel>
+  );
+}
+
+/** Per-browser toggle, like online maps; off = the connector makes no weather request. */
+function OnlineWeatherSwitch() {
+  const [enabled, setEnabled] = useOnlineWeatherSetting();
+  return (
+    <span className="flex items-center gap-2">
+      <span className="text-xs text-muted-foreground">
+        {enabled === null ? "…" : enabled ? "On" : "Off"}
+      </span>
+      <Switch
+        checked={enabled ?? false}
+        disabled={enabled === null}
+        onCheckedChange={setEnabled}
+        aria-label="Allow online weather (aviationweather.gov)"
+        data-testid="online-weather-switch"
       />
     </span>
   );

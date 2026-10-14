@@ -8,6 +8,7 @@ import {
   DemoPanel,
   SimbriefPanel,
   UnitsPanel,
+  WeatherPanel,
   type SettingsContext,
 } from "@/components/settings/SettingsPanels";
 import { useSimConnection } from "@/lib/transport/useSimConnection";
@@ -48,6 +49,7 @@ function SettingsPage() {
         <UnitsPanel />
         <ConnectorPanel ctx={ctx} />
         <BasemapPanel ctx={ctx} />
+        <WeatherPanel ctx={ctx} />
         <DemoPanel ctx={ctx} />
         <DataPanel ctx={ctx} />
         <SimbriefPanel ctx={ctx} />
