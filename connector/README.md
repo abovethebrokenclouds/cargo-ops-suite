@@ -5,10 +5,12 @@ to Microsoft Flight Simulator through SimConnect, keeps the latest simulator sta
 streams it to the browser over a WebSocket on `127.0.0.1:4311`, serves the static web
 build and owns the SQLite database.
 
-> **Status: the SimConnect path is untested.** Everything here was built and tested in
-> a Linux container without a simulator. `--sim fake` (fixture replay) is covered by
-> automated tests; the real SimConnect handshake, SimVar names/units and system
-> events must be checked on the Windows PC (see `docs/VERIFICATION.md`).
+> **Status: the SimConnect path is untested against MSFS.** Everything here was built and
+> tested without a simulator. `--sim fake` (fixture replay) is covered by automated tests,
+> and `SimConnectSource` runs against a test-only SimConnect protocol emulator (see
+> "Testing without the simulator" below); the real SimConnect handshake, SimVar
+> names/units and system events must still be checked on the Windows PC (see
+> `docs/VERIFICATION.md`).
 
 ## Requirements
 
@@ -348,6 +350,23 @@ connector/
   `AircraftLoaded`, `Crashed`, `CrashReset`, `1sec`; `requestSystemState("Sim")` on connect.
 - The `sim` domain is only sent once a real `SIMULATION RATE` arrives (the schema needs
   it); until then the chip relies on `welcome.sim`.
+- AI traffic (`requestDataOnSimObjectType`, AIRCRAFT) skips the user aircraft's own object
+  id (taken from the user-aircraft frames) in case the request returns it.
+
+## Testing without the simulator
+
+`test/support/simconnect-emulator.ts` is a TEST-ONLY TCP server that speaks the SimConnect
+wire format (written from the MSFS SDK documentation; no node-simconnect code is copied):
+OPEN with `SunRise` (MSFS 2024) or `KittyHawk` (MSFS 2020) profiles, data definitions and
+requests (FLOAT32/64, INT32/64, fixed and variable strings), `RECV_EXCEPTION` for SimVars in
+a reject list, system events, system state, by-type AI requests, dropped connections and
+`RECV_QUIT`. `test/simconnect-emulator.test.ts` drives the real `SimConnectSource` and the
+real CLI against it. It proves the wire format and our handling of it, not what MSFS
+sends; results are recorded as "Emulated" evidence, never as PC checks.
+
+The CLI accepts two hidden options for it (also usable with a SimConnect IPv4 listener
+configured in `SimConnect.xml`): `--simconnect-host <host> --simconnect-port <port>`
+connect over TCP instead of the normal discovery. Without them nothing changes.
 
 ## Licensing
 
