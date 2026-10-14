@@ -30,8 +30,8 @@
       "zod": ["./node_modules/zod"]
     }
   },
-  "include": ["src/**/*.ts", "../packages/protocol/src/**/*.ts", "../packages/economy/src/**/*.ts"],
+  "include": ["src/**/*.ts", "../packages/protocol/src/**/*.ts", "../packages/economy/src/**/*.ts", "../packages/weather/src/**/*.ts"],
   "exclude": [
     "../packages/protocol/src/**/*.test.ts",
-    "../packages/economy/src/**/*.test.ts", "node_modules", "dist", "dist-test"]
+    "../packages/economy/src/**/*.test.ts", "../packages/weather/src/**/*.test.ts", "node_modules", "dist", "dist-test"]
 }

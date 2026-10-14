@@ -35,7 +35,8 @@
     "paths": {
       "@/*": ["./src/*"],
       "@cargo-ops/protocol": ["./packages/protocol/src/index.ts"],
-      "@cargo-ops/economy": ["./packages/economy/src/index.ts"]
+      "@cargo-ops/economy": ["./packages/economy/src/index.ts"],
+      "@cargo-ops/weather": ["./packages/weather/src/index.ts"]
     }
   }
 }

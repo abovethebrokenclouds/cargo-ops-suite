@@ -29,3 +29,23 @@ A SimBrief OFP in JSON written by hand for the P6 import tests (`connector/test/
 `packages/protocol/src/simbrief.test.ts`). Field names follow SimBrief's publicly documented JSON
 format as far as known; every value is invented. It is not a SimBrief response and contains no
 real account. Replace it with a real OFP fetched on the PC once the import is verified.
+
+## `awc-metar.recorded-2026-10-14.json` (RECORDED)
+
+A real aviationweather.gov response for KMEM, KATL, EGLL and KJFK, copied unchanged from the log
+of the `metar-live` GitHub Actions workflow (run 38491010466, PR #20, about 00:24Z on
+2026-10-14), wrapped as `{ _comment, request, response }`. Public US Government data. It confirms
+`altim` in hPa, `visib` as `"10+"`/`"6+"` strings, `obsTime` in unix seconds and the `METAR `
+prefix in `rawOb`. Used by `packages/weather/test/recorded.test.ts`,
+`connector/test/weather.test.ts` and the workflow's `--file` self-check. The hand-made file below
+stays for edge cases the recording lacks (IFR/LIFR, VRB wind, missing decoded fields).
+
+## `awc-metar.handmade.json` (HAND-MADE, not a recording)
+
+A response of the aviationweather.gov Data API (`/api/data/metar?ids=…&format=json`) written by
+hand for the weather tests (`connector/test/weather.test.ts`, `packages/weather/test/`), because
+aviationweather.gov was not reachable from the cloud container (egress proxy 403, 2026-10-14).
+Field names follow the API's documented JSON (`icaoId`, `obsTime`, `rawOb`, `wdir`, `wspd`,
+`wgst`, `visib`, `altim`, `clouds`, `fltCat`, …); station ids are real, every value is invented.
+The KORD entry lacks the decoded fields on purpose so the parser fallback is exercised. Kept
+for these edge cases; real data is in the recorded file above.
