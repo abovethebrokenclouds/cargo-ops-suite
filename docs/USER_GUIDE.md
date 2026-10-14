@@ -61,8 +61,15 @@ Values are tagged `SIM`, `REPLAY` or `DEMO`; a dash means "no data", never a mad
    the distance flown, arrival within 3 nm, no teleport/slew, sim rate ≤ 8×) and the payout is
    booked with its breakdown: landing grade multiplier, lateness, fuel at the landing airport's
    price, landing fee. Pausing stops the clock; above 1× sim rate there are no bonuses.
+   **Weather bonus:** departing from or arriving at an airport whose live METAR is IFR pays
+   +5 %, LIFR +10 % (the worse end counts, never more than +10 %). The connector notes the
+   category at the origin when you depart and at the destination when you park; keep Live
+   Flight open with **Online weather** on so it has a current report. SAMPLE weather (replays,
+   demo) and unknown weather never pay a bonus and never cost anything; no bonuses at all
+   (sim rate, underloaded departure) also means no weather bonus.
 4. A crash fails the mission (reputation −20, repairs). Every flight lands in the **Logbook**
-   (`g` `l`) with track, grade and payout; export CSV, GPX (one flight) or the whole career (JSON).
+   (`g` `l`) with track, grade, payout and the weather at both ends (category, LIVE/SAMPLE,
+   bonus); export CSV, GPX (one flight) or the whole career (JSON).
 
 ## 5. Company, fleet, loans, used market, FBOs
 

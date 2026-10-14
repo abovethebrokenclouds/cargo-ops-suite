@@ -59,7 +59,7 @@ total  = max(0, round(gross − late penalty − damage))
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | kind       | cargo 1.0, fragile 1.3, express 1.5, medical 1.8, hazmat 1.6, **bush 1.4** (the plan lists five values for six kinds; bush sits between fragile and the critical kinds) |
 | load       | n^-0.3 for n handling units (bulk discount; 1 for single-unit jobs)                                                                                                     |
-| conditions | 1 + 0.15 IFR + 0.15 night + 0.20 weather — **1.00 in P3**: IFR/weather need METAR (P5) and night needs the sim's zulu time, which the protocol does not carry yet       |
+| conditions | 1 + **weather bonus** (+0.05 IFR, +0.10 LIFR from the live METAR at departure/arrival, see "Weather bonus"); night is not observed yet (needs the sim's zulu time)      |
 | reputation | tier = floor(reputation / 20) → 0–5                                                                                                                                     |
 | landing    | A+ 1.10, A 1.05, B 1.00, C 1.00, D 0.85, E 0.60, F 0.60 (the plan's five values over seven grades); no touchdown recorded → 1.00                                        |
 | late       | 10 % of gross per late hour, pro rata, capped at 100 %; late = flight block minutes − job time limit                                                                    |
@@ -92,6 +92,66 @@ is general cargo, 840 kg, 1 unit, 287.7 nm. Replaying `demo-kmem-katl.jsonl`
 (landing B at −142 fpm / 1.18 G, block ≈ 119 min, on time) pays
 0.015 × 840 × 287.7 × 1.8896377 = 6,849.98 × 1.04 = 7,123.98 → **$7,124**, cash
 250,000 → 257,124, reputation 50 → 52 (`connector/test/economy.test.ts`).
+
+## Weather bonus
+
+Flying into or out of real IFR weather pays a little more. Code:
+`packages/economy/src/weather-bonus.ts` (pure, shared by the connector and the browser),
+applied on the payout's **conditions** line; the connector's engine freezes the weather.
+
+- **What is recorded.** The METAR flight category (FAA VFR / MVFR / IFR / LIFR, from
+  `packages/weather`) of the **origin when the mission departs** and of the **destination
+  when it arrives** (Arrived: parked, engines off, brake set). Each end is frozen on the
+  mission (`mission.weather.departure` / `.arrival`) with the station, the category, the
+  report's origin (`live` or `sample`), the raw text, observation and fetch times, the
+  telemetry `source` (`sim`, `replay`, `demo`), whether it may count, and a message. It is
+  logged as `Weather (<source>) …`.
+- **Where the report comes from.** The METAR the connector **already holds** for the station
+  (`WeatherService.peek`): no extra request is made. Live reports exist only when the
+  connector runs online and a page showing the route weather (Live Flight, the job board)
+  has fetched them with **Online weather** on; otherwise the end is unknown.
+- **Which reports count (all must hold).** A **live** aviationweather.gov report (never a
+  SAMPLE one); **simulator** telemetry (replays and the demo never earn it); not stale (no
+  failed refresh since), fetched at most **15 min** and observed at most **90 min** before
+  the moment it is frozen; a known category. Anything else is **unknown: no bonus and no
+  penalty**.
+
+| Category at an end | Bonus |
+| ------------------ | ----- |
+| VFR, MVFR          | 0     |
+| IFR                | +5 %  |
+| LIFR               | +10 % |
+
+```
+weather bonus = min(10 %, max(bonus at departure, bonus at arrival))
+conditions    = 1 + weather bonus            (1.00 when bonuses are removed)
+```
+
+- The larger end counts; both ends never add up (LIFR at both ends is still +10 %).
+- **Bonus-eligible flights only.** noBonus (sim rate above 1×) and an underloaded departure
+  (payloadMismatch) set conditions to 1.00 like every bonus; the note says the weather bonus
+  was withheld. Lateness and damage still apply to the larger gross.
+- Board estimates never include it (the weather is not known in advance).
+- The breakdown carries `weatherBonus` (0.05 / 0.10) when it was paid; the mission keeps
+  `weather.bonus`, the fraction actually applied (0 when withheld or none). The logbook
+  shows the category at both ends and the bonus.
+
+Worked examples (`packages/economy/test/weather-bonus.test.ts`), worked example 1 (500 kg,
+100 nm, general cargo, tier 2, landing B, base $1,266.06) with weather:
+
+1. Live IFR at departure, VFR at arrival: × 1.05 → 1,266.06 × 1.05 × 1.04 = 1,382.54 →
+   **$1,383**.
+2. Live IFR out, LIFR in: the larger end, × 1.10 → 1,448.38 → **$1,448**.
+3. Live LIFR at both ends: still × 1.10 (cap) → **$1,448**.
+4. Live LIFR with sim rate above 1× (noBonus): conditions and reputation 1.00 → **$1,266**.
+5. SAMPLE LIFR at both ends, or no weather: exactly example 1 → **$1,317**.
+6. Live IFR with an underloaded departure: bonus withheld → **$1,266**.
+
+Connector (`connector/test/weather-bonus.test.ts`): the acceptance replay with the
+connector's default SAMPLE weather records KMEM VFR / KATL MVFR (origin `sample`, source
+`replay`) and pays $7,124 as before; a SAMPLE LIFR, a live LIFR under replay telemetry, a
+stale report or no weather all pay $7,124; live IFR at KMEM and LIFR at KATL under sim
+telemetry pay 6,849.98 × 1.10 × 1.04 = 7,836.38 → **$7,836**.
 
 ## Mission lifecycle and verification (plan §6.4)
 
@@ -468,7 +528,8 @@ tagged DEMO with all actions disabled.
 ## Deferred
 
 - Done in P5 part 2 (below): FBOs, insurance, dynamic demand and fuel prices, milestones.
-  Still open: IFR/night/weather condition bonuses, small/GA airports, transit cargo.
+  Still open: the night condition bonus, small/GA airports, transit cargo. (The IFR/LIFR
+  weather bonus is done: see "Weather bonus".)
 - Leases are never cancelled for non-payment: their monthly fee is booked even when it
   drives cash negative (only loans have a missed-payment path).
 
