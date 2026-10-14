@@ -1234,18 +1234,22 @@ payment  = standard amortisation (same formula and rounding as bank loans)
 
 - **Command** `insurance.repairLoan {aircraftId, repair: overhaul|all|defect, defectId?,
 principal, termMonths}` orders the repair (the P4 wear overhaul, every open known defect, or
-  one defect — exactly the cash commands' orders) and takes the loan in one step. Cash must
-  cover cost − principal (the claim is paid when the order is placed, as for a cash repair).
-  Ledger, in order: `repair_loan_disbursement +principal` (the insurer pays the shop), `repair
-−cost`, then `insurance_claim +claim` for incident defects.
+  one defect — exactly the cash commands' orders) and takes the loan in one step. **Cash
+  needed = cost − incident claim − principal** = bill − principal (the insurer's claim and
+  loan both pay the shop in the same step; a cash repair without a loan still needs the gross
+  cost, the claim coming after). Ledger, in order: `repair_loan_disbursement +principal` (the
+  insurer pays the shop), `insurance_claim +claim` for incident defects, then `repair −cost`,
+  so the running balance never dips below the company's own share. The /fleet form shows the
+  cash needed next to the quote.
 - **Eligibility** (first failing rule wins; `repairLoanCheck`): owned (`not_owned`) → not
   assigned to a hired pilot and not flying (`aircraft_busy`) → an active policy
   (`not_insured`) → no open repair loan on that aircraft (`repair_loan_open`, one per aircraft)
   → then the repair's own refusals (`no_wear`, `no_defects`, `unknown_defect`,
   `already_queued`; the overhaul also needs the aircraft available) → a bill to finance
   (`no_repair_bill`) → term 6–24 (`bad_term`) → at least $500 (`bad_principal`) → at most the
-  bill (`exceeds_bill`) → cash (`insufficient_cash`). An aircraft on a loaded mission is refused
-  with `aircraft_on_mission`.
+  bill (`exceeds_bill`) → cash (`insufficient_cash`). Before any of these, the connector
+  checks the arguments (`bad_args`) and refuses an aircraft on a loaded or flying mission
+  (`aircraft_on_mission`).
 - **No lien**: the loan names the aircraft (`collateral`) but `kind: "repair"` places no
   charge on it: the aircraft stays unencumbered for a bank loan (`financed` is about bank
   loans only).
@@ -1259,7 +1263,8 @@ principal, termMonths}` orders the repair (the P4 wear overhaul, every open know
 - **Third consecutive miss**: the insurer **cancels the policy** and **calls the loan**: the
   whole capitalised balance is debited from cash at once (`repair_loan_payment`, cash may go
   negative, like a late fee), the loan closes with status **`called`**, event
-  `insurance.cancelled {reason: "missed_payments", balanceMovedToCash}`. The aircraft stays in
+  `insurance.cancelled {reason: "missed_payments", balanceMovedToCash}` and `loan.called
+{loanId, kind: "repair", reason, balanceMovedToCash}`. The aircraft stays in
   the fleet, uninsured; a new policy can be bought later at the current premium.
 - **Early payoff**: `loan.payoff {loanId}` (any time, no penalty), booked as
   `repair_loan_payment`; afterwards the policy can be cancelled.
@@ -1267,12 +1272,16 @@ principal, termMonths}` orders the repair (the P4 wear overhaul, every open know
   after the bank loan; refused with `underwater` when 90 % of the value does not cover both.
 - **Write-off** (insured, as every open repair loan is): the claim nets off the repair loan
   first (`repair_loan_payment`, loan `paid_off`), then the bank loan; a repair-loan remainder
-  the claim cannot cover is debited from cash and the loan is `called`.
+  the claim cannot cover is debited from cash and the loan is `called` (`loan.called`, reason
+  `aircraft_written_off`). The policy is not cancelled: the hull has left the fleet.
 - **Bank repossession** of an aircraft with an open repair loan: the repair loan is called
-  (balance from cash, `called`).
+  (balance from cash, `called`, `loan.called` with reason `aircraft_repossessed` and
+  `balanceMovedToCash`).
 - Repair loans count as **debt** (net worth, credit-score debt ratio, debt-to-income on
   /company). The **Debt-free** milestone needs every loan `paid_off`, so a called loan (like a
-  defaulted one) never counts as repaid.
+  defaulted one) never counts as repaid. Conversely, a write-off whose claim nets off the
+  company's only loans leaves them `paid_off`, which reaches Debt-free: the same rule bank
+  loans settled from a write-off claim already follow.
 
 ### Worked examples (exact cents, `repair-loans.test.ts`)
 
@@ -1280,7 +1289,10 @@ principal, termMonths}` orders the repair (the P4 wear overhaul, every open know
 $2,000) = $13,952 → bill **$5,488**. Financed in full over 12 months: payment **$467.30**,
 month 1 interest $18.29 / principal $449.01, the 12th payment $467.33, total interest
 **$119.63**. `$5,488.01` is refused (`exceeds_bill`). Ledger: `repair_loan_disbursement
-+5,488`, `repair −19,440`, `insurance_claim +13,952` (net cash $0 for the repair today).
++5,488`, `insurance_claim +13,952`, `repair −19,440`: net cash **$0** for the repair today, so
+it goes through with $10,000 in cash (balances 15,488 → 29,440 → 10,000) and even with $0.
+Financing $3,000 of the bill instead leaves **$2,488** to pay from cash: $2,487.99 is refused
+(`insufficient_cash`), $2,488.00 is enough. Amounts are judged in cents ($499.996 is $500.00).
 
 **Overhaul.** A C208B at 19.5 % condition: overhaul $173,880 (no claim: wear is not an
 incident) → bill $173,880. Financed $150,000 over 24 months (cash needed $23,880): payment
