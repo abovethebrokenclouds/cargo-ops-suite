@@ -21,6 +21,7 @@ import {
   totalFuelFlowPph,
   weightsView,
 } from "@/lib/flight/flight-view";
+import { DASHBOARD_FLEET_STATUS } from "@/lib/economy/fleet-status";
 import { EMPTY, formatDegrees, formatInt, formatMinutes, formatUsd } from "@/lib/format";
 import { jobs } from "@/lib/mock-data";
 import { useAirportLookup } from "@/lib/economy/board";
@@ -55,16 +56,7 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const fleetStatus = {
-  available: "READY",
-  in_flight: "FLYING",
-  maintenance: "MAINT",
-  sold: "SOLD",
-  returned: "RETURNED",
-  repossessed: "REPOSSESSED",
-  written_off: "WRITTEN OFF",
-  hired: "HIRED PILOT (SIM.)",
-} as const;
+const fleetStatus = DASHBOARD_FLEET_STATUS;
 
 const fleetTone: Record<string, string> = {
   READY: "text-phosphor-green",
