@@ -207,6 +207,10 @@ export const CAREER_FORMAT = "cargo-ops-career";
  * book repairs what it cannot trust: an aircraft marked hired without a pilot is available
  * again, and a pilot on an aircraft not marked hired (or a second pilot on one aircraft) is
  * unassigned.
+ * Version 5 loans may also be insurer repair loans: optional `kind: "repair"` and `orderId`
+ * (no format bump; absent = a bank loan). A career that ever took one cannot move to an older
+ * connector either: its ledger has `repair_loan_disbursement` rows, which an older connector
+ * refuses as invalid instead of misreading the loan as a repossessable bank loan.
  * Version 4 (P5 part 2) adds FBOs, FBO transactions and demand events (the company carries
  * demand activity, counters and milestones; fleet rows carry insurance and incidents);
  * version 3 (P5) adds the used market's listings (and fleet rows carry systems, defects,

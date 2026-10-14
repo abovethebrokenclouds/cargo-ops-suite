@@ -8,6 +8,7 @@ import {
   MILESTONE_IDS,
   AIRCRAFT_STATUSES,
   LEDGER_CATEGORIES,
+  LOAN_KINDS,
   LOAN_STATUSES,
   OWNERSHIPS,
   PILOT_RATINGS,
@@ -356,6 +357,10 @@ export const loanRecordSchema: z.ZodType<BookLoan, z.ZodTypeDef, unknown> = z.ob
   status: z.enum(LOAN_STATUSES),
   takenAt: z.number().finite(),
   takenGameMs: z.number().finite().nonnegative(),
+  // Insurer repair loans (no migration: the loans table keeps them, kind lives in the JSON).
+  // Absent = a bank loan, so every older row and export still loads.
+  kind: z.enum(LOAN_KINDS).optional(),
+  orderId: z.string().min(1).optional(),
 });
 
 export interface AircraftEventRow extends AircraftEventRecord {
