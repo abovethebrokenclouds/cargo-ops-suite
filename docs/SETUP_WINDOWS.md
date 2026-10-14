@@ -18,7 +18,11 @@ cloud services.
    (22.13 or newer also works.)
 
 Bun is optional. If it is installed, the start script uses it to build the web app;
-otherwise it uses npm.
+otherwise it uses npm. With Node.js 22 the bundled npm is version 10, which crashes on
+this app's dependency tree when installed the usual way; the start script detects
+npm older than 11 and installs with `--legacy-peer-deps` instead (it prints
+`npm 10.x found (older than 11): installing with --legacy-peer-deps.`). The web app it
+builds is the same. Windows CI runs the launcher on Node.js 22.13.0, the newest 22.x and 24.
 
 ## 2. Get the code
 
@@ -163,17 +167,18 @@ remove it if you are not deliberately connecting to another PC.
 
 ## 9. Troubleshooting
 
-| Symptom                                    | Try                                                                                                                                                    |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| "Node.js was not found" / "too old"        | Install Node.js 24 LTS, then open a **new** Command Prompt.                                                                                            |
-| `Port 4311 on 127.0.0.1 is already in use` | Another connector is running (check other windows) or use `--port 4312` and open that port.                                                            |
-| Chip stays `SIM OFFLINE` with MSFS running | Wait until you are in the world or main menu; check `logs\connector.log` for "SimConnect open … failed" lines. Remove any stray `SimConnect.cfg`.      |
-| Log shows `SimConnect rejected "<SimVar>"` | That SimVar name/unit is wrong for your sim version. The value is just not shown; please report the line (fix goes in `connector\src\sim\simvars.ts`). |
-| Page shows "no web build was found"        | Run `scripts\start-cargo-ops.cmd -Rebuild`.                                                                                                            |
-| Browser says it cannot connect             | The connector window was closed; start it again.                                                                                                       |
-| `node:sqlite is not available`             | Node.js is older than 22.13; install Node.js 24 LTS.                                                                                                   |
-| `npm ci` fails behind a proxy / offline    | npm needs internet access once to download the connector's three dependencies.                                                                         |
-| PowerShell refuses to run the script       | Use the `.cmd` file; it starts PowerShell with `-ExecutionPolicy Bypass` for this script only.                                                         |
+| Symptom                                               | Try                                                                                                                                                                                                    |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| "Node.js was not found" / "too old"                   | Install Node.js 24 LTS, then open a **new** Command Prompt.                                                                                                                                            |
+| `Port 4311 on 127.0.0.1 is already in use`            | Another connector is running (check other windows) or use `--port 4312` and open that port.                                                                                                            |
+| Chip stays `SIM OFFLINE` with MSFS running            | Wait until you are in the world or main menu; check `logs\connector.log` for "SimConnect open … failed" lines. Remove any stray `SimConnect.cfg`.                                                      |
+| Log shows `SimConnect rejected "<SimVar>"`            | That SimVar name/unit is wrong for your sim version. The value is just not shown; please report the line (fix goes in `connector\src\sim\simvars.ts`).                                                 |
+| Page shows "no web build was found"                   | Run `scripts\start-cargo-ops.cmd -Rebuild`.                                                                                                                                                            |
+| Browser says it cannot connect                        | The connector window was closed; start it again.                                                                                                                                                       |
+| `node:sqlite is not available`                        | Node.js is older than 22.13; install Node.js 24 LTS.                                                                                                                                                   |
+| `Cannot read properties of null (reading 'edgesOut')` | npm 10 (Node.js 22) installed the web app without `--legacy-peer-deps` (older scripts or a manual `npm install`). Update the scripts, install Node.js 24 LTS, or run `npm install --legacy-peer-deps`. |
+| `npm ci` fails behind a proxy / offline               | npm needs internet access once to download the connector's three dependencies.                                                                                                                         |
+| PowerShell refuses to run the script                  | Use the `.cmd` file; it starts PowerShell with `-ExecutionPolicy Bypass` for this script only.                                                                                                         |
 
 When reporting a problem, include `logs\connector.log` (it never contains the token).
 
