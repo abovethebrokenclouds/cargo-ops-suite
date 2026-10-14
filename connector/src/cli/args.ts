@@ -15,6 +15,13 @@ export interface CliOptions {
   lan: boolean;
   resetToken: boolean;
   backupKeep: number;
+  /**
+   * Hidden: connect to a SimConnect server over TCP at this host/port instead of the normal
+   * discovery (SimConnect.cfg, local pipe, registry port). Used by the protocol emulator tests;
+   * also works for a remote SimConnect.xml IPv4 listener. Not listed in --help.
+   */
+  simconnectHost?: string;
+  simconnectPort?: number;
   verbose: boolean;
   help: boolean;
   version: boolean;
@@ -126,6 +133,8 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
       case "--web":
       case "--data-dir":
       case "--basemap-dir":
+      case "--simconnect-host":
+      case "--simconnect-port":
       case "--backup-keep": {
         const value = takeValue(flag, inline);
         if (typeof value !== "string") return { ok: false, error: value.error };
@@ -152,6 +161,15 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
             return { ok: false, error: "--backup-keep must be an integer between 0 and 3650" };
           }
           options.backupKeep = keep;
+        } else if (flag === "--simconnect-port") {
+          const port = Number(value);
+          if (!Number.isInteger(port) || port < 1 || port > 65535) {
+            return { ok: false, error: "--simconnect-port must be an integer between 1 and 65535" };
+          }
+          options.simconnectPort = port;
+        } else if (flag === "--simconnect-host") {
+          if (value.trim() === "") return { ok: false, error: "--simconnect-host needs a value" };
+          options.simconnectHost = value;
         } else if (flag === "--fixture") options.fixture = value;
         else if (flag === "--record") options.record = value;
         else if (flag === "--web") options.web = value;
@@ -162,6 +180,12 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
       default:
         return { ok: false, error: `Unknown option: ${flag} (see --help)` };
     }
+  }
+  if ((options.simconnectHost === undefined) !== (options.simconnectPort === undefined)) {
+    return { ok: false, error: "--simconnect-host and --simconnect-port go together" };
+  }
+  if (options.simconnectHost !== undefined && options.sim !== "simconnect") {
+    return { ok: false, error: "--simconnect-host only applies to --sim simconnect" };
   }
   if (options.fixture && options.sim !== "fake") {
     return { ok: false, error: "--fixture only applies to --sim fake" };
