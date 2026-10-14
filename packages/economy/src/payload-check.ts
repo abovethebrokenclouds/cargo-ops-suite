@@ -1,6 +1,9 @@
 // Payload check (docs/ECONOMY.md "Payload check"): the cargo a mission requires against
 // the payload stations the simulator reports, minus a pilot/crew allowance.
 //
+//   crew      = player setting, else the FIRST pilot seat (whole name Pilot / Co-pilot /
+//               Captain / First Officer) + every "Crew" seat, else 0 kg
+//
 //   loaded    = Σ PAYLOAD STATION WEIGHT − crew allowance   (never below 0)
 //   tolerance = max(25 kg, 10 % of the cargo)
 //   overloaded   TOTAL WEIGHT > MAX GROSS WEIGHT (only when the sim reports both)
@@ -11,10 +14,11 @@
 
 import type { PayloadCheck, PayloadCheckStatus } from "../../protocol/src/economy";
 import {
-  CREW_STATION_PATTERN,
+  CREW_SEAT_PATTERN,
   DEFAULT_CREW_ALLOWANCE_KG,
   PAYLOAD_TOLERANCE_MIN_KG,
   PAYLOAD_TOLERANCE_SHARE,
+  PILOT_SEAT_PATTERN,
 } from "./constants";
 import { KG_PER_LB } from "./costs";
 import { round1 } from "./geo";
@@ -26,7 +30,7 @@ export interface PayloadCheckInput {
   stations: ReadonlyArray<{ name: string; weightLb: number }> | null | undefined;
   /** `weights` domain (TOTAL WEIGHT, MAX GROSS WEIGHT) when reported. */
   weights?: { totalLb: number; maxGrossLb: number } | null | undefined;
-  /** Player setting, kg; null or absent = automatic (crew-named stations, else one pilot). */
+  /** Player setting, kg; null or absent = automatic (crew seats, else 0 kg). */
   crewAllowanceKg?: number | null | undefined;
   source: PayloadCheck["source"];
   stage: PayloadCheck["stage"];
@@ -39,9 +43,24 @@ export function payloadToleranceKg(cargoKg: number): number {
   return round1(Math.max(PAYLOAD_TOLERANCE_MIN_KG, PAYLOAD_TOLERANCE_SHARE * cargoKg));
 }
 
-/** A payload station whose name marks it as a crew seat (Pilot, Co-pilot, Crew …). */
-export function isCrewStation(name: string): boolean {
-  return CREW_STATION_PATTERN.test(name);
+/** A station whose whole name is a pilot seat (Pilot, Co-pilot, Captain, First Officer). */
+export function isPilotSeat(name: string): boolean {
+  return PILOT_SEAT_PATTERN.test(name.trim());
+}
+
+/** A station whose whole name is an explicit crew seat (Crew, Crew Seat 2). */
+export function isCrewSeat(name: string): boolean {
+  return CREW_SEAT_PATTERN.test(name.trim());
+}
+
+/**
+ * Stations counted as crew: the first pilot seat (a second one such as "Copilot" may
+ * carry cargo, so it counts as payload) plus every explicit crew seat. Baggage, cargo and
+ * compartment stations never match ("Pilot Baggage" is cargo).
+ */
+export function crewStations<T extends { name: string }>(stations: readonly T[]): T[] {
+  const firstPilot = stations.find((s) => isPilotSeat(s.name));
+  return stations.filter((s) => s === firstPilot || isCrewSeat(s.name));
 }
 
 export function checkPayload(input: PayloadCheckInput): PayloadCheck {
@@ -81,12 +100,12 @@ export function checkPayload(input: PayloadCheckInput): PayloadCheck {
   let crewKg: number;
   let crewBasis: NonNullable<PayloadCheck["crewBasis"]>;
   const setting = input.crewAllowanceKg;
-  const crewStations = stations.filter((s) => isCrewStation(s.name));
+  const crew = crewStations(stations);
   if (typeof setting === "number" && Number.isFinite(setting)) {
     crewKg = Math.max(0, setting);
     crewBasis = "setting";
-  } else if (crewStations.length > 0) {
-    crewKg = crewStations.reduce((s, x) => s + lbToKg(x.weightLb), 0);
+  } else if (crew.length > 0) {
+    crewKg = crew.reduce((s, x) => s + lbToKg(x.weightLb), 0);
     crewBasis = "stations";
   } else {
     crewKg = DEFAULT_CREW_ALLOWANCE_KG;

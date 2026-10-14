@@ -3,7 +3,9 @@ import { payloadCheckSchema } from "@cargo-ops/protocol";
 import {
   checkPayload,
   computePayout,
-  isCrewStation,
+  crewStations,
+  isCrewSeat,
+  isPilotSeat,
   payloadMismatch,
   payloadToleranceKg,
   type PayloadCheckInput,
@@ -43,13 +45,65 @@ describe("payload check", () => {
     expect(payloadToleranceKg(1234)).toBe(123.4);
   });
 
-  it("crew stations are recognised by name", () => {
-    for (const n of ["Pilot", "Co-Pilot", "COPILOT", "Crew 2", "Captain", "First Officer"]) {
-      expect(isCrewStation(n), n).toBe(true);
+  it("crew seats are recognised by their whole name only", () => {
+    for (const n of ["Pilot", " Co-Pilot ", "COPILOT", "Captain", "First Officer", "Pilot Seat"]) {
+      expect(isPilotSeat(n), n).toBe(true);
     }
-    for (const n of ["Cargo Zone A", "Passenger 1", "Station 3", "Autopilot bay"]) {
-      expect(isCrewStation(n), n).toBe(false);
+    for (const n of ["Crew", "Crew 2", "Crew Seat 1"]) expect(isCrewSeat(n), n).toBe(true);
+    for (const n of [
+      "Pilot Baggage",
+      "Crew Baggage",
+      "Pilot bag",
+      "Crew compartment",
+      "Cargo Zone A",
+      "Passenger 1",
+      "Station 3",
+      "Autopilot bay",
+    ]) {
+      expect(isPilotSeat(n) || isCrewSeat(n), n).toBe(false);
     }
+  });
+
+  it("(a) baggage named after the pilot or crew stays cargo", () => {
+    const r = check({
+      stations: [
+        { name: "Pilot", weightLb: 170 },
+        { name: "Pilot Baggage", weightLb: 300 },
+        { name: "Crew Baggage", weightLb: 300 },
+        { name: "Cargo", weightLb: 1250 },
+      ],
+    });
+    // 2,020 lb = 916.3 kg − Pilot 77.1 kg = 839.2 kg: only the seat is crew.
+    expect(r).toMatchObject({ crewKg: 77.1, loadedKg: 839.2, status: "ok" });
+  });
+
+  it("(b) no crew seat reported: nothing is subtracted, exact cargo is ok", () => {
+    const r = check({ stations: [{ name: "Cargo", weightLb: 441 }], cargoKg: 200 });
+    expect(r).toMatchObject({
+      simPayloadKg: 200,
+      crewKg: 0,
+      crewBasis: "default",
+      loadedKg: 200,
+      toleranceKg: 25,
+      status: "ok",
+    });
+  });
+
+  it("(c) only the first pilot seat is crew: cargo in the copilot seat counts", () => {
+    const stations = [
+      { name: "Pilot", weightLb: 170 },
+      { name: "Pilot Baggage", weightLb: 100 },
+      { name: "Copilot", weightLb: 300 },
+      { name: "Cargo", weightLb: 500 },
+    ];
+    expect(crewStations(stations).map((s) => s.name)).toEqual(["Pilot"]);
+    // docs/ECONOMY.md example 4: 1,070 lb = 485.3 kg − 77.1 kg = 408.2 kg.
+    const r = check({ stations, cargoKg: 400 });
+    expect(r).toMatchObject({ crewKg: 77.1, loadedKg: 408.2, status: "ok" });
+    // Explicit crew seats all count; the player's setting still overrides.
+    const withCrew = [...stations, { name: "Crew 2", weightLb: 180 }];
+    expect(crewStations(withCrew).map((s) => s.name)).toEqual(["Pilot", "Crew 2"]);
+    expect(check({ stations, cargoKg: 400, crewAllowanceKg: 213.2 }).loadedKg).toBe(272.1);
   });
 
   it("fixture stations vs 840 kg: 907.2 kg − 77.1 kg Pilot = 830.1 kg → ok", () => {
@@ -95,16 +149,9 @@ describe("payload check", () => {
     }
   });
 
-  it("no crew-named station: one pilot (77.1 kg) is subtracted", () => {
-    const r = check({ stations: [{ name: "Station 1", weightLb: 400 }], cargoKg: 100 });
-    expect(r).toMatchObject({
-      simPayloadKg: 181.4,
-      crewKg: 77.1,
-      crewBasis: "default",
-      loadedKg: 104.3,
-      toleranceKg: 25,
-      status: "ok",
-    });
+  it("unnamed stations: 0 kg crew by default", () => {
+    const r = check({ stations: [{ name: "Station 1", weightLb: 400 }], cargoKg: 200 });
+    expect(r).toMatchObject({ simPayloadKg: 181.4, crewKg: 0, loadedKg: 181.4, status: "ok" });
   });
 
   it("the player's crew allowance replaces the automatic one", () => {

@@ -176,7 +176,7 @@ export const payloadCheckSchema = z.object({
   simPayloadKg: finite().nonnegative().optional(),
   /** Pilot/crew allowance subtracted from the station sum, kg. */
   crewKg: finite().nonnegative().optional(),
-  /** stations: stations named like crew; setting: the company setting; default: one pilot. */
+  /** stations: first pilot seat + crew seats; setting: the company setting; default: none (0 kg). */
   crewBasis: z.enum(["stations", "setting", "default"]).optional(),
   /** simPayloadKg − crewKg (never below 0), kg. */
   loadedKg: finite().nonnegative().optional(),

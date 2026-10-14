@@ -34,7 +34,7 @@ const TONE: Record<PayloadCheck["status"], string> = {
 const CREW: Record<NonNullable<PayloadCheck["crewBasis"]>, string> = {
   stations: "crew stations",
   setting: "your crew allowance",
-  default: "one pilot",
+  default: "no crew station",
 };
 
 /** Compact status pill (logbook rows). */

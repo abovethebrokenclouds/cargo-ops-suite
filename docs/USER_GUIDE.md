@@ -38,7 +38,8 @@ Values are tagged `SIM`, `REPLAY` or `DEMO`; a dash means "no data", never a mad
 4. With SimBrief import on (Settings), the job board shows your planned route and a button for
    contracts on it.
 5. **Load the cargo in the sim too.** The mission strip shows a **payload check**: the sim's
-   payload stations minus the pilot (stations named Pilot/Crew, otherwise 77 kg; change it in
+   payload stations minus the crew (the first Pilot/Co-pilot/Captain seat plus any Crew seats,
+   otherwise nothing; change it in
    **Payload check crew allowance** on Jobs) against the cargo weight, with a 10 % (at least
    25 kg) tolerance. If the sim payload is clearly below the cargo when you depart, the
    mission still flies but pays **no bonuses**. Above max gross weight the start is refused.

@@ -2,11 +2,12 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { PayloadCheck } from "@cargo-ops/protocol";
-import { checkPayload } from "@cargo-ops/economy";
+import { checkPayload, computePayout } from "@cargo-ops/economy";
 
 import { payloadCheckAdvice } from "@/lib/economy/payload-check";
 
 import { PayloadCheckLine, PayloadCheckPill } from "./PayloadCheck";
+import { PayoutBreakdown } from "./PayoutBreakdown";
 
 const STATIONS = [
   { name: "Pilot", weightLb: 170 },
@@ -71,5 +72,36 @@ describe("payload check UI", () => {
     expect(screen.getByTestId("payload-check-pill")).toHaveTextContent("OKDEMO");
     rerender(<PayloadCheckPill check={null} />);
     expect(screen.queryByTestId("payload-check-pill")).toBeNull();
+  });
+});
+
+describe("payout breakdown: no-bonus reason", () => {
+  const job = {
+    kind: "cargo" as const,
+    weightKg: 500,
+    distanceNm: 100,
+    units: 1,
+    reputation: 50,
+    estimate: false,
+    landingGrade: "B" as const,
+    lateMin: 0,
+  };
+  const total = (text: string) => screen.getAllByText(text).length;
+
+  it("names both reasons when the sim rate and the payload both removed bonuses", () => {
+    render(
+      <PayoutBreakdown
+        breakdown={computePayout({ ...job, noBonus: true, payloadMismatch: true })}
+      />,
+    );
+    // The reputation and conditions notes plus the payout row.
+    expect(
+      total("No bonuses: sim rate went above 1× and the sim payload was below the cargo"),
+    ).toBe(3);
+  });
+
+  it("names the payload alone when only the payload check applied", () => {
+    render(<PayoutBreakdown breakdown={computePayout({ ...job, payloadMismatch: true })} />);
+    expect(total("No bonuses: the sim payload was below the cargo at departure")).toBe(3);
   });
 });

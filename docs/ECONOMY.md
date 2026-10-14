@@ -135,8 +135,10 @@ UI), constants in `constants.ts`; the connector's engine feeds it the latest `pa
 
 ```
 sim payload = Σ PAYLOAD STATION WEIGHT:1..n (pounds → kg)
-crew        = player setting, else Σ stations named Pilot / Co-pilot / Crew / Captain /
-              First Officer, else 77.1 kg (one 170 lb pilot)
+crew        = player setting, else the FIRST pilot seat + every crew seat, else 0 kg
+              pilot seat: whole trimmed name Pilot / Co-pilot / Copilot / Captain /
+                          First Officer (optional " Seat", optional number)
+              crew seat:  whole trimmed name Crew (optional " Seat", optional number)
 loaded      = max(0, sim payload − crew)
 tolerance   = max(25 kg, 10 % of the cargo)
 ```
@@ -162,8 +164,16 @@ tolerance   = max(25 kg, 10 % of the cargo)
 - **Source.** The check records where the telemetry came from (`sim`, `replay`, `demo`);
   the UI labels replay/demo checks. Replays use the recorded payload stations.
 - **Crew allowance.** Many aircraft load the pilot in a payload station, so it is subtracted
-  before comparing. `settings.update {crewAllowanceKg: kg | null}` (0–2,000 kg; null =
-  automatic) sets it for the company; the /jobs page has a field for it.
+  before comparing. Every doubt favours the player:
+  - names must match the **whole** station name, so "Pilot Baggage", "Crew Baggage", cargo
+    bags and compartments are always cargo;
+  - only the **first** pilot seat counts as crew. A second seat ("Copilot", "First
+    Officer") is ambiguous: in a cargo flight it often holds cargo, so it counts as payload.
+    A real second pilot makes the check more generous, never harsher; set the crew
+    allowance if you want it subtracted;
+  - with **no** crew-named station nothing is subtracted (0 kg): a pilot the sim does not
+    report is never assumed. `settings.update {crewAllowanceKg: kg | null}` (0–2,000 kg; null =
+    automatic) sets it for the company; the /jobs page has a field for it.
 - **Logbook.** The departure check is stored with the mission; the logbook row shows it and
   the CSV export has a `payload_check` column (`ok`, `underloaded`, `overloaded`, `unknown`,
   empty without a mission).
@@ -175,7 +185,13 @@ fixture (Pilot 170 lb + 450 + 520 + 480 + 380 lb = 2,000 lb):
    **830.1 kg**. Cargo 840 kg, tolerance 84 kg: 830.1 ≥ 756 → **ok** (the replay
    acceptance mission pays $7,124 as before).
 2. Same stations, cargo 950 kg, tolerance 95 kg: 830.1 < 855 → **underloaded**.
-3. The acceptance job (840 kg, $7,124 with bonuses) flown with 50 lb in each cargo station
+3. A single "Cargo" station with 441 lb (200.0 kg) for 200 kg of cargo: no crew seat → crew
+   0 kg → loaded 200.0 kg → **ok** (an assumed pilot would have made it 122.9 kg, wrongly
+   underloaded).
+4. "Pilot" 170 lb, "Pilot Baggage" 100 lb, "Copilot" 300 lb (cargo in the seat), "Cargo"
+   500 lb: crew = the Pilot seat only (77.1 kg); baggage and the copilot seat are payload →
+   loaded 1,070 lb − 170 lb = 900 lb = **408.2 kg**.
+5. The acceptance job (840 kg, $7,124 with bonuses) flown with 50 lb in each cargo station
    (370 lb = 167.8 kg, loaded 90.7 kg) → underloaded at departure → 6,849.98 × 1.00 →
    **$6,850**; reputation still +2 for the on-time B landing
    (`connector/test/economy.test.ts`).

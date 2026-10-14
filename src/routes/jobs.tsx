@@ -89,7 +89,7 @@ function Field({
 /**
  * Payload check crew allowance (docs/ECONOMY.md "Payload check"): kg subtracted from the
  * sim's payload stations before they are compared with the cargo. Empty = automatic
- * (stations named Pilot/Crew…, else one 77 kg pilot).
+ * (the first Pilot/Co-pilot/Captain seat plus Crew seats, else 0 kg).
  */
 function CrewAllowance({
   valueKg,
@@ -142,7 +142,7 @@ function CrewAllowance({
       </button>
       <p className="min-w-[16rem] flex-1 text-xs">
         Subtracted from the sim&apos;s payload stations before they are compared with the cargo.
-        Empty = automatic: stations named Pilot/Crew, otherwise one 77 kg pilot.
+        Empty = automatic: the first pilot seat plus any Crew seats, otherwise nothing.
       </p>
     </form>
   );
