@@ -96,6 +96,94 @@ jobs:
           path: ci-logs
           if-no-files-found: ignore
 
+  launcher-node22:
+    # W-46 (PC-01 on Node 22): the same clean-checkout launcher run as W-01, on the oldest
+    # Node the launcher accepts (22.13.0) and on the newest 22.x. Both bundle npm 10, whose
+    # dependency resolver crashes on the web app's tree ("reading 'edgesOut'"), so
+    # build-local.ps1 must take its npm<11 path (--legacy-peer-deps). The job asserts npm 10
+    # is in use, that the launcher announced that path, and that the app then comes up.
+    name: Launcher on Node ${{ matrix.node }} / npm 10 (W-46)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.13.0", "22"]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Node 22 with npm 10 (the case under test)
+        run: |
+          $node = (node -p "process.versions.node").Trim()
+          $npm = (npm --version).Trim()
+          Write-Host "node $node, npm $npm"
+          if (-not $node.StartsWith("22.")) { throw "expected Node 22, got $node" }
+          if (-not $npm.StartsWith("10.")) { throw "expected the bundled npm 10, got $($npm); this job no longer tests the npm 10 path" }
+          if (Get-Command bun -ErrorAction SilentlyContinue) { throw "bun is on PATH; the npm path would not run" }
+
+      # One step for the launcher's whole life, as in the launcher job above.
+      - name: W-46 start-cargo-ops.cmd -NoOpen --sim fake --loop on Node 22, SPA + welcome
+        timeout-minutes: 40
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CARGO_OPS_CI_LOGS | Out-Null
+          Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "CargoOps") -ErrorAction SilentlyContinue
+          $out = Join-Path $env:CARGO_OPS_CI_LOGS "launcher.out.log"
+          $err = Join-Path $env:CARGO_OPS_CI_LOGS "launcher.err.log"
+          $p = Start-Process -FilePath "cmd.exe" `
+            -ArgumentList "/d", "/c", "scripts\start-cargo-ops.cmd", "-NoOpen", "--sim", "fake", "--loop" `
+            -WorkingDirectory $env:GITHUB_WORKSPACE `
+            -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow -PassThru
+          Write-Host "launcher pid $($p.Id)"
+          $failure = $null
+          try {
+            Write-Host "::group::W-46 SPA on 127.0.0.1:4311, WebSocket welcome (replay)"
+            node scripts/ci/check-launcher.mjs --port 4311 --timeout-ms 1500000 --pid $p.Id --log $out --err-log $err
+            if ($LASTEXITCODE -ne 0) { throw "W-46 check-launcher.mjs failed (exit $LASTEXITCODE)" }
+            Write-Host "::endgroup::"
+            Write-Host "::group::W-46 the npm 10 install path was taken"
+            $text = Get-Content -Raw $out
+            if ($text -notmatch "Node\.js 22\.\d+\.\d+ found\.") { throw "launcher did not report Node 22" }
+            if ($text -notmatch "older than 11\): installing with --legacy-peer-deps") { throw "launcher did not announce the npm<11 install path" }
+            if ($text -notmatch "Installing web dependencies \(npm install [^)]*--legacy-peer-deps\)") { throw "web install did not run with --legacy-peer-deps" }
+            if ($text -match "edgesOut") { throw "npm's edgesOut crash appears in the launcher log" }
+            Write-Host "npm 10 path confirmed"
+            Write-Host "::endgroup::"
+          } catch {
+            $failure = $_
+          } finally {
+            Write-Host "::group::Stop the launcher"
+            taskkill /T /F /PID $p.Id 2>&1 | Write-Host
+            Start-Sleep -Seconds 2
+            $still = Get-NetTCPConnection -LocalPort 4311 -State Listen -ErrorAction SilentlyContinue
+            Write-Host "::endgroup::"
+          }
+          if ($failure) { Write-Host "::error::$failure"; exit 1 }
+          if ($still) { Write-Host "::error::port 4311 still listening (pid $($still.OwningProcess)) after taskkill /T"; exit 1 }
+          exit 0
+
+      - name: Collect logs
+        if: failure()
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CARGO_OPS_CI_LOGS | Out-Null
+          $logs = Join-Path $env:LOCALAPPDATA "CargoOps\logs"
+          if (Test-Path $logs) { Copy-Item -Recurse $logs (Join-Path $env:CARGO_OPS_CI_LOGS "CargoOps-logs") }
+          Get-ChildItem $env:CARGO_OPS_CI_LOGS -Recurse -Filter *.log -File | ForEach-Object {
+            Write-Host "----- $($_.Name)"
+            Get-Content $_.FullName -Tail 200 | Write-Host
+          }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: windows-launcher-node${{ matrix.node }}-logs
+          path: ci-logs
+          if-no-files-found: ignore
+
   connector:
     # W-06, W-29/33/36, W-44, W-45, W-41: the real connector build on Windows paths
     # (%LOCALAPPDATA%\CargoOps), Windows PowerShell 5.1 for the owner-facing scripts.
