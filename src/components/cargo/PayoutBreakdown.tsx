@@ -44,7 +44,9 @@ export function PayoutBreakdown({
               {breakdown.estimate ? "Estimated payout" : "Payout"}
               {breakdown.noBonus ? (
                 <span className="block text-xs font-normal text-warning">
-                  No bonuses: the sim rate went above 1×
+                  {breakdown.payloadMismatch
+                    ? "No bonuses: the sim payload was below the cargo at departure"
+                    : "No bonuses: the sim rate went above 1×"}
                 </span>
               ) : null}
             </th>

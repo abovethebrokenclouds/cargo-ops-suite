@@ -2,7 +2,7 @@
 // Only fetched when a connector session exists; the browser demo never invents flights.
 
 import { useEffect, useState } from "react";
-import type { Mission, Touchdown } from "@cargo-ops/protocol";
+import type { Mission, PayloadCheck, Touchdown } from "@cargo-ops/protocol";
 import type { ClientSimState } from "@/lib/sim-state";
 import { connectorJson } from "@/lib/transport/connector-api";
 
@@ -30,6 +30,8 @@ export interface LogbookEntry {
     payout: number | null;
     jobs: Array<{ id: string; kind: string; weightKg: number }>;
     failure: { code: string; message: string } | null;
+    /** Cargo vs sim payload frozen at departure; absent on older connectors/missions. */
+    payloadCheck?: PayloadCheck | null;
   } | null;
 }
 

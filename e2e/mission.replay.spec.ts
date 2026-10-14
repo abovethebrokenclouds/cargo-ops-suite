@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 
 import {
   airportLookup,
+  checkPayload,
   computePayout,
   flightWear,
   fuelPrice,
@@ -31,6 +32,7 @@ interface MissionLite {
   payout?: { total: number; costs?: Array<{ key: string; amount: number }> };
   landingGrade?: string;
   failure?: { code: string };
+  payloadCheck?: { stage: string; status: string; source: string; loadedKg?: number };
 }
 
 async function token(request: APIRequestContext): Promise<string> {
@@ -82,6 +84,34 @@ test("accept → load → fly (replay) → deliver: payout in the API and the lo
   await expect(page.getByTestId("command-message")).toContainText("Mission loaded");
   await expect(page.getByTestId("mission-strip")).toBeVisible();
 
+  // Payload check against the replayed payload stations (Pilot 170 lb + 1,830 lb cargo →
+  // 830.1 kg after the pilot), computed by the shared rule, labelled REPLAY.
+  const fixtureCheck = checkPayload({
+    cargoKg: job.weightKg,
+    stations: [
+      { name: "Pilot", weightLb: 170 },
+      { name: "Cargo Zone A", weightLb: 450 },
+      { name: "Cargo Zone B", weightLb: 520 },
+      { name: "Cargo Zone C", weightLb: 480 },
+      { name: "Cargo Pod", weightLb: 380 },
+    ],
+    weights: null,
+    source: "replay",
+    stage: "departure",
+    checkedAt: "",
+  });
+  expect(fixtureCheck.loadedKg).toBe(830.1);
+  const strip = page.getByTestId("mission-strip");
+  const preview = strip.getByTestId("payload-check");
+  await expect(preview).toHaveAttribute("data-stage", "preview");
+  await expect(preview).toHaveAttribute("data-source", "replay");
+  await expect(preview).toHaveAttribute("data-status", fixtureCheck.status);
+  await expect(preview.getByText("REPLAY")).toBeVisible();
+  await expect(strip.getByTestId("payload-check-numbers")).toContainText(
+    `cargo ${job.weightKg.toLocaleString("en-US")} kg`,
+  );
+  const mismatch = fixtureCheck.status === "underloaded";
+
   // Wait for delivery (next block-out from KMEM, then arrival at KATL).
   let mission: MissionLite | undefined;
   await expect
@@ -106,10 +136,19 @@ test("accept → load → fly (replay) → deliver: payout in the API and the lo
     estimate: false,
     landingGrade: "B",
     lateMin: 0,
+    payloadMismatch: mismatch,
   }).total;
   expect(mission?.landingGrade).toBe("B");
+  expect(mission?.payloadCheck).toMatchObject({
+    stage: "departure",
+    source: "replay",
+    status: fixtureCheck.status,
+    loadedKg: 830.1,
+  });
   expect(mission?.payout?.total).toBe(expected);
-  expect(mission?.payout?.total).toBe(job.payoutEstimate);
+  // A matching payload pays exactly the board estimate; an underloaded one loses bonuses.
+  if (mismatch) expect(mission?.payout?.total).toBeLessThan(job.payoutEstimate);
+  else expect(mission?.payout?.total).toBe(job.payoutEstimate);
 
   const log = (await (await request.get("/api/logbook", { headers: auth })).json()) as {
     flights: Array<{
@@ -166,10 +205,15 @@ test("accept → load → fly (replay) → deliver: payout in the API and the lo
   await page.goto("/logbook");
   const formatted = `$${expected.toLocaleString("en-US")}`;
   await expect(page.getByTestId("logbook-payout").filter({ hasText: formatted })).toHaveCount(1);
+  const row = page.getByTestId("logbook-row").filter({ hasText: formatted });
+  const pill = row.getByTestId("payload-check-pill");
+  await expect(pill).toHaveAttribute("data-status", fixtureCheck.status);
+  await expect(pill).toHaveAttribute("data-source", "replay");
+  await expect(pill.getByText("REPLAY")).toBeVisible();
   await expect(page.getByTestId("export-csv")).toBeEnabled();
   const csv = await request.get("/api/export/csv", { headers: auth });
   expect(csv.status()).toBe(200);
-  expect(await csv.text()).toContain(`,delivered,${expected}`);
+  expect(await csv.text()).toContain(`,delivered,${expected},${fixtureCheck.status}`);
 });
 
 test("cargo /api routes require the bearer token", async ({ request }) => {

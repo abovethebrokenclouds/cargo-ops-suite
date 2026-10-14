@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { PayoutBreakdown } from "@/components/cargo/PayoutBreakdown";
 import { MetricTile } from "@/components/dashboard/MetricTile";
 import { Panel } from "@/components/dashboard/Panel";
+import { PayloadCheckLine, PayloadCheckPill } from "@/components/cargo/PayloadCheck";
 import { SourceTag } from "@/components/status/SourceTag";
 import { TrackMap } from "@/components/logbook/TrackMap";
 import { useLogbook, useTrack, type LogbookEntry } from "@/lib/economy/logbook";
@@ -36,7 +37,17 @@ export const Route = createFileRoute("/logbook")({
   component: Logbook,
 });
 
-const columns = ["Date", "Route", "Aircraft", "Distance", "Block", "Landing", "Payout", "Status"];
+const columns = [
+  "Date",
+  "Route",
+  "Aircraft",
+  "Distance",
+  "Block",
+  "Landing",
+  "Payout",
+  "Payload check",
+  "Status",
+];
 
 const exportButton =
   "inline-flex items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary/70 disabled:cursor-not-allowed disabled:text-muted-foreground disabled:opacity-60";
@@ -187,7 +198,7 @@ function Logbook() {
             </p>
           ) : null}
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[48rem] text-left text-sm" data-testid="logbook-table">
+            <table className="w-full min-w-[54rem] text-left text-sm" data-testid="logbook-table">
               <thead>
                 <tr className="border-b border-border">
                   {columns.map((c) => (
@@ -231,6 +242,9 @@ function Logbook() {
                     </td>
                     <td className="px-5 py-3 font-tabular md:px-6" data-testid="logbook-payout">
                       {e.mission?.payout != null ? formatUsd(e.mission.payout) : EMPTY}
+                    </td>
+                    <td className="px-5 py-3 md:px-6" data-testid="logbook-payload-check">
+                      {e.mission ? <PayloadCheckPill check={e.mission.payloadCheck} /> : EMPTY}
                     </td>
                     <td className={cn("px-5 py-3 text-xs md:px-6", statusTone(e))}>
                       {e.mission ? `${e.mission.status} · ${e.status}` : e.status}
@@ -308,6 +322,7 @@ function Logbook() {
                     </div>
                   ))}
                 </dl>
+                <PayloadCheckLine check={selected.mission?.payloadCheck} className="mt-4" />
               </div>
               <div className="flex flex-col gap-3">
                 {mission?.payout ? (
