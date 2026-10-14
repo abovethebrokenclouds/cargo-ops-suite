@@ -10,7 +10,12 @@ import { parseTaf } from "./taf";
 
 type Change =
   | { kind: "FM"; at: number; body: string }
-  | { kind: "BECMG" | "TEMPO" | "PROB30" | "PROB40" | "PROB30 TEMPO"; at: number; to: number; body: string };
+  | {
+      kind: "BECMG" | "TEMPO" | "PROB30" | "PROB40" | "PROB30 TEMPO";
+      at: number;
+      to: number;
+      body: string;
+    };
 
 interface Template {
   base: string;

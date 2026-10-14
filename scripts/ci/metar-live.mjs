@@ -62,8 +62,10 @@ ids = W.normalizeStations(ids);
 if (ids.length === 0) usage("No valid station ids");
 
 const inCi = !!process.env["GITHUB_ACTIONS"];
-const warn = (m) => console.log(inCi ? `::warning title=Weather live check::${m}` : `WARNING: ${m}`);
-const errorLine = (m) => console.log(inCi ? `::error title=Weather live check::${m}` : `ERROR: ${m}`);
+const warn = (m) =>
+  console.log(inCi ? `::warning title=Weather live check::${m}` : `WARNING: ${m}`);
+const errorLine = (m) =>
+  console.log(inCi ? `::error title=Weather live check::${m}` : `ERROR: ${m}`);
 
 // ---- fixture file: the API array, or the hand-made wrapper { _comment, request, response } ----
 
@@ -126,7 +128,9 @@ async function fetchWithRetries(kind) {
     const transient = notes.some((t) => TRANSIENT.test(t));
     if (!transient) break;
     if (n === 3) {
-      errorLine(`aviationweather.gov (${kind}) still failing after 3 attempts: ${notes.join(" | ")}`);
+      errorLine(
+        `aviationweather.gov (${kind}) still failing after 3 attempts: ${notes.join(" | ")}`,
+      );
       process.exit(2);
     }
     const wait = 5_000 * 2 ** (n - 1);
@@ -137,7 +141,9 @@ async function fetchWithRetries(kind) {
   console.log(`\n===== ${kind.toUpperCase()} =====`);
   console.log(`Request: ${url}`);
   console.log(`HTTP status: ${status}`);
-  console.log(`----- BEGIN RAW ${kind.toUpperCase()} RESPONSE (${file ? `file ${file}` : "live"}) -----`);
+  console.log(
+    `----- BEGIN RAW ${kind.toUpperCase()} RESPONSE (${file ? `file ${file}` : "live"}) -----`,
+  );
   console.log(rawText);
   console.log(`----- END RAW ${kind.toUpperCase()} RESPONSE -----`);
   return result;
@@ -197,7 +203,8 @@ async function checkMetar() {
     if (!Number.isFinite(t)) fail(`${id}: no observation time`);
     else if (now - t > MAX_AGE_MS) fail(`${id}: observation ${r.observedAt} older than 6 h`);
     else if (t - now > 10 * 60_000) fail(`${id}: observation ${r.observedAt} is in the future`);
-    if (!W.isFlightCategory(r.category)) fail(`${id}: category ${r.category} not VFR/MVFR/IFR/LIFR`);
+    if (!W.isFlightCategory(r.category))
+      fail(`${id}: category ${r.category} not VFR/MVFR/IFR/LIFR`);
     if (r.wind) {
       if (typeof r.wind.speedKt !== "number" || r.wind.speedKt < 0)
         fail(`${id}: bad wind ${JSON.stringify(r.wind)}`);
@@ -217,7 +224,9 @@ async function checkMetar() {
     const parsed = W.parseMetar(r.rawText, new Date(now));
     const ours = parsed?.category ?? null;
     if (W.isFlightCategory(awcCat) && ours && awcCat !== ours) {
-      warn(`${id}: parser category ${ours} disagrees with AWC fltCat ${awcCat} — rawOb: ${r.rawText}`);
+      warn(
+        `${id}: parser category ${ours} disagrees with AWC fltCat ${awcCat} — rawOb: ${r.rawText}`,
+      );
     }
     rows.push({
       station: id,

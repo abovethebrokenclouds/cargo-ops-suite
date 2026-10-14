@@ -90,7 +90,10 @@ export function resolveTafTime(
     const probe = new Date(Date.UTC(y, m, day));
     if (probe.getUTCDate() !== day) continue; // day overflowed the month
     const t = new Date(probe.getTime() + hour * HOUR + minute * 60_000);
-    if (!best || Math.abs(t.getTime() - anchor.getTime()) < Math.abs(best.getTime() - anchor.getTime())) {
+    if (
+      !best ||
+      Math.abs(t.getTime() - anchor.getTime()) < Math.abs(best.getTime() - anchor.getTime())
+    ) {
       best = t;
     }
   }

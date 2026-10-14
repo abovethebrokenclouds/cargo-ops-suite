@@ -1,11 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MetarResponse } from "@cargo-ops/weather";
+import type { MetarResponse, TafResponse } from "@cargo-ops/weather";
 
 import { initialSimState, simReducer, type ClientSimState } from "@/lib/sim-state";
 import { setOnlineWeatherEnabled } from "@/lib/settings/weather-settings";
 import { SimConnectionContext, type TransportKind } from "@/lib/transport/useSimConnection";
-import { sampleResponse } from "@/lib/weather/use-metar";
+import { sampleResponse, sampleTafResponse } from "@/lib/weather/use-metar";
 
 import { RouteWeather } from "./RouteWeather";
 
@@ -66,12 +66,69 @@ describe("RouteWeather", () => {
       if (s.report) s.report = { ...s.report, origin: "live" };
       s.note = null;
     }
-    connectorJson.mockResolvedValue(live);
+    const liveTaf: TafResponse = sampleTafResponse(["KATL"]);
+    liveTaf.mode = "online";
+    liveTaf.onlineAllowed = true;
+    for (const s of liveTaf.stations) {
+      if (s.report) s.report = { ...s.report, origin: "live" };
+      s.note = null;
+    }
+    connectorJson.mockImplementation(async (path: string) =>
+      path.startsWith("/api/weather/taf") ? liveTaf : live,
+    );
     renderWeather(replayState(), "live");
     await waitFor(() => expect(station("KMEM")).toHaveAttribute("data-origin", "live"));
     expect(connectorJson).toHaveBeenCalledWith("/api/weather/metar?ids=KMEM,KATL&online=1");
+    expect(connectorJson).toHaveBeenCalledWith("/api/weather/taf?ids=KATL&online=1");
+    expect(connectorJson).toHaveBeenCalledTimes(2);
     expect(within(station("KMEM")).getByText("LIVE")).toBeInTheDocument();
     expect(screen.getByTestId("weather-status")).toHaveTextContent(/aviationweather\.gov/);
+    const taf = screen.getByTestId("taf-timeline");
+    await waitFor(() => expect(taf).toHaveAttribute("data-origin", "live"));
+    expect(within(taf).getByTestId("taf-source")).toHaveTextContent(/TAF: NOAA Aviation Weather/);
+  });
+
+  it("demo: destination TAF timeline labelled SAMPLE with categories per period", () => {
+    renderWeather(initialSimState, "demo");
+    const taf = screen.getByTestId("taf-timeline");
+    expect(taf).toHaveAttribute("data-station", "KATL");
+    expect(taf).toHaveAttribute("data-origin", "sample");
+    expect(within(taf).getByText("SAMPLE")).toBeInTheDocument();
+    expect(within(taf).getByTestId("taf-source")).toHaveTextContent(/not a real forecast/);
+    const periods = within(taf).getAllByTestId("taf-period");
+    expect(periods.map((p) => p.getAttribute("data-kind"))).toEqual([
+      "BASE",
+      "TEMPO",
+      "FM",
+      "BECMG",
+    ]);
+    expect(periods.map((p) => p.getAttribute("data-category"))).toEqual([
+      "MVFR",
+      "IFR",
+      "VFR",
+      "VFR",
+    ]);
+    expect(within(taf).getAllByTestId("taf-segment")).toHaveLength(2);
+    // No ETA given: no marker, no ETA line.
+    expect(within(taf).queryByTestId("taf-eta-marker")).toBeNull();
+    expect(within(taf).queryByTestId("taf-eta")).toBeNull();
+    fireEvent.click(within(taf).getByTestId("taf-raw-toggle"));
+    expect(within(taf).getByTestId("taf-raw")).toHaveTextContent(/^TAF KATL \d{6}Z \d{4}\/\d{4} /);
+    expect(connectorJson).not.toHaveBeenCalled();
+  });
+
+  it("forecast={false} shows no TAF and asks for none", async () => {
+    connectorJson.mockResolvedValue(sampleResponse(["KMEM", "KATL"]));
+    render(
+      <SimConnectionContext.Provider
+        value={{ state: replayState(), send: () => {}, transportKind: "live" }}
+      >
+        <RouteWeather origin="KMEM" destination="KATL" forecast={false} />
+      </SimConnectionContext.Provider>,
+    );
+    await waitFor(() => expect(connectorJson).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("taf-timeline")).toBeNull();
+    expect(connectorJson).toHaveBeenCalledWith("/api/weather/metar?ids=KMEM,KATL&online=1");
   });
 
   it("connector: the online-weather switch off sends online=0 and says so", async () => {

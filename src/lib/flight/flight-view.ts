@@ -116,6 +116,15 @@ const EMPTY_ROUTE: RouteView = {
   flownNm: null,
 };
 
+/**
+ * Wall-clock ETA (ms, rounded to the minute) from the current time and the ETE the plan
+ * domain reports; null when either is unknown. Used for the destination forecast marker.
+ */
+export function arrivalEtaMs(now: number | null, eteMinutes: number | null): number | null {
+  if (now === null || !finite(eteMinutes) || eteMinutes < 0) return null;
+  return Math.round((now + eteMinutes * 60_000) / 60_000) * 60_000;
+}
+
 /** Route progress from the plan domain. Without a plan domain every field is null. */
 export function routeView(state: ClientSimState): RouteView {
   const plan = state.sim.plan;
