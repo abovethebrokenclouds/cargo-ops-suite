@@ -83,3 +83,24 @@ jobs:
           path: |
             playwright-report
             test-results
+
+  metar-live:
+    # aviationweather.gov is unreachable from the cloud dev container but reachable from
+    # GitHub runners: fetch real METARs through the connector's own fetch + mapping code and
+    # print the raw JSON (the job log is the recorded response). See docs/VERIFICATION.md.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: connector/package-lock.json
+      - name: Build connector
+        working-directory: connector
+        run: npm ci && npm run build
+      - name: Self-check against the hand-made fixture
+        run: node scripts/ci/metar-live.mjs --file connector/fixtures/awc-metar.handmade.json --ids KMEM,KATL,KSEA,KORD,EGLL
+      - name: Live METAR check (KMEM, KATL, EGLL, KJFK)
+        run: node scripts/ci/metar-live.mjs --ids KMEM,KATL,EGLL,KJFK
