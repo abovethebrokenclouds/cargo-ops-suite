@@ -21,6 +21,12 @@ import {
 } from "node-simconnect";
 import type { SimStatePatch } from "../protocol";
 import { AI_SAMPLE_INTERVAL_MS, SimConnectAiSampler, type AiTarget } from "./ai-traffic";
+import {
+  FACILITY_TIMEOUT_MS,
+  SimConnectFacilities,
+  type FacilityRequester,
+  type FacilityResult,
+} from "./facilities";
 import { fastIntervalMs, mapFast, mapSlow, pausedFromEx1, simNameFor } from "./mapping";
 import { PauseState } from "./pause-state";
 import {
@@ -130,9 +136,11 @@ export interface SimConnectSourceOptions {
   aiSampleIntervalMs?: number;
   /** Stuck-pause rule: continuous movement before a stuck flag is ignored, ms (tests). */
   stuckPauseMs?: number;
+  /** How long one facility request may take before it counts as unanswered, ms (tests). */
+  facilityTimeoutMs?: number;
 }
 
-export class SimConnectSource implements SimSource {
+export class SimConnectSource implements SimSource, FacilityRequester {
   readonly mode = "live" as const;
   readonly frameSource = "sim" as const;
 
@@ -142,6 +150,7 @@ export class SimConnectSource implements SimSource {
   private readonly retryMinMs: number;
   private readonly retryMaxMs: number;
   private readonly aiSampleIntervalMs: number;
+  private readonly facilityTimeoutMs: number;
   private handle: SimConnectConnection | null = null;
   private info: SimLinkInfo = { connected: false };
   private running = false;
@@ -174,6 +183,8 @@ export class SimConnectSource implements SimSource {
   private aiTimer: NodeJS.Timeout | null = null;
   private aiTargets: () => AiTarget[] = () => [];
   private userPosition: { lat: number; lon: number } | null = null;
+  /** MSFS facilities override: per-ICAO airport requests on this connection (sim/facilities.ts). */
+  private facilities: SimConnectFacilities | null = null;
   /** Latest values the sim reported but the protocol has no domain for (diagnostics). */
   zulu: string | undefined;
 
@@ -188,6 +199,7 @@ export class SimConnectSource implements SimSource {
     this.retryMinMs = options.retryMinMs ?? RETRY_MIN_MS;
     this.retryMaxMs = options.retryMaxMs ?? RETRY_MAX_MS;
     this.aiSampleIntervalMs = options.aiSampleIntervalMs ?? AI_SAMPLE_INTERVAL_MS;
+    this.facilityTimeoutMs = options.facilityTimeoutMs ?? FACILITY_TIMEOUT_MS;
     this.retryDelay = this.retryMinMs;
     this.pause = new PauseState(
       options.stuckPauseMs !== undefined ? { stuckPauseMs: options.stuckPauseMs } : {},
@@ -204,6 +216,15 @@ export class SimConnectSource implements SimSource {
 
   setAiTargetsProvider(provider: () => AiTarget[]): void {
     this.aiTargets = provider;
+  }
+
+  /**
+   * Airport data for one ICAO from the connected simulator's facility database (plan §6.1).
+   * Resolves "offline" without a connection; never rejects.
+   */
+  requestAirportFacility(icao: string): Promise<FacilityResult> {
+    if (!this.handle || !this.facilities) return Promise.resolve({ status: "offline" });
+    return this.facilities.request(icao.trim().toUpperCase());
   }
 
   start(): void {
@@ -289,6 +310,16 @@ export class SimConnectSource implements SimSource {
     handle.on("event", (ev) => this.onSystemEvent(ev.clientEventId, ev.data));
     handle.on("eventEx1", (ev) => this.onSystemEvent(ev.clientEventId, ev.data[0]));
     handle.on("eventFilename", (ev) => this.onSystemEvent(ev.clientEventId, 0, ev.fileName));
+    const facilities = new SimConnectFacilities(
+      handle,
+      () => this.allocId(),
+      this.log,
+      () => this.info.name,
+      this.facilityTimeoutMs,
+    );
+    this.facilities = facilities;
+    handle.on("facilityData", (recv) => facilities.onData(recv));
+    handle.on("facilityDataEnd", (recv) => facilities.onEnd(recv));
     handle.on("systemState", (state) => {
       if (state.requestID !== SYSTEM_STATE_SIM_REQUEST || this.handle !== handle) return;
       this.log("info", `System state "Sim" = ${state.dataInteger}`);
@@ -369,11 +400,15 @@ export class SimConnectSource implements SimSource {
     this.aiTimer = null;
     this.aiSampler = null;
     this.userPosition = null;
+    this.facilities?.dispose();
+    this.facilities = null;
     if (handle) {
       handle.removeAllListeners("quit");
       handle.removeAllListeners("close");
       handle.removeAllListeners("simObjectData");
       handle.removeAllListeners("simObjectDataByType");
+      handle.removeAllListeners("facilityData");
+      handle.removeAllListeners("facilityDataEnd");
       safeClose(handle);
     }
     if (this.info.connected) {
@@ -452,6 +487,7 @@ export class SimConnectSource implements SimSource {
   }
 
   private onException(ex: RecvException): void {
+    if (this.facilities?.onException(ex)) return;
     const source = this.sendIds.get(ex.sendId);
     if (!source) {
       this.log("warn", `SimConnect exception ${ex.exceptionName} (send ${ex.sendId})`);

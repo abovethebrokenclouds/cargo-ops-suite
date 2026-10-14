@@ -1,5 +1,6 @@
 import type { EventName, Mode, SimState, SimStatePatch, Source } from "../protocol";
 import type { AiObjectSample, AiTarget } from "./ai-traffic";
+import type { FacilityResult } from "./facilities";
 
 /** What the sim layer tells the core. Never synthesised: every update has a real origin. */
 export type SimUpdate =
@@ -51,6 +52,8 @@ export interface SimSource {
   stop(): Promise<void>;
   /** P5 part 2: where to watch AI traffic (the player's FBO airports); live sources only. */
   setAiTargetsProvider?(provider: () => AiTarget[]): void;
+  /** MSFS facilities override: airport data for one ICAO from the sim; live sources only. */
+  requestAirportFacility?(icao: string): Promise<FacilityResult>;
 }
 
 /** Tiny listener set shared by sources. */

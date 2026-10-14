@@ -22,6 +22,7 @@ import { loadAirportsData } from "../core/economy/airports-data";
 import { SimbriefService } from "../core/simbrief";
 import { dataApi } from "../server/data-api";
 import { WeatherService } from "../core/weather";
+import { FacilitiesService } from "../core/facilities";
 import { weatherApi } from "../server/weather-api";
 import type { WeatherMode } from "../weather";
 import { BACKUP_CHECK_INTERVAL_MS, BackupManager, DEFAULT_BACKUP_KEEP } from "../storage/backups";
@@ -210,7 +211,20 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
       log("warn", `Job boards disabled: ${err instanceof Error ? err.message : err}`);
     }
   }
+  // MSFS facilities override: only a live source can answer; the cache lives in the live
+  // database (a replay never asks and never reads it).
+  const askSim = source.requestAirportFacility?.bind(source);
+  const facilities =
+    source.mode === "live"
+      ? new FacilitiesService({
+          requester: askSim ? { requestAirportFacility: askSim } : null,
+          db: storage.db,
+          log,
+          ...(options.now ? { now: options.now } : {}),
+        })
+      : null;
   const session = new ConnectorSession(source, log, {
+    facilities,
     repo: flights,
     economy: {
       repo: economy,

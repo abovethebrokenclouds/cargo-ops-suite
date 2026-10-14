@@ -2,7 +2,8 @@
 //
 // A small TCP server that speaks enough of the SimConnect binary wire protocol for the
 // connector's client (node-simconnect 4.2.1 over IPv4) to open a session, define data,
-// request it, subscribe to system events and receive scripted frames. It exists so the
+// request it, subscribe to system events, receive scripted frames and answer per-ICAO
+// airport facility requests (members of the airport and runway blocks). It exists so the
 // SimConnect code path can be exercised in CI without Microsoft Flight Simulator.
 //
 // It is NOT MSFS. It never computes physics, never converts units (scenario values are
@@ -35,6 +36,9 @@ export const FN = {
   SUBSCRIBE_TO_SYSTEM_EVENT: 0x17,
   UNSUBSCRIBE_FROM_SYSTEM_EVENT: 0x18,
   REQUEST_SYSTEM_STATE: 0x35,
+  ADD_TO_FACILITY_DEFINITION: 0x45,
+  REQUEST_FACILITY_DATA: 0x46,
+  REQUEST_FACILITY_DATA_EX1: 0x4a,
 } as const;
 
 /** Server RECV ids. */
@@ -48,6 +52,8 @@ export const RECV = {
   SIMOBJECT_DATA_BYTYPE: 9,
   SYSTEM_STATE: 15,
   EVENT_EX1: 27,
+  FACILITY_DATA: 28,
+  FACILITY_DATA_END: 29,
 } as const;
 
 /** SIMCONNECT_EXCEPTION values used here. */
@@ -130,6 +136,63 @@ const FILENAME_EVENTS = new Set([
   "flightplanactivated",
 ]);
 
+// ---- facilities ----
+
+/** SIMCONNECT_FACILITY_DATA_TYPE values the emulator sends. */
+export const FACILITY_DATA_TYPE = { AIRPORT: 0, RUNWAY: 1 } as const;
+
+type FacilityScope = "airport" | "runway";
+
+/**
+ * Members the emulator knows, per block, with the data type the SDK documents for each
+ * (SimConnect_AddToFacilityDefinition, airport and runway pages; units: degrees, metres,
+ * enums). Values are sent in the order the client added them, packed without padding.
+ * Only a subset of the SDK lists; any other name is refused like an unknown one.
+ */
+const FACILITY_MEMBERS: Record<FacilityScope, Record<string, number>> = {
+  airport: {
+    LATITUDE: DATATYPE.FLOAT64,
+    LONGITUDE: DATATYPE.FLOAT64,
+    ALTITUDE: DATATYPE.FLOAT64,
+    MAGVAR: DATATYPE.FLOAT32,
+    NAME: DATATYPE.STRING32,
+    NAME64: DATATYPE.STRING64,
+    ICAO: DATATYPE.STRING8,
+    REGION: DATATYPE.STRING8,
+    N_RUNWAYS: DATATYPE.INT32,
+  },
+  runway: {
+    LATITUDE: DATATYPE.FLOAT64,
+    LONGITUDE: DATATYPE.FLOAT64,
+    ALTITUDE: DATATYPE.FLOAT64,
+    HEADING: DATATYPE.FLOAT32,
+    LENGTH: DATATYPE.FLOAT32,
+    WIDTH: DATATYPE.FLOAT32,
+    PATTERN_ALTITUDE: DATATYPE.FLOAT32,
+    SLOPE: DATATYPE.FLOAT32,
+    TRUE_SLOPE: DATATYPE.FLOAT32,
+    SURFACE: DATATYPE.INT32,
+    PRIMARY_NUMBER: DATATYPE.INT32,
+    PRIMARY_DESIGNATOR: DATATYPE.INT32,
+    SECONDARY_NUMBER: DATATYPE.INT32,
+    SECONDARY_DESIGNATOR: DATATYPE.INT32,
+  },
+};
+
+/** One airport in the emulated facility database (member values in SDK units). */
+export interface EmulatedAirport {
+  /** Airport members, e.g. { LATITUDE: 35.04, ALTITUDE: 104 (metres), NAME64: "..." }. */
+  values: Record<string, SimValue>;
+  /** Runway members per runway, e.g. { LENGTH: 3389 (metres), SURFACE: 4 }. */
+  runways?: Array<Record<string, SimValue>>;
+}
+
+interface FacilityMember {
+  scope: FacilityScope;
+  name: string;
+  type: number;
+}
+
 // ---- profiles ----
 
 export type SimProfile = "msfs2024" | "msfs2020";
@@ -211,6 +274,17 @@ export interface EmulatorOptions {
   simRunning?: boolean;
   aircraftPath?: string;
   flightPath?: string;
+  /** Airport facility database keyed by ICAO (upper case). */
+  facilities?: Record<string, EmulatedAirport>;
+  /** Facility member names the "simulator" refuses (exception against that call). */
+  facilityReject?: string[];
+  /**
+   * ASSUMPTION (not documented): how an unknown ICAO is answered. "end" (default): only
+   * FACILITY_DATA_END; "exception": an exception against the request and nothing else.
+   */
+  facilityMiss?: "end" | "exception";
+  /** ICAOs that are never answered (the client's timeout path). */
+  facilitySilent?: string[];
 }
 
 /** One decoded client packet (recorded for assertions). */
@@ -331,6 +405,9 @@ class EmulatedConnection {
   readonly requests = new Map<number, ActiveRequest>();
   /** Lower-case system event name → client event id. */
   readonly subscriptions = new Map<string, number>();
+  /** Facility definitions: accepted members in order, plus the open-block stack. */
+  readonly facilityDefs = new Map<number, { members: FacilityMember[]; open: FacilityScope[] }>();
+  private nextUniqueRequest = 1;
   closed = false;
 
   constructor(
@@ -519,10 +596,133 @@ class EmulatedConnection {
         this.replySystemState(requestId, state, sendId);
         return;
       }
+      case FN.ADD_TO_FACILITY_DEFINITION: {
+        const defineId = body.readUInt32LE(0);
+        const name = readFixedString(body, 4, 256);
+        record({ defineId, name });
+        this.addFacilityMember(defineId, name, sendId);
+        return;
+      }
+      case FN.REQUEST_FACILITY_DATA:
+      case FN.REQUEST_FACILITY_DATA_EX1: {
+        const defineId = body.readUInt32LE(0);
+        const requestId = body.readUInt32LE(4);
+        const icao = readFixedString(body, 8, 16);
+        const region = readFixedString(body, 24, 4);
+        record({ defineId, requestId, icao, region });
+        if (!this.facilityDefs.has(defineId)) {
+          this.sendException(EXCEPTION.UNRECOGNIZED_ID, sendId, 2);
+          return;
+        }
+        setImmediate(() => this.replyFacility(defineId, requestId, icao, sendId));
+        return;
+      }
       default:
         record({});
         this.emu.unhandled.push(fn);
     }
+  }
+
+  private addFacilityMember(defineId: number, raw: string, sendId: number): void {
+    const def = this.facilityDefs.get(defineId) ?? { members: [], open: [] };
+    this.facilityDefs.set(defineId, def);
+    const name = raw.trim().toUpperCase();
+    const refuse = () => this.sendException(EXCEPTION.ERROR, sendId, 3);
+    if (this.emu.options.facilityReject?.some((r) => r.toUpperCase() === name)) return refuse();
+    const marker = /^(OPEN|CLOSE) (AIRPORT|RUNWAY)$/.exec(name);
+    if (marker) {
+      const scope = marker[2] === "AIRPORT" ? "airport" : "runway";
+      const top = def.open[def.open.length - 1];
+      if (marker[1] === "OPEN") {
+        // A runway block only inside an airport block; an airport block only at the top.
+        if (scope === "runway" ? top !== "airport" : top !== undefined) return refuse();
+        def.open.push(scope);
+      } else {
+        if (top !== scope) return refuse();
+        def.open.pop();
+      }
+      return;
+    }
+    const scope = def.open[def.open.length - 1];
+    const type = scope ? FACILITY_MEMBERS[scope][name] : undefined;
+    if (!scope || type === undefined) return refuse();
+    def.members.push({ scope, name, type });
+  }
+
+  private facilityRecord(
+    scope: FacilityScope,
+    members: FacilityMember[],
+    values: Record<string, SimValue>,
+  ): Buffer {
+    const upper = upperKeys(values);
+    return Buffer.concat(
+      members.filter((m) => m.scope === scope).map((m) => encodeDatum(m.type, upper[m.name])),
+    );
+  }
+
+  private replyFacility(defineId: number, requestId: number, rawIcao: string, sendId: number) {
+    const def = this.facilityDefs.get(defineId);
+    if (!def || this.closed) return;
+    const icao = rawIcao.trim().toUpperCase();
+    const emu = this.emu;
+    if (emu.options.facilitySilent?.some((s) => s.toUpperCase() === icao)) return;
+    const airport = emu.facilities[icao];
+    if (!airport) {
+      if (emu.options.facilityMiss === "exception") {
+        this.sendException(EXCEPTION.ERROR, sendId, 3);
+      } else {
+        this.send(RECV.FACILITY_DATA_END, u32(requestId));
+      }
+      return;
+    }
+    const header = (
+      unique: number,
+      parent: number,
+      type: number,
+      listItem: boolean,
+      index: number,
+      size: number,
+    ) =>
+      Buffer.concat([
+        u32(requestId),
+        u32(unique),
+        u32(parent),
+        u32(type),
+        u32(listItem ? 1 : 0),
+        u32(index),
+        u32(size),
+      ]);
+    const airportUnique = this.nextUniqueRequest++;
+    if (def.members.some((m) => m.scope === "airport") || def.members.length === 0) {
+      this.send(
+        RECV.FACILITY_DATA,
+        Buffer.concat([
+          header(airportUnique, 0, FACILITY_DATA_TYPE.AIRPORT, false, 0, 1),
+          this.facilityRecord("airport", def.members, airport.values),
+        ]),
+      );
+    }
+    if (def.members.some((m) => m.scope === "runway")) {
+      const runways = airport.runways ?? [];
+      runways.forEach((r, i) => {
+        this.send(
+          RECV.FACILITY_DATA,
+          Buffer.concat([
+            header(
+              this.nextUniqueRequest++,
+              airportUnique,
+              FACILITY_DATA_TYPE.RUNWAY,
+              true,
+              i,
+              runways.length,
+            ),
+            this.facilityRecord("runway", def.members, r),
+          ]),
+        );
+      });
+    }
+    this.send(RECV.FACILITY_DATA_END, u32(requestId));
+    emu.facilityRepliesSent++;
   }
 
   private onOpen(protocol: number, appName: string, sendId: number): void {
@@ -730,6 +930,9 @@ export class SimConnectEmulator extends EventEmitter {
   /** Framing errors (should stay empty). */
   readonly protocolErrors: string[] = [];
   framesSent = 0;
+  facilityRepliesSent = 0;
+  /** Airport facility database (see EmulatorOptions.facilities). */
+  facilities: Record<string, EmulatedAirport>;
   connectionsAccepted = 0;
   private readonly server: Server;
   private readonly connections = new Set<EmulatedConnection>();
@@ -751,6 +954,9 @@ export class SimConnectEmulator extends EventEmitter {
     this.aircraftPath = options.aircraftPath ?? "SimObjects\\Airplanes\\Emulated\\aircraft.cfg";
     this.flightPath = options.flightPath ?? "flights\\other\\emulated.FLT";
     this.rejects = (options.reject ?? []).map((r) => (typeof r === "string" ? { name: r } : r));
+    this.facilities = Object.fromEntries(
+      Object.entries(options.facilities ?? {}).map(([k, v]) => [k.toUpperCase(), v]),
+    );
     this.server = createServer((socket) => this.onSocket(socket));
   }
 
@@ -817,6 +1023,17 @@ export class SimConnectEmulator extends EventEmitter {
           (connection === undefined || p.connection === connection),
       )
       .map((p) => String(p.fields["name"]));
+  }
+
+  /** ICAOs of every facility request received (optionally for one connection). */
+  facilityRequests(connection?: number): string[] {
+    return this.packets
+      .filter(
+        (p) =>
+          (p.fn === FN.REQUEST_FACILITY_DATA || p.fn === FN.REQUEST_FACILITY_DATA_EX1) &&
+          (connection === undefined || p.connection === connection),
+      )
+      .map((p) => String(p.fields["icao"]));
   }
 
   /** Merge new user-aircraft values; periodic requests pick them up on their next frame. */
