@@ -68,6 +68,13 @@ export function MissionStrip({
             <span className="font-tabular">{formatInt(mission.payloadKg)} kg</span> ·{" "}
             {mission.distanceNm} nm
           </p>
+          {mission.transitJobIds?.length ? (
+            <p className="mt-1 text-xs text-accent" data-testid="mission-strip-transit">
+              Transit leg: {mission.transitJobIds.length} job
+              {mission.transitJobIds.length === 1 ? " goes" : "s go"} beyond {mission.destination}
+              {" · stored there, paid on final delivery"}
+            </p>
+          ) : null}
           {mission.startBlocked && mission.status === "loaded" ? (
             <p className="mt-1 text-xs text-warning" data-testid="mission-start-blocked">
               Not started: {mission.startBlocked.message}

@@ -6,6 +6,7 @@ import { SourceTag, StaleTag } from "@/components/status/SourceTag";
 import { isSessionUp, isStale, routeView } from "@/lib/flight/flight-view";
 import { useAirportLookup } from "@/lib/economy/board";
 import { useCompanyView } from "@/lib/economy/company";
+import { transitPins } from "@/lib/economy/transit-pins";
 import { EMPTY, formatDegrees, formatInt, formatMinutes } from "@/lib/format";
 import { loadAirports, nearbyAirports, type AirportIndex } from "@/lib/map/airports";
 import { greatCirclePoints, haversineNm } from "@/lib/map/geo";
@@ -151,8 +152,16 @@ export function MapView() {
         title: `${e.label} at ${a.name}: payouts +${e.payoutPct} %, fuel +${e.fuelPct} %`,
       });
     }
+    // Transit cargo stored at intermediate airports (connector data only, never in demo).
+    out.push(
+      ...transitPins(
+        state.sim.jobs?.inTransit ?? [],
+        state.sim.company?.clock?.gameMs ?? null,
+        lookup,
+      ),
+    );
     return out;
-  }, [fbos, demand, lookup]);
+  }, [fbos, demand, lookup, state.sim.jobs, state.sim.company?.clock?.gameMs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -315,7 +324,7 @@ export function MapView() {
             <RouteIcon className="size-4" aria-hidden="true" />
           </ControlButton>
           <ControlButton
-            label="FBOs and demand events"
+            label="FBOs, demand events and transit cargo"
             pressed={showPins}
             onClick={() => setShowPins((v) => !v)}
             plain
