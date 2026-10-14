@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ClipboardList, Plane, Store, Warehouse, Wrench } from "lucide-react";
+import { ClipboardList, Plane, Store, UserRound, Warehouse, Wrench } from "lucide-react";
 import { useState } from "react";
 
 import type { FleetAircraft } from "@cargo-ops/protocol";
@@ -12,6 +12,7 @@ import { DemoTag, Panel } from "@/components/dashboard/Panel";
 import { AircraftMarket } from "@/components/fleet/AircraftMarket";
 import { SystemsPanel } from "@/components/fleet/Airworthiness";
 import { FleetCard } from "@/components/fleet/FleetCard";
+import { HiredPilots } from "@/components/fleet/HiredPilots";
 import { MaintenanceBoard } from "@/components/fleet/MaintenanceBoard";
 import { UsedMarket } from "@/components/fleet/UsedMarket";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -46,7 +47,10 @@ function Fleet() {
   const { state } = useSimConnection();
   const command = useCommand();
   const lookup = useAirportLookup();
-  const { company, fleet, loans, market, source, connector, demo } = useCompanyView(state, lookup);
+  const { company, fleet, loans, market, pilots, source, connector, demo } = useCompanyView(
+    state,
+    lookup,
+  );
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState("hangar");
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -246,6 +250,14 @@ function Fleet() {
             <TabsTrigger value="new" className="gap-1.5" data-testid="tab-new-aircraft">
               <Store className="size-4" aria-hidden="true" /> New aircraft
             </TabsTrigger>
+            <TabsTrigger value="pilots" className="gap-1.5" data-testid="tab-hired-pilots">
+              <UserRound className="size-4" aria-hidden="true" /> Hired pilots
+              {pilots ? (
+                <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                  {pilots.pilots.length}
+                </span>
+              ) : null}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="hangar" className="mt-5">
@@ -363,6 +375,33 @@ function Fleet() {
               <AircraftMarket
                 company={company}
                 loans={loans}
+                source={source}
+                enabled={connector}
+                disabledNote={disabledNote}
+                busy={busy}
+                run={run}
+              />
+            </Panel>
+          </TabsContent>
+
+          <TabsContent value="pilots" className="mt-5">
+            <Panel
+              eyebrow="Simulated operations"
+              title="Hired pilots"
+              icon={UserRound}
+              action={<SourceTag source={pilots ? source : null} />}
+            >
+              {demo ? (
+                <p
+                  className="mb-4 text-sm text-muted-foreground"
+                  data-testid="pilots-disabled-note"
+                >
+                  <DemoTag className="mr-2" />A seeded demo pilot computed in your browser; hiring,
+                  routes and letting go need the connector.
+                </p>
+              ) : null}
+              <HiredPilots
+                pilots={pilots}
                 source={source}
                 enabled={connector}
                 disabledNote={disabledNote}

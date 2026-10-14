@@ -51,6 +51,8 @@ const LEGS: Leg[] = [
 ];
 /** P5 part 2: the demo FBO (bought on day 57 with its fuel farm, then a hangar and ramp 2). */
 export const DEMO_FBO_ICAO = "KLIT";
+/** Hired pilots: on this day a turboprop pilot takes the starter on KMEM ⇄ KBNA (simulated). */
+export const DEMO_PILOT_DAY = 74;
 /** In-game day the demo stops at. */
 export const DEMO_END_DAY = 77.6;
 
@@ -141,7 +143,21 @@ export function buildDemoCompany(lookup: AirportLookup): DemoCompany {
   let used: string | null = null;
   let usedDone = false;
   let fboDone = false;
+  let pilotDone = false;
   for (const leg of LEGS) {
+    if (!pilotDone && leg.day > DEMO_PILOT_DAY && starter) {
+      pilotDone = true;
+      to(DEMO_PILOT_DAY);
+      const hired = book.hirePilot("turboprop");
+      if (hired.ok) {
+        book.assignPilot({
+          pilotId: hired.data.pilot.id,
+          aircraftId: starter.id,
+          destination: "KBNA",
+          served: ["KBNA"],
+        });
+      }
+    }
     if (!fboDone && leg.day > 57) {
       fboDone = true;
       demoFbo(book, to);
