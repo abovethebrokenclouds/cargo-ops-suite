@@ -15,10 +15,11 @@ function end(
   origin: WeatherReportInput["origin"] = "live",
   source: WeatherCheck["source"] = "sim",
   stale = false,
+  station: string = stage === "departure" ? "KMEM" : "KATL",
 ): WeatherCheck {
   return checkWeather({
     stage,
-    station: stage === "departure" ? "KMEM" : "KATL",
+    station,
     report: {
       origin,
       category,
@@ -89,10 +90,18 @@ describe("weather bonus UI", () => {
     expect(screen.getByTestId("weather-bonus-pill")).not.toHaveTextContent("%");
   });
 
-  it("bonuses removed (sim rate): eligible LIFR is shown as withheld", () => {
-    const weather: MissionWeather = { arrival: end("arrival", "LIFR"), bonus: 0 };
+  it("bonuses removed (sim rate): the recorded outcome says withheld, and by what", () => {
+    const weather: MissionWeather = {
+      arrival: end("arrival", "LIFR"),
+      bonus: 0,
+      outcome: "withheld_rate",
+      bonusFrom: "arrival",
+    };
     render(<WeatherBonusLine weather={weather} />);
-    expect(screen.getByTestId("weather-bonus-result")).toHaveTextContent("Weather bonus withheld");
+    const result = screen.getByTestId("weather-bonus-result");
+    expect(result).toHaveTextContent("Weather bonus withheld");
+    expect(result).toHaveTextContent("LIFR at KATL arrival");
+    expect(result).toHaveTextContent("sim rate");
     render(<PayoutBreakdown breakdown={payout(weather, true)} />);
     const cond = document.querySelector('[data-factor="conditions"]') as HTMLElement;
     expect(cond).toHaveTextContent("withheld");
@@ -119,5 +128,75 @@ describe("weather bonus UI", () => {
     expect(within(dep).getByText("STALE")).toBeInTheDocument();
     const arr = line.querySelector('[data-weather-end="Arr"]') as HTMLElement;
     expect(within(arr).queryByText("STALE")).toBeNull();
+  });
+
+  // Final leg KATL → KRDU of a chain KMEM → KATL → KRDU: the payout counted the chain's
+  // ends (KMEM departure on leg 1, KRDU arrival), never the transit stop KATL.
+  const katl = (cat: WeatherReportInput["category"]) =>
+    end("departure", cat, "live", "sim", false, "KATL");
+  const krdu = (cat: WeatherReportInput["category"]) =>
+    end("arrival", cat, "live", "sim", false, "KRDU");
+  const kmem = (cat: WeatherReportInput["category"]) =>
+    end("departure", cat, "live", "sim", false, "KMEM");
+
+  it("transit stop LIFR, chain ends VFR: no IFR/LIFR at the counted ends, not 'withheld'", () => {
+    const weather: MissionWeather = {
+      departure: katl("LIFR"),
+      arrival: krdu("VFR"),
+      bonus: 0,
+      outcome: "no_ifr",
+      chain: { legs: 2, departure: kmem("VFR"), arrival: krdu("VFR") },
+    };
+    render(<WeatherBonusLine weather={weather} />);
+    const result = screen.getByTestId("weather-bonus-result");
+    expect(result).not.toHaveTextContent(/withheld/i);
+    expect(result).not.toHaveTextContent(/sim rate|payload/);
+    expect(result).toHaveTextContent("No weather bonus");
+    expect(result).toHaveTextContent("KMEM departure VFR");
+    expect(result).toHaveTextContent("KRDU arrival VFR");
+    expect(result).toHaveTextContent("KATL is a transit stop");
+    const chain = screen.getByTestId("weather-bonus-chain");
+    expect(chain).toHaveTextContent("KMEM");
+    expect(chain).toHaveTextContent("2 legs");
+  });
+
+  it("chain departure IFR at KMEM: the bonus names KMEM, in the line and the pill", () => {
+    const weather: MissionWeather = {
+      departure: katl("LIFR"),
+      arrival: krdu("VFR"),
+      bonus: 0.05,
+      outcome: "applied",
+      bonusFrom: "departure",
+      chain: { legs: 2, departure: kmem("IFR"), arrival: krdu("VFR") },
+    };
+    render(<WeatherBonusLine weather={weather} />);
+    const result = screen.getByTestId("weather-bonus-result");
+    expect(result).toHaveTextContent("Weather bonus +5 %");
+    expect(result).toHaveTextContent("IFR at KMEM departure");
+    expect(result).toHaveTextContent("first leg of this 2-leg transit chain");
+    render(<WeatherBonusPill weather={weather} />);
+    const pill = screen.getByTestId("weather-bonus-pill");
+    expect(pill).toHaveTextContent("+5 %");
+    expect(pill).toHaveTextContent("KMEM");
+  });
+
+  it("a leg that only carried transit cargo: decided at the final delivery", () => {
+    const weather: MissionWeather = {
+      departure: kmem("IFR"),
+      arrival: end("arrival", "LIFR"),
+      outcome: "in_transit",
+    };
+    render(<WeatherBonusLine weather={weather} />);
+    expect(screen.getByTestId("weather-bonus-result")).toHaveTextContent(
+      /decided at the cargo's final delivery/,
+    );
+  });
+
+  it("older saves without an outcome never claim why a bonus was not paid", () => {
+    const weather: MissionWeather = { departure: katl("LIFR"), arrival: krdu("VFR"), bonus: 0 };
+    render(<WeatherBonusLine weather={weather} />);
+    const result = screen.getByTestId("weather-bonus-result");
+    expect(result).not.toHaveTextContent(/withheld/i);
+    expect(result).toHaveTextContent("No weather bonus was paid on this delivery");
   });
 });
