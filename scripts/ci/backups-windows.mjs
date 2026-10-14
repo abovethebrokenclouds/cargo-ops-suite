@@ -6,7 +6,9 @@
 //   1. the daily backup cargo-ops-YYYYMMDD.db (UTC) is written at connector start
 //   2. "Back up now" (POST /api/backups, what Settings → Data calls) adds -HHMMSS files
 //   3. --backup-keep 2 rotates to the newest 2 files on disk
-//   4. the documented restore steps (stop, copy a backup over cargo-ops.db, delete -wal/-shm,
+//   4. after a restart the new daily file survives rotation even though it sorts before that
+//      day's manual backups (it is the file just written): daily + newest manual remain
+//   5. the documented restore steps (stop, copy a backup over cargo-ops.db, delete -wal/-shm,
 //      start) bring the backed-up career back, while Windows file locking is in play
 //
 //   node scripts/ci/backups-windows.mjs [--port 4322]
@@ -78,6 +80,7 @@ run("backups-windows", async () => {
 
   let original;
   let restoreFrom;
+  let newestManual;
   {
     const c = await startConnector({ name: "backups", port, dataDir, args: ARGS });
     try {
@@ -116,6 +119,7 @@ run("backups-windows", async () => {
         "exactly the newest 2 backups remain on disk",
       );
       restoreFrom = join(backupsDir, third.backup.name);
+      newestManual = third.backup.name;
       assertEqual(companyIn(restoreFrom), original.company.name, "the backup opens read-only");
 
       // Change the career after the backup, so the restore has something to undo.
@@ -144,8 +148,25 @@ run("backups-windows", async () => {
       const { exportedAt: _a, ...want } = original;
       const { exportedAt: _b, ...got } = restored;
       assertEqual(got, want, "restored export equals the export taken before the backup");
+      // The daily file was rotated away above, so this start writes a new one. It sorts before
+      // today's manual backups, yet it is the file just written and must survive --backup-keep 2.
+      const daily = `cargo-ops-${utcDay()}.db`;
       const listed = await api(c.base, token, "GET", "/api/backups");
       assertEqual(listed.body.backups.length, 2, "rotation still keeps 2 after the restart");
+      assertEqual(
+        listed.body.backups.map((b) => [b.name, b.kind]).sort(),
+        [
+          [daily, "daily"],
+          [newestManual, "manual"],
+        ].sort(),
+        "the daily file written at restart survives; the newest manual one stays",
+      );
+      assertEqual(
+        filesIn(backupsDir),
+        [daily, newestManual].sort(),
+        "on disk: the new daily file and the newest manual backup",
+      );
+      assertEqual(companyIn(join(backupsDir, daily)), original.company.name, "daily file opens");
     } finally {
       await c.stop();
     }
