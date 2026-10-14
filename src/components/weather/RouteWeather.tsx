@@ -3,9 +3,10 @@ import { CloudSun } from "lucide-react";
 import { Panel } from "@/components/dashboard/Panel";
 import { useNow } from "@/lib/sim-state/hooks";
 import { cn } from "@/lib/utils";
-import { useMetar, type MetarState } from "@/lib/weather/use-metar";
+import { useMetar, useTaf, type MetarState } from "@/lib/weather/use-metar";
 
 import { MetarStation } from "./MetarStation";
+import { TafTimeline } from "./TafTimeline";
 
 function Footer({ state }: { state: MetarState }) {
   if (state.status === "unavailable" || state.status === "error") {
@@ -16,8 +17,8 @@ function Footer({ state }: { state: MetarState }) {
   if (mode === "sample") {
     return (
       <span data-testid="weather-status" data-weather-mode="sample">
-        SAMPLE METARs built into Cargo Ops, for illustration only: not real weather. Never use them
-        for flight planning.
+        SAMPLE METARs and TAFs built into Cargo Ops, for illustration only: not real weather. Never
+        use them for flight planning.
       </span>
     );
   }
@@ -42,17 +43,28 @@ function Footer({ state }: { state: MetarState }) {
   );
 }
 
-/** Origin and destination METARs (stations shown in the order given). */
+/**
+ * Origin and destination METARs (stations shown in the order given) and, below them, the
+ * destination's TAF as a compact timeline with an ETA marker when there is an ETA.
+ */
 export function RouteWeather({
   origin,
   destination,
+  destinationEtaMs = null,
+  forecast = true,
   className,
 }: {
   origin: string | null | undefined;
   destination: string | null | undefined;
+  /** Estimated arrival at the destination, ms since epoch. */
+  destinationEtaMs?: number | null;
+  /** Show the destination TAF (one more request to the connector, cached upstream). */
+  forecast?: boolean;
   className?: string;
 }) {
   const state = useMetar([origin, destination]);
+  const tafStation = forecast ? (destination ?? null) : null;
+  const taf = useTaf([tafStation]);
   const now = useNow(30_000);
   const rows: Array<{ role: string; station: string }> = [];
   if (origin) rows.push({ role: "Origin", station: origin.toUpperCase() });
@@ -88,6 +100,25 @@ export function RouteWeather({
           />
         ))}
       </div>
+      {tafStation ? (
+        <TafTimeline
+          now={now}
+          etaMs={destinationEtaMs}
+          {...(taf.status === "ready" ? { attribution: taf.data.attribution } : {})}
+          result={
+            taf.status === "ready"
+              ? (taf.data.stations.find((s) => s.station === tafStation.toUpperCase()) ?? null)
+              : {
+                  station: tafStation.toUpperCase(),
+                  report: null,
+                  note:
+                    taf.status === "unavailable" || taf.status === "error"
+                      ? taf.message
+                      : "Loading forecast…",
+                }
+          }
+        />
+      ) : null}
       <p className="text-xs text-muted-foreground">
         <Footer state={state} />
       </p>
@@ -99,17 +130,24 @@ export function RouteWeather({
 export function RouteWeatherPanel({
   origin,
   destination,
+  destinationEtaMs = null,
   className,
   eyebrow = "Weather",
 }: {
   origin: string | null | undefined;
   destination: string | null | undefined;
+  destinationEtaMs?: number | null;
   className?: string;
   eyebrow?: string;
 }) {
   return (
-    <Panel {...(className ? { className } : {})} eyebrow={eyebrow} title="METAR" icon={CloudSun}>
-      <RouteWeather origin={origin} destination={destination} />
+    <Panel
+      {...(className ? { className } : {})}
+      eyebrow={eyebrow}
+      title="METAR · TAF"
+      icon={CloudSun}
+    >
+      <RouteWeather origin={origin} destination={destination} destinationEtaMs={destinationEtaMs} />
     </Panel>
   );
 }

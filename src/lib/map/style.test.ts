@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 import {
   LAYER_GROUPS,
   MAP_FONT,
+  METAR_BADGE_LAYER,
   adaptProtomapsLayers,
+  metarBadgeLayer,
   floorLayers,
   glyphsUrl,
   localStyle,
@@ -69,6 +71,30 @@ describe("map style", () => {
       "floor-land",
       "floor-borders",
     ]);
+  });
+
+  it("METAR badges are coloured from the flight-category tokens, drawn on top", () => {
+    const layer = metarBadgeLayer(theme);
+    expect(layer.id).toBe(METAR_BADGE_LAYER);
+    const paint = (layer as { paint: Record<string, unknown> }).paint;
+    const css = (c: { r: number; g: number; b: number; a: number }) =>
+      `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a})`;
+    expect(paint["circle-color"]).toEqual([
+      "match",
+      ["get", "category"],
+      "VFR",
+      css(theme.vfr),
+      "MVFR",
+      css(theme.mvfr),
+      "IFR",
+      css(theme.ifr),
+      "LIFR",
+      css(theme.lifr),
+      css(theme["muted-foreground"]),
+    ]);
+    const ids = overlayLayers(theme).map((l) => l.id);
+    expect(ids[ids.length - 1]).toBe(METAR_BADGE_LAYER);
+    expect(LAYER_GROUPS.weather).toEqual([METAR_BADGE_LAYER]);
   });
 
   it("every toggle group names real overlay layers", () => {

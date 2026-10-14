@@ -53,6 +53,98 @@ test.describe("demo mode (no connector)", () => {
     });
   }
 
+  test("/ flight operations room: front wall, lamps and loop tagged DEMO, nothing lit without a tag", async ({
+    page,
+  }) => {
+    const external: string[] = [];
+    page.on("request", (req) => {
+      const host = new URL(req.url()).hostname;
+      if (host !== "127.0.0.1" && host !== "localhost") external.push(req.url());
+    });
+    await page.goto("/");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(/Flight Operations/);
+    const wall = page.getByTestId("front-wall");
+    await expect(wall.locator("[data-source-tag]").first()).toHaveText("DEMO");
+    await expect(page.getByTestId("readout-phase-value")).not.toHaveText("—");
+    await expect(page.getByTestId("readout-met-value")).toHaveText(/^T\+\d{2}:\d{2}:\d{2}$/);
+    await expect(page.getByTestId("readout-utc-value")).toHaveText(/^\d{2}:\d{2}:\d{2}Z$/);
+    await expect(page.getByTestId("ops-map")).toHaveAttribute("data-ready", "true", {
+      timeout: 30_000,
+    });
+    // The wall frames the whole route: both ends (KMEM, KATL) and the aircraft on screen.
+    const frame = page.getByTestId("front-wall-map-frame");
+    await expect(frame).toHaveAttribute("data-route-framed", "true", { timeout: 30_000 });
+    await expect(frame.getByTestId("aircraft-marker")).toBeVisible({ timeout: 15_000 });
+    // fitBounds may still be easing: poll until every marker sits inside the wall map.
+    await expect
+      .poll(
+        async () => {
+          const box = await frame.boundingBox();
+          if (!box) return false;
+          for (const id of ["map-origin", "map-destination", "aircraft-marker"]) {
+            const m = await frame.getByTestId(id).boundingBox();
+            if (!m) return false;
+            const cx = m.x + m.width / 2;
+            const cy = m.y + m.height / 2;
+            if (cx < box.x || cx > box.x + box.width || cy < box.y || cy > box.y + box.height) {
+              return false;
+            }
+          }
+          return true;
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    await expect(frame.getByTestId("map-destination")).toContainText("KATL");
+
+    // Status board: the demo link is HOLD (never GO), and every lit lamp says where its
+    // data came from (DEMO, or SAMPLE weather); NO DATA lamps carry no tag.
+    const board = page.getByTestId("go-nogo-board");
+    const link = board.locator('[data-lamp="link"]');
+    await expect(link).toHaveAttribute("data-state", "hold");
+    await expect(link.getByTestId("lamp-value")).toHaveText("DEMO");
+    await expect(board.getByTestId("lamp")).toHaveCount(10);
+    await expect(board.locator('[data-lamp="wx"]')).not.toHaveAttribute("data-state", "nodata");
+    for (const lamp of await board.getByTestId("lamp").all()) {
+      const state = await lamp.getAttribute("data-state");
+      const tags = lamp.locator("[data-source-tag], [data-metar-origin]");
+      if (state === "nodata") {
+        await expect(lamp.getByTestId("lamp-value")).toHaveText(/NO DATA|UNKNOWN/);
+        await expect(tags).toHaveCount(0);
+      } else {
+        await expect(tags).toHaveCount(1);
+        await expect(tags).toHaveText(/^(DEMO|SAMPLE)$/);
+      }
+    }
+    // The payload lamp has no mission in the demo: grey.
+    await expect(board.locator('[data-lamp="payload"]')).toHaveAttribute("data-state", "nodata");
+
+    // The loop shows the demo's real fixture events, each tagged DEMO.
+    const line = page.getByTestId("loop-line").first();
+    await expect(line).toBeVisible({ timeout: 30_000 });
+    await expect(line).toHaveAttribute("data-source", "demo");
+    await expect(line.getByText("DEMO")).toBeVisible();
+    await expect(
+      page.getByTestId("console-finance").getByTestId("dashboard-reputation"),
+    ).toBeVisible();
+    await expect(page.getByText(/^LIVE/)).toHaveCount(0);
+    expect(external).toEqual([]);
+  });
+
+  test("/ flight operations room collapses to one column on a phone", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await expect(page.getByTestId("go-nogo-board")).toBeVisible();
+    await expect(page.getByTestId("ops-map")).toHaveAttribute("data-ready", "true", {
+      timeout: 30_000,
+    });
+    const width = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(width).toBeLessThanOrEqual(390);
+    const nav = await page.getByTestId("console-nav").boundingBox();
+    const perf = await page.getByTestId("console-perf").boundingBox();
+    expect(nav && perf && perf.y > nav.y + nav.height - 1).toBe(true);
+  });
+
   test("/flight shows replayed demo values tagged DEMO, never LIVE", async ({ page }) => {
     await page.goto("/flight");
     await expect(page.getByTestId("aircraft-title")).not.toHaveText("No aircraft loaded");
@@ -136,7 +228,67 @@ test.describe("demo mode (no connector)", () => {
     await expect(origin.getByTestId("metar-raw")).toHaveCount(0);
     // Sample weather is never presented as live.
     await expect(weather.locator('[data-metar-origin="live"]')).toHaveCount(0);
+    // Destination TAF timeline: SAMPLE, a category per period, raw text.
+    const taf = weather.getByTestId("taf-timeline");
+    await expect(taf).toHaveAttribute("data-station", "KATL");
+    await expect(taf).toHaveAttribute("data-origin", "sample");
+    await expect(taf.getByText("SAMPLE", { exact: true })).toBeVisible();
+    await expect(taf.getByTestId("taf-source")).toContainText("not a real forecast");
+    const periods = taf.getByTestId("taf-period");
+    await expect(periods).toHaveCount(4);
+    for (const p of await periods.all()) {
+      await expect(p).toHaveAttribute("data-category", /^(VFR|MVFR|IFR|LIFR)$/);
+    }
+    await expect(taf.getByTestId("taf-segment").first()).toBeVisible();
+    await taf.getByTestId("taf-raw-toggle").click();
+    await expect(taf.getByTestId("taf-raw")).toHaveText(/^TAF KATL \d{6}Z \d{4}\/\d{4} /);
     expect(external).toEqual([]);
+  });
+
+  test("/map METAR badges: SAMPLE flight-category dots with a raw-METAR tooltip, no network", async ({
+    page,
+  }) => {
+    const external: string[] = [];
+    const errors: string[] = [];
+    page.on("request", (req) => {
+      const host = new URL(req.url()).hostname;
+      if (host !== "127.0.0.1" && host !== "localhost") external.push(req.url());
+    });
+    page.on("pageerror", (err) => errors.push(String(err)));
+    await page.goto("/map");
+    const map = page.getByTestId("ops-map");
+    await expect(map).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
+    await expect(page.getByTestId("map-destination")).toContainText("KATL", { timeout: 15_000 });
+    // Both route ends carry a badge; the layer got one feature per badge.
+    const legend = page.getByTestId("metar-legend");
+    await expect(legend).toBeVisible({ timeout: 15_000 });
+    await expect(legend.getByText("SAMPLE", { exact: true })).toBeVisible();
+    const mem = legend.locator('[data-testid="metar-badge"][data-station="KMEM"]');
+    const atl = legend.locator('[data-testid="metar-badge"][data-station="KATL"]');
+    await expect(mem).toHaveAttribute("data-category", "VFR");
+    await expect(atl).toHaveAttribute("data-category", "MVFR");
+    await expect(legend.getByTestId("metar-badge")).toHaveCount(2);
+    for (const b of await legend.getByTestId("metar-badge").all()) {
+      await expect(b).toHaveAttribute("data-origin", "sample");
+    }
+    await expect(map).toHaveAttribute("data-metar-features", "2");
+    // Tooltip: raw METAR, age and the SAMPLE tag.
+    await atl.click();
+    const popup = page.getByTestId("metar-popup");
+    await expect(popup).toBeVisible();
+    await expect(popup).toHaveAttribute("data-station", "KATL");
+    await expect(popup).toContainText(/KATL \d{6}Z 24012G20KT/);
+    await expect(popup.getByText("SAMPLE", { exact: true })).toBeVisible();
+    await expect(popup.getByTestId("metar-popup-age")).toHaveText(
+      /Observed (\d+ min ago|just now).*not real weather/,
+    );
+    await expect(popup.locator('[data-metar-origin="live"]')).toHaveCount(0);
+    // The weather layer toggle hides badges and tooltip.
+    await page.getByTestId("weather-toggle").click();
+    await expect(legend).toHaveCount(0);
+    await expect(popup).toHaveCount(0);
+    expect(external).toEqual([]);
+    expect(errors).toEqual([]);
   });
 
   test("/jobs job detail shows SAMPLE origin/destination weather", async ({ page }) => {
@@ -146,17 +298,27 @@ test.describe("demo mode (no connector)", () => {
     const destination = await card.getAttribute("data-destination");
     await card.getByTestId("job-weather-toggle").click();
     const weather = card.getByTestId("route-weather");
-    await expect(weather.getByTestId("metar-station")).toHaveCount(2);
-    await expect(weather.locator('[data-station="KMEM"]')).toHaveAttribute("data-origin", "sample");
-    await expect(weather.locator(`[data-station="${destination}"]`)).toHaveAttribute(
+    const metar = weather.getByTestId("metar-station");
+    await expect(metar).toHaveCount(2);
+    await expect(metar.and(page.locator('[data-station="KMEM"]'))).toHaveAttribute(
       "data-origin",
       "sample",
     );
-    await expect(weather.getByTestId("flight-category")).toHaveCount(2);
-    for (const chip of await weather.getByTestId("flight-category").all()) {
+    await expect(metar.and(page.locator(`[data-station="${destination}"]`))).toHaveAttribute(
+      "data-origin",
+      "sample",
+    );
+    const chips = metar.getByTestId("flight-category");
+    await expect(chips).toHaveCount(2);
+    for (const chip of await chips.all()) {
       await expect(chip).toHaveText(/^(VFR|MVFR|IFR|LIFR)$/);
     }
-    await expect(weather.getByText("SAMPLE", { exact: true })).toHaveCount(2);
+    await expect(metar.getByText("SAMPLE", { exact: true })).toHaveCount(2);
+    // The destination's SAMPLE TAF sits under the two METARs.
+    const taf = weather.getByTestId("taf-timeline");
+    await expect(taf).toHaveAttribute("data-station", destination ?? "");
+    await expect(taf).toHaveAttribute("data-origin", "sample");
+    await expect(taf.getByText("SAMPLE", { exact: true })).toBeVisible();
   });
 
   test("/settings online weather switch is stored per browser", async ({ page }) => {
@@ -303,7 +465,7 @@ test.describe("demo mode (no connector)", () => {
       ["f", "/flight", /./],
       ["d", "/diagnostics", /Under the hood/],
       ["s", "/settings", /Configure/],
-      ["o", "/", /Move the world/],
+      ["o", "/", /Flight Operations/],
     ];
     for (const [key, path, heading] of chords) {
       await page.keyboard.press("g");

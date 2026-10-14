@@ -93,6 +93,11 @@ export const CARGO_TERMINAL = {
   /** Payout factor of jobs from the airport. */
   payoutBonus: [0.05, 0.1, 0.15],
   trafficChance: [0.08, 0.16, 0.24],
+  /**
+   * Transit cargo stored in the terminal: ground hours that do not count against the
+   * job's deadline (docs/ECONOMY.md "Transit cargo").
+   */
+  transitFreeStorageHours: [4, 8, 12],
   /** Cargo handling revenue = 1.2 × the handling fee × class factor. */
   feeShare: 1.2,
 } as const;

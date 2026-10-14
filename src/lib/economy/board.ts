@@ -191,7 +191,9 @@ export function jobSuitability(
   const dest = lookup?.get(job.destination) ?? null;
   const rwy = dest ? runwaySuitability(dest, type) : null;
   const maxNm = maxJobDistanceNm(type);
-  const limit = payloadLimitKg(type, job.distanceNm);
+  // Transit cargo: a long-haul job is flown in (at least) two legs; judge it per half.
+  const longHaul = job.longHaul === true && job.distanceNm > maxNm;
+  const limit = payloadLimitKg(type, longHaul ? job.distanceNm / 2 : job.distanceNm);
   return [
     {
       key: "runway",
@@ -201,17 +203,26 @@ export function jobSuitability(
         ? `${dest.longestRwyFt ? `${dest.longestRwyFt.toLocaleString("en-US")} ft` : "unknown length"} ${rwy?.surface ?? ""} · needs ${type.minRunwayFt.toLocaleString("en-US")} ft`
         : "Airport data loading",
     },
-    {
-      key: "range",
-      ok: job.distanceNm <= maxNm,
-      label: "Range",
-      detail: `${job.distanceNm} nm of ${Math.round(maxNm)} nm (80 % of range)`,
-    },
+    longHaul
+      ? {
+          key: "range",
+          ok: job.distanceNm <= maxNm * 2,
+          label: "Range (stop)",
+          detail: `${job.distanceNm} nm: beyond ${Math.round(maxNm)} nm, needs a transit stop`,
+        }
+      : {
+          key: "range",
+          ok: job.distanceNm <= maxNm,
+          label: "Range",
+          detail: `${job.distanceNm} nm of ${Math.round(maxNm)} nm (80 % of range)`,
+        },
     {
       key: "payload",
       ok: job.weightKg <= limit,
       label: "Payload",
-      detail: `${job.weightKg} kg of ${limit} kg (max payload − leg fuel)`,
+      detail: longHaul
+        ? `${job.weightKg} kg of ${limit} kg per leg if split in two (max payload − leg fuel)`
+        : `${job.weightKg} kg of ${limit} kg (max payload − leg fuel)`,
     },
   ];
 }

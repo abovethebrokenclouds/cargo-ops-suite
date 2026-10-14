@@ -13,6 +13,7 @@ import { Panel } from "@/components/dashboard/Panel";
 import { SourceTag, StaleTag } from "@/components/status/SourceTag";
 import { RouteWeatherPanel } from "@/components/weather/RouteWeather";
 import {
+  arrivalEtaMs,
   displayAglFt,
   enduranceStatus,
   enginesRunning,
@@ -326,6 +327,7 @@ export function LiveFlightView() {
         eyebrow="Weather en route"
         origin={route.origin ?? sim.mission?.origin}
         destination={route.destination ?? sim.mission?.destination}
+        destinationEtaMs={arrivalEtaMs(now, route.eteMin)}
       />
 
       {/* Secondary instruments */}

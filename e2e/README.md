@@ -27,14 +27,21 @@ Playwright specs, two projects:
   defect (picked deterministically from the replay company's seed) is refused on its first
   dispatch with `grounding_defect`, and the repair lands on the maintenance board; the demo spec
   checks the DEMO-tagged used market, systems panel and maintenance board. P5 part 2:
-  `fbo.replay.spec.ts` buys an FBO and flies the mission there. P6: `settings.replay.spec.ts`
+  `fbo.replay.spec.ts` buys an FBO and flies the mission there. Transit cargo:
+  `transit.replay.spec.ts` loads a KMEM → KRDU job on a leg to KATL ("Leg to"), lets the replay
+  fly it, and checks that the job waits at KATL in transit, unpaid, on `/api/jobs`, `/jobs`
+  (location, destination, deadline, REPLAY) and as a `/map` pin (the onward leg is the
+  connector's two-leg replay test). P6: `settings.replay.spec.ts`
   (backup created and listed through the page and `/api/backups`, token masked, SimBrief off by
   default without any request to simbrief.com, manifest/icons content types, `f` map follow);
   `demo.spec.ts` covers `g`-chord navigation, the `?` dialog and units per browser. Weather:
   `demo.spec.ts` checks the SAMPLE METARs on `/flight` (category chips, raw text toggle,
-  observation age, no external request), the job-detail weather toggle and the per-browser
-  Online weather switch; `replay.spec.ts` checks that a replay's connector serves SAMPLE reports,
-  never live ones. No spec reaches aviationweather.gov.
+  observation age, no external request) and the destination SAMPLE TAF timeline (a category per
+  period, raw text), the job-detail weather toggle, the `/map` METAR badges (SAMPLE legend with
+  VFR/MVFR dots for KMEM/KATL, two features on the badge layer, the raw-METAR tooltip with its
+  age, the layer toggle) and the per-browser Online weather switch; `replay.spec.ts` checks that
+  a replay's connector serves SAMPLE METARs and TAFs, never live ones. No spec reaches
+  aviationweather.gov.
 
 Neither project talks to a simulator. A real SimConnect session is only checked on the owner's
 Windows PC (see `docs/VERIFICATION.md`).
@@ -51,7 +58,7 @@ Order independence: each replay spec passes alone, and the full project passes i
 order (where `fbo.replay.spec.ts` now runs first):
 
 ```sh
-for f in used-aircraft settings replay mission fbo; do
+for f in used-aircraft settings replay mission fbo transit; do
   PW_CHROMIUM_PATH=/opt/pw-browsers/chromium bunx playwright test --project=replay --workers=1 e2e/$f*.spec.ts
 done
 ```

@@ -12,6 +12,7 @@ import { KindBadge, MissionCard } from "@/components/cargo/MissionCard";
 import { MissionStrip } from "@/components/cargo/MissionStrip";
 import { PayoutBreakdown } from "@/components/cargo/PayoutBreakdown";
 import { RouteFinder } from "@/components/cargo/RouteFinder";
+import { TransitCargo } from "@/components/cargo/TransitCargo";
 import { MetricTile } from "@/components/dashboard/MetricTile";
 import { DemoTag, Panel } from "@/components/dashboard/Panel";
 import { SourceTag } from "@/components/status/SourceTag";
@@ -24,6 +25,8 @@ import {
   useJobBoard,
 } from "@/lib/economy/board";
 import { useCompanyView } from "@/lib/economy/company";
+import { arrivalEtaMs, routeView } from "@/lib/flight/flight-view";
+import { useNow } from "@/lib/sim-state/hooks";
 import { formatInt, formatUsd } from "@/lib/format";
 import { usePlannedFlight } from "@/lib/settings/connector-data";
 import { useCommand, useSimConnection } from "@/lib/transport/useSimConnection";
@@ -169,10 +172,20 @@ function Jobs() {
   const [refreshAirport, setRefreshAirport] = useState("");
   const [focus, setFocus] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
+  // Transit cargo: optional leg destination (empty = the jobs' final destination).
+  const [legTo, setLegTo] = useState("");
   const [shown, setShown] = useState(PAGE);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const demo = state.connection === "demo";
+  // Destination ETA for the mission forecast: only while the mission is being flown and the
+  // plan domain routes to the mission's destination.
+  const now = useNow(30_000);
+  const route = routeView(state);
+  const missionEtaMs =
+    mission?.status === "in_progress" && route.destination === mission.destination
+      ? arrivalEtaMs(now, route.eteMin)
+      : null;
   // P6: the imported SimBrief plan (only when the player turned the import on).
   const plan = usePlannedFlight(connector);
 
@@ -188,6 +201,7 @@ function Jobs() {
   const available = useMemo(() => jobs?.available ?? [], [jobs]);
   const currentBoard = jobs?.boards[0]?.origin ?? null;
   const accepted = useMemo(() => jobs?.accepted ?? [], [jobs]);
+  const inTransit = useMemo(() => jobs?.inTransit ?? [], [jobs]);
   const visible = useMemo(() => {
     const maxNm = Number(filters.maxNm) || Infinity;
     const minKg = Number(filters.minKg) || 0;
@@ -209,7 +223,11 @@ function Jobs() {
     mission && mission.status !== "delivered" ? null : (boards[0]?.origin ?? null);
   const lastPayout = mission?.status === "delivered" ? mission.payout : null;
   const missionOpen = mission?.status === "loaded" || mission?.status === "in_progress";
-  const selectedJobs = accepted.filter((j) => selected.includes(j.id) && j.status === "accepted");
+  const selectedJobs = [...accepted, ...inTransit].filter(
+    (j) => selected.includes(j.id) && (j.status === "accepted" || j.status === "in_transit"),
+  );
+  const toggleSelected = (id: string, checked: boolean) =>
+    setSelected((s) => (checked ? [...s, id] : s.filter((x) => x !== id)));
 
   const disabledNote = demo
     ? "Demo board: accepting and loading need the local connector"
@@ -352,6 +370,7 @@ function Jobs() {
             eyebrow={`Mission ${mission.id} weather`}
             origin={mission.origin}
             destination={mission.destination}
+            destinationEtaMs={missionEtaMs}
           />
         ) : null}
 
@@ -601,15 +620,11 @@ function Jobs() {
                       className="size-4 accent-primary"
                       disabled={j.status !== "accepted" || missionOpen}
                       checked={selected.includes(j.id) || j.status === "loaded"}
-                      onChange={(e) =>
-                        setSelected((s) =>
-                          e.target.checked ? [...s, j.id] : s.filter((x) => x !== j.id),
-                        )
-                      }
+                      onChange={(e) => toggleSelected(j.id, e.target.checked)}
                     />
                     <div className="min-w-0 flex-1">
                       <p className="font-mono text-sm text-foreground">
-                        {j.origin} → {j.destination}
+                        {j.transit ? `at ${j.transit.location}` : j.origin} → {j.destination}
                       </p>
                       <p className="flex items-center gap-2 text-xs text-muted-foreground">
                         <KindBadge kind={j.kind} className="px-1.5 py-0" />
@@ -635,6 +650,24 @@ function Jobs() {
                 ))}
               </ul>
             )}
+            <div className="mt-4 w-40">
+              <Field label="Leg to (optional)" htmlFor="leg-to">
+                <input
+                  id="leg-to"
+                  className={cn(inputClass, "font-mono uppercase")}
+                  placeholder="final dest."
+                  value={legTo}
+                  maxLength={8}
+                  disabled={!connector || missionOpen}
+                  onChange={(e) => setLegTo(e.target.value)}
+                  data-testid="leg-destination"
+                />
+              </Field>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Another airport makes this a transit leg: cargo going further is stored there and paid
+              on its final delivery.
+            </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -642,13 +675,23 @@ function Jobs() {
                 disabled={!connector || busy || missionOpen || selectedJobs.length === 0}
                 title={disabledNote}
                 data-testid="load-mission"
-                onClick={() =>
+                onClick={() => {
+                  const destination = legTo.trim().toUpperCase();
                   void run(
                     "mission.load",
-                    { jobIds: selectedJobs.map((j) => j.id) },
-                    "Mission loaded: start at the origin with the parking brake set",
-                  ).then((ok) => ok && setSelected([]))
-                }
+                    {
+                      jobIds: selectedJobs.map((j) => j.id),
+                      ...(destination ? { destination } : {}),
+                    },
+                    destination
+                      ? `Mission loaded to ${destination}: start at the origin with the parking brake set`
+                      : "Mission loaded: start at the origin with the parking brake set",
+                  ).then((ok) => {
+                    if (!ok) return;
+                    setSelected([]);
+                    setLegTo("");
+                  });
+                }}
               >
                 Load mission ({selectedJobs.length})
               </button>
@@ -675,6 +718,19 @@ function Jobs() {
             </div>
           </Panel>
 
+          <TransitCargo
+            jobs={inTransit}
+            nowGameMs={company?.clock?.gameMs ?? null}
+            reputation={company?.reputation ?? null}
+            source={source}
+            selected={selected}
+            onSelect={toggleSelected}
+            onAbandon={(jobId) =>
+              void run("job.release", { jobId }, `Abandoned ${jobId} in transit (−3 reputation)`)
+            }
+            disabled={!connector || busy || missionOpen}
+          />
+
           {lastPayout ? (
             <Panel
               eyebrow="Payout"
@@ -690,6 +746,13 @@ function Jobs() {
                 {(mission?.reputationDelta ?? 0) >= 0 ? "+" : ""}
                 {mission?.reputationDelta ?? 0}
               </p>
+              {mission?.transitJobIds?.length ? (
+                <p className="mt-1 text-xs text-accent" data-testid="mission-transit-note">
+                  {mission.transitJobIds.length} job
+                  {mission.transitJobIds.length === 1 ? "" : "s"} unloaded in transit at{" "}
+                  {mission.destination}: paid on final delivery
+                </p>
+              ) : null}
               <div className="mt-4 flex flex-col gap-3">
                 {lastPayout.jobs.map((b) => (
                   <div key={b.jobId}>

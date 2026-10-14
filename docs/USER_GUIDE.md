@@ -52,17 +52,50 @@ Values are tagged `SIM`, `REPLAY` or `DEMO`; a dash means "no data", never a mad
    Block-out starts the mission; **Live Flight** (`g` `f`) shows altitude, speeds, fuel,
    endurance vs ETE, phase, payload and, after touchdown, the landing grade. **Weather en
    route** shows the origin and destination METAR: a VFR / MVFR / IFR / LIFR chip, wind,
-   visibility, ceiling, how old the observation is and the raw text on request. On the job board
-   each contract has a **Weather** button with the same view. For simulation only: never use it
-   for real-world flight planning.
+   visibility, ceiling, how old the observation is and the raw text on request. Below them the
+   destination **TAF** (forecast) is a timeline: each forecast period coloured by its flight
+   category, TEMPO / PROB30 / BECMG changes as outlined bars under it, a tick for now and, while
+   you fly, an **ETA** marker with the category forecast for your arrival (and any temporary
+   change then). The period list and the raw TAF are underneath. Many small airports publish no
+   TAF; you then see a note instead. On the job board each contract has a **Weather** button with
+   the same view. For simulation only: never use it for real-world flight planning.
 2. Fly it. The **Map** (`g` `m`) follows the aircraft (`f` toggles follow), with route, trail,
-   airports, your FBOs and demand events.
+   airports, your FBOs and demand events. Small coloured **METAR badges** (VFR green, MVFR blue,
+   IFR red, LIFR magenta) sit up and to the right of the origin, the destination and the airports
+   of your accepted jobs; hover or tap one (or use the **METAR** list at the bottom left) for the
+   raw report and its age. The cloud button in the map controls hides them. While they are shown the map
+   asks the connector for those airports' METARs every 5 minutes (switched off: no weather
+   request at all); airports another panel has already loaded are not asked for again.
 3. Land, taxi in, **park with engines off and the brake set**. The leg is verified (≥ 90 % of
    the distance flown, arrival within 3 nm, no teleport/slew, sim rate ≤ 8×) and the payout is
    booked with its breakdown: landing grade multiplier, lateness, fuel at the landing airport's
    price, landing fee. Pausing stops the clock; above 1× sim rate there are no bonuses.
 4. A crash fails the mission (reputation −20, repairs). Every flight lands in the **Logbook**
    (`g` `l`) with track, grade and payout; export CSV, GPX (one flight) or the whole career (JSON).
+
+### Transit cargo (more than one leg)
+
+Some contracts go further than one leg: jobs tagged **Needs a stop** are beyond your aircraft's
+direct range, and any job can be routed through another airport (a hub, a longer runway, a
+place where you switch aircraft).
+
+1. Tick the jobs, type the intermediate airport in **Leg to** and **Load**. The mission strip
+   says how many jobs go beyond it. The leg must bring the cargo closer to where it is going,
+   and range, runway, payload, fuel and weight are checked for this leg as usual.
+2. Fly the leg. On arrival the cargo is unloaded and **stored in transit** there: the job moves to
+   **Transit cargo** on Jobs with its airport, final destination and deadline, and the map shows a
+   pin at that airport (hover it for the deadlines). Nothing is paid yet.
+3. Later, with an aircraft at that airport, tick the stored job (alone or with others from the
+   same airport) and load the next leg — to its destination, or to another stop.
+4. The full payout comes on the **final delivery**, with the landing grade of the last leg. The
+   time limit covers **the whole trip**: every leg's block time plus the time the cargo waits on
+   the ground (company clock). If you own an FBO with a **cargo terminal** there, the first 4 / 8 /
+   12 hours (level 1 / 2 / 3) of waiting do not count. The payout shown for stored cargo is an
+   estimate that already includes any late penalty, and the mission strip says "late already"
+   when an onward leg starts past the deadline. A crash on any leg loses the cargo; so does a
+   leg that fails its checks (for example flown to the wrong airport), which counts as
+   abandoning it (−3 reputation). **Abandon** (with a confirmation) gives it up where it is:
+   no payout, −3 reputation.
 
 ## 5. Company, fleet, loans, used market, FBOs
 
@@ -100,9 +133,11 @@ Shortcuts are ignored while you type in a field.
 - **Connector**: address and a masked token (reset with `--reset-token`, setup guide §6).
 - **Basemap**: local extract → online OpenFreeMap (switch off to stay offline) → outline.
 - **Weather** (this browser): **Online weather** lets the connector fetch origin and destination
-  METARs from aviationweather.gov (NOAA, no account) for Live Flight and the job board; switch it
-  off and no weather request leaves your PC. Replays and the demo show **SAMPLE** METARs, which
-  are examples, never real weather.
+  METARs and the destination TAF from aviationweather.gov (NOAA, no account) for Live Flight, the
+  job board and the map badges; switch it off and no weather request leaves your PC. The
+  connector keeps METARs 10 minutes and TAFs 30 minutes (TAFs are issued about every 6 hours) and
+  never shows a TAF whose validity has ended. Replays and the demo show **SAMPLE** METARs and
+  TAFs, which are examples, never real weather.
 - **Data**: **Back up now**, the backup list (a daily backup is automatic, newest 14 kept),
   career export/import (import replaces the career; refused during a flight). Restoring a backup
   is manual with the connector stopped — steps in the page and in setup guide §6.

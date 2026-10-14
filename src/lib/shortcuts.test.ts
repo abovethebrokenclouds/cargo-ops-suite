@@ -1,6 +1,48 @@
 import { describe, expect, it } from "vitest";
 
-import { CHORD_TIMEOUT_MS, NAV_SHORTCUTS, ShortcutMachine, isTypingTarget } from "./shortcuts";
+import {
+  CHORD_TICK_MS,
+  CHORD_TIMEOUT_MS,
+  NAV_SHORTCUTS,
+  ResponsiveClock,
+  ShortcutMachine,
+  isTypingTarget,
+} from "./shortcuts";
+
+describe("ResponsiveClock and ShortcutMachine.expire", () => {
+  it("counts at most one step for a long gap between readings", () => {
+    const c = new ResponsiveClock(200);
+    expect(c.read(1_000)).toBe(0);
+    expect(c.read(1_100)).toBe(100);
+    // Main thread blocked 3 s: only 200 ms count.
+    expect(c.read(4_100)).toBe(300);
+    expect(c.read(4_000)).toBe(300); // never goes back
+  });
+
+  it("an idle chord read every 100 ms expires after the timeout; a blocked one does not", () => {
+    const idle = new ResponsiveClock();
+    const m = new ShortcutMachine();
+    let t = 0;
+    m.handle({ key: "g" }, idle.read(t), "/");
+    let expired = false;
+    while (!expired && t < 5_000) {
+      t += CHORD_TICK_MS;
+      expired = m.expire(idle.read(t));
+    }
+    expect(expired).toBe(true);
+    expect(t).toBeGreaterThan(CHORD_TIMEOUT_MS);
+    expect(t).toBeLessThanOrEqual(CHORD_TIMEOUT_MS + 2 * CHORD_TICK_MS);
+
+    const blocked = new ResponsiveClock();
+    const m2 = new ShortcutMachine();
+    m2.handle({ key: "g" }, blocked.read(0), "/");
+    // Nothing ran for 4 s, then the next key arrives.
+    expect(m2.handle({ key: "j" }, blocked.read(4_000), "/")).toEqual({
+      type: "navigate",
+      to: "/jobs",
+    });
+  });
+});
 
 describe("ShortcutMachine", () => {
   it("maps g + letter to every page", () => {

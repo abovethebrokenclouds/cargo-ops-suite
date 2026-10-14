@@ -38,10 +38,13 @@ interface StateFill {
  * under any one of its prefixes, else the unprefixed `text-y`, else the inherited
  * `foreground` (popover/card foregrounds are the same colour).
  */
-function collectStateFills(dir: string): StateFill[] {
+function collectStateFills(dir: string, only?: (file: string) => boolean): StateFill[] {
   const out: StateFill[] = [];
   const isColour = (name: string) => name in t;
-  for (const file of readdirSync(dir).filter((f) => f.endsWith(".tsx"))) {
+  const files = readdirSync(dir).filter(
+    (f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx") && (!only || only(f)),
+  );
+  for (const file of files) {
     const src = readFileSync(join(dir, file), "utf8");
     for (const lit of src.matchAll(/"([^"\n]*)"|`([^`]*)`/g)) {
       const classes = (lit[1] ?? lit[2] ?? "").split(/\s+/);
@@ -217,6 +220,98 @@ describe("token contrast (WCAG AA)", () => {
         }
       });
     }
+  });
+
+  // Flight operations room (Ops dashboard): phosphor readouts, call-sign strips and status
+  // lamps on the near-black console surfaces.
+  describe("console surfaces (Ops dashboard) ≥ 4.5:1", () => {
+    const tok = (name: string) => {
+      const v = t[name];
+      if (!v) throw new Error(`token --${name} missing`);
+      return v;
+    };
+    const consoleBg = rgb("console");
+    const consolePanel = rgb("console-panel");
+    // .console-panel: a 2.5 % white sheen at the top of the screen.
+    const panelSheen = over({ r: 1, g: 1, b: 1 }, 0.025, consolePanel);
+    // .console-strip: bezel 22 % into the panel.
+    const strip = oklabToRgb(mixOklab(tok("console-bezel"), tok("console-panel"), 0.22));
+    const consoleSurfaces: Record<string, Rgb> = {
+      console: consoleBg,
+      "console-panel": consolePanel,
+      "console-panel sheen": panelSheen,
+      "console-strip": strip,
+    };
+    const consoleText: Array<[string, Rgb]> = [
+      ["console-foreground", rgb("console-foreground")],
+      ["muted-foreground", rgb("muted-foreground")],
+      ["phosphor-green", rgb("phosphor-green")],
+      ["phosphor-amber", rgb("phosphor-amber")],
+      ["phosphor-cyan", rgb("phosphor-cyan")],
+      ["phosphor-red", rgb("phosphor-red")],
+      // Source tags inside consoles (DEMO = warning, REPLAY = foreground).
+      ["warning", rgb("warning")],
+      ["foreground", rgb("foreground")],
+    ];
+    for (const [name, fg] of consoleText) {
+      for (const [surface, bg] of Object.entries(consoleSurfaces)) {
+        it(`${name} on ${surface}`, () => {
+          expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(4.5);
+        });
+      }
+    }
+
+    // .lamp[data-state]: the lit lamp fills with its own colour at 12 % over the console.
+    for (const lit of ["phosphor-green", "phosphor-amber", "phosphor-cyan", "phosphor-red"]) {
+      it(`lit lamp: ${lit} on its own 12 % fill`, () => {
+        const fill = oklabToRgb(mixOklab(tok(lit), tok("console"), 0.12));
+        expect(contrastRatio(rgb(lit), fill)).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+
+    it("dark lamp (NO DATA): lamp-off-foreground on lamp-off", () => {
+      expect(contrastRatio(rgb("lamp-off-foreground"), rgb("lamp-off"))).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    });
+
+    it("a lit lamp is distinguishable from a dark one (fill luminance differs)", () => {
+      // Grey NO DATA lamps must never read as lit: their text is neutral, not phosphor.
+      const off = tok("lamp-off-foreground");
+      expect(Math.hypot(off.a, off.b)).toBeLessThan(0.02);
+    });
+
+    // Interactive-state fills on the Ops console (the Live Flight CTA's
+    // hover:bg-phosphor-green/20 and anything added later in src/components/ops) are
+    // alpha-composited over every console surface and held to 4.5:1 with their label.
+    describe("console interactive state fills ≥ 4.5:1", () => {
+      const consoleStates = [
+        ...collectStateFills(resolve(__dirname, "../../routes"), (f) => f === "index.tsx"),
+        ...collectStateFills(resolve(__dirname, "../../components/ops")),
+      ];
+
+      it("finds the Live Flight CTA hover fill", () => {
+        expect(consoleStates.map((s) => `${s.file} ${s.cls} text-${s.label}`)).toContain(
+          "index.tsx hover:bg-phosphor-green/20 text-phosphor-green",
+        );
+      });
+
+      for (const s of consoleStates) {
+        it(`${s.file} ${s.cls} with text-${s.label}`, () => {
+          for (const [surface, bg] of Object.entries(consoleSurfaces)) {
+            const fill = over(rgb(s.fill), s.alpha, bg);
+            expect(contrastRatio(rgb(s.label), fill), surface).toBeGreaterThanOrEqual(4.5);
+          }
+        });
+      }
+
+      it("Live Flight CTA at rest (bg-phosphor-green/10) keeps its label ≥ 4.5:1", () => {
+        for (const [surface, bg] of Object.entries(consoleSurfaces)) {
+          const fill = over(rgb("phosphor-green"), 0.1, bg);
+          expect(contrastRatio(rgb("phosphor-green"), fill), surface).toBeGreaterThanOrEqual(4.5);
+        }
+      });
+    });
   });
 
   it("focus ring (primary) is visible against the page and panels ≥ 3:1", () => {

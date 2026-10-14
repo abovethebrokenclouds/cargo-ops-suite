@@ -99,9 +99,11 @@ is general cargo, 840 kg, 1 unit, 287.7 nm. Replaying `demo-kmem-katl.jsonl`
 
 - **accept / release**: available ↔ accepted (max 20 accepted). Expired jobs leave
   the board.
-- **load** (`mission.load {jobIds}`): one open mission at a time; all jobs accepted
-  and sharing origin and destination (stacked cargo); destination runway suits the
-  active type; distance ≤ 80 % of range; total weight ≤ max payload − leg fuel.
+- **load** (`mission.load {jobIds, destination?}`): one open mission at a time; all jobs
+  accepted (or in transit) and at the same airport, sharing their destination (stacked
+  cargo) unless a leg `destination` is given (see "Transit cargo"); destination runway
+  suits the active type; leg distance ≤ 80 % of range; total weight ≤ max payload − leg
+  fuel.
   `mission.unload` returns the jobs to accepted before departure.
 - **payload check**: cargo vs the sim's payload stations, previewed while loaded and frozen at
   the start; an underloaded departure pays without bonuses (see "Payload check").
@@ -203,7 +205,112 @@ offer (all boards plus accepted jobs), at most 3 legs, never revisiting an airpo
 Each leg stacks its same-route jobs greedily by payout per kg within the leg's
 payload limit. Chains are ranked by total estimated payout (then fewer legs, then
 shorter). Multi-hop chains need boards at the intermediate airports (refresh a board
-there). Carrying one job across several legs (transit cargo) is not modelled yet.
+there). The finder plans single-leg jobs only: long-haul jobs and cargo already in
+transit are left out (plan their stops with "Leg to", see below).
+
+## Transit cargo
+
+A job whose final destination lies beyond the next leg can be flown to an intermediate
+airport, unloaded there **in transit** (stored at that airport) and picked up later for the
+onward leg. Code: `packages/economy/src/transit.ts` (pure rules shared with the UI), the
+engine's `load` / delivery path, constants in `constants.ts` and `fbo-constants.ts`. The
+plan does not specify transit cargo, so these are the simplest rules consistent with the
+rest of the economy:
+
+| Rule            | Value                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transit leg     | `mission.load {jobIds, destination}` with a `destination` other than a job's final destination. The leg starts where the cargo is (its origin, or its transit stop); all jobs must be there (`mixed_route`)                                                                                                                                                                                                                |
+| Stacking        | without `destination` the jobs must share their final destination (as before); with it, jobs going there are delivered and the others go on in transit (`mission.transitJobIds`)                                                                                                                                                                                                                                           |
+| Progress        | the leg must end strictly closer (great circle) to every onward job's final destination than where the cargo is now (`no_progress`); a leg to the same airport is `same_airport`                                                                                                                                                                                                                                           |
+| Per-leg checks  | unchanged and per leg: range, runway, payload limit (max payload − leg fuel, − major-defect penalty) over everything on board, airworthiness, start at the origin, fuel, MTOW, payload check, leg verification                                                                                                                                                                                                             |
+| Payout          | **full payout on the final delivery only** (job origin → destination great circle, kind, units, board demand factor, current reputation, landing grade of the final leg); intermediate legs pay nothing; never partial credit                                                                                                                                                                                              |
+| Deadline        | the job's time limit covers the **whole chain**: Σ block minutes of every leg + ground time between legs on the company clock − free storage minutes; late minutes at the final delivery use the normal late penalty                                                                                                                                                                                                       |
+| Bonuses, damage | a leg flown above 1× (noBonus) or departed underloaded removes the bonuses of the final payout; a fragile touchdown above 1.5 G on **any** leg damages it                                                                                                                                                                                                                                                                  |
+| Reputation      | a leg with at least one final delivery: the normal rule over those jobs; a leg that only carried transit cargo: 0, except a hard landing (D/E/F) −5                                                                                                                                                                                                                                                                        |
+| Failure         | a crash or a failed verification fails every job on board (no partial credit). Cargo already stored on an earlier leg and lost by a failed **non-crash** verification (wrong airport, short distance, teleport, > 8×) counts as abandoned: **−3** reputation each and `job.abandoned`, exactly like `job.release` (a crash already costs −20). Abort / unload puts transit cargo back at its stop with its clock unchanged |
+| Abandon         | `job.release` of an in-transit job: failed, no payout, reputation **−3** (`job.abandoned`)                                                                                                                                                                                                                                                                                                                                 |
+| Storage         | at an airport without an own FBO: no benefit; own operating FBO: none either; own **cargo terminal** L1 / L2 / L3: the first **4 / 8 / 12** ground hours at that stop do not count against the deadline                                                                                                                                                                                                                    |
+| Leg deadline    | a loaded leg's `timeLimitMin` is the tightest time left among its jobs (negative = already late, never clamped), recomputed every in-game minute while the stored cargo waits and frozen at block-out; `expectedPayout` sums the jobs delivered on the leg, stored ones with the late penalty accrued so far                                                                                                               |
+| Long-haul jobs  | every connector board adds **2** jobs beyond one leg's direct range (80 % of the range) up to 2 × that, tagged `longHaul` ("Needs a stop"), only when a chain of legs that passes every load rule exists (below)                                                                                                                                                                                                           |
+
+```
+chain minutes       = Σ leg block minutes + Σ max(0, ground minutes at each stop − free storage minutes)
+late (final leg)    = chain minutes − job time limit            (≤ 0 = on time)
+deadline at a stop  = arrival company clock + (time limit − chain minutes so far + free storage minutes)
+```
+
+**Long-haul jobs.** Drawn after every other job of the board from their own seeded stream
+(seed FNV-1a(board seed, "long-haul")), so the regular jobs of a board never change.
+Destinations: runway suitable, `0.8 × range < d ≤ 1.6 × range`, weighted large 3 / medium 2,
+and **deliverable**: `longHaulRoute` must find a chain in which every leg is within the direct
+range, ends at a suitable runway, ends strictly closer to the destination and carries at least
+50 kg (the rules `mission.load` enforces). The search is a deterministic DP over the airports
+closer to the destination than the origin, inside the corridor origin → stop → destination ≤
+**2 ×** the direct distance; among chains the fewest legs win, then the best worst leg, then
+the shortest. A drawn destination without a chain leaves the pool and the stream draws again
+(seed 4242-style boards keep their regular jobs byte-identical). Examples (C208B): LPLA →
+EIKY has no progressing chain over the Atlantic and is never offered (49 of the 301
+pre-filtered LPLA destinations are dropped); KMEM → KMIA goes KMEM → KPAM → KMIA (752.4 nm).
+A `jobs.refresh {destination}` beyond the direct range puts the first long-haul job there when
+it is deliverable. Kind and units as usual; weight drawn against the payload limit of the
+chain's **worst leg**; time limit = the usual limit for the chain's flown distance + **60 min
+per stop**. The browser demo board has none (it stays the 24-job P3 board).
+
+**UI.** `/jobs` lists stored cargo with its stop, final destination, due time on the company
+clock and time left ("time left unknown" before the company clock is known; nothing is
+guessed), the payout estimate with the late penalty accrued so far, and Abandon behind a
+confirmation dialog. The mission strip shows a leg already late as "… late already".
+
+**Events.** `job.in_transit {jobId, missionId, location, destination, storage,
+deadlineGameMs}` when cargo is stored; `job.completed` only on final delivery;
+`job.abandoned`. The jobs domain gains `inTransit` (each job carries `transit`: location,
+arrival time and company clock, chain minutes so far, storage, free minutes, deadline and
+every flown leg with its block and ground minutes, grade, peak G and bonus flags).
+
+### Worked examples (`packages/economy/test/transit.test.ts`)
+
+1. General cargo, 500 kg, KMEM → KRDU (549.2 nm), limit 549.2 / 170 h × 2 + 240 = 627.7 →
+   **630 min**. Leg 1 KMEM → KATL, block 119 min, stored at the KATL ramp: chain 119, deadline
+   arrival + **511 min**. Two hours on the ground → 239 used, 391 left. Leg 2 KATL → KRDU,
+   block 125: chain 119 + 120 + 125 = **364 min**, on time. Payout 0.015 × 500 × 549.2 ×
+   1.9420812 = **$7,999.43** × 1.04 (tier 2) × 1.00 (B) = $8,319.41 → **$8,319**, exactly the
+   board estimate, paid once, on leg 2. The late line notes "transit chain of 2 legs,
+   364.0 min incl. ground time".
+2. Express, 200 kg, same route, limit 193.8 + 45 → **240 min**, 150 min at KATL. Public ramp:
+   119 + 150 + 125 = 394 → **154 min late** → 25.67 % of $4,991.65 → −$1,281.19 → **$3,710**.
+   In an own cargo terminal L1 (4 h free) the 150 min do not count: 244 → **4 min late** →
+   −$33.28 → **$4,958**; the stored job's deadline is arrival + (240 − 119 + 240) min.
+3. Fragile, 300 kg, landed at 1.62 G on leg 1 and 1.10 G on leg 2: damaged (worst touchdown
+   of the chain) → 50 % of $6,489.14 → **$3,245**.
+
+### Acceptance (connector replay, `connector/test/transit.test.ts`)
+
+Seed 4242: a KMEM → KRDU job (focused board) loaded with `destination: "KATL"` and flown by
+the synthetic KMEM → KATL replay: mission delivered with payout **$0** and only fuel and the
+landing fee booked; reputation unchanged (on-time B, no delivery); the job is `in_transit` at
+KATL (jobs row `location = KATL`), elapsed = the leg's block minutes. After a restart on the
+same database the job is still there; two in-game hours later it is loaded at KATL (mission
+origin KATL, destination KRDU) and flown by a **SYNTHETIC** KATL → KRDU leg — the same fixture
+re-projected onto that route (`connector/test/transit-leg.ts`), not a recording — and paid
+`computePayout` over the full 549.2 nm with the chain minutes (block 1 + 120 + block 2):
+one `mission_payout` row, reputation +2, the ledger balances. With an own KATL FBO and a
+cargo terminal L1 the stored job shows `own_terminal`, 240 free minutes: 3 h at the stop
+cost nothing, 5 h cost 60 min. Long-haul: the KMEM board has 26 jobs, 2 long-haul; a KMIA
+job (747.4 nm > 720) is refused direct (`out_of_range`) and loads via KATL. A crash on a
+transit leg fails the job; abandoning stored cargo costs 3 reputation, and so does losing it on
+an onward leg flown to KCLT instead of KRDU (`short_distance`, `job.abandoned`). A stored job
+kept 90 min past its limit: the onward leg loads with `timeLimitMin` −90 and the expected
+payout with that late penalty, both follow the clock while it waits (−120 after 30 more
+minutes) and freeze at block-out.
+
+### Storage and export
+
+Migration **8**: `jobs.location` (the airport the cargo is at now; existing rows get their
+origin) and an index on `(location, status)`; settings `economy.phase = 8`. The transit
+record lives in the job row's JSON. Career export **version 5** may contain `in_transit`
+jobs, long-haul jobs and missions with `transitJobIds`; versions 1–4 import unchanged (they
+have no transit cargo), and an older connector refuses a version 5 file rather than misread
+it.
 
 ## Storage and exports
 
@@ -468,7 +575,8 @@ tagged DEMO with all actions disabled.
 ## Deferred
 
 - Done in P5 part 2 (below): FBOs, insurance, dynamic demand and fuel prices, milestones.
-  Still open: IFR/night/weather condition bonuses, small/GA airports, transit cargo.
+  Still open: IFR/night/weather condition bonuses, small/GA airports. Transit cargo is done
+  (see "Transit cargo").
 - Leases are never cancelled for non-payment: their monthly fee is booked even when it
   drives cash negative (only loans have a missed-payment path).
 
@@ -760,13 +868,13 @@ upgrading takes in-game days (shown on the queue with an ETA) and the new level 
 completes. Upkeep (and a built FBO's land lease) is billed at every month boundary for the
 coming month (`fbo_upkeep`); the month of acquisition is free.
 
-| Module           | Cost L1 / L2 / L3  | Upkeep/mo L1 / L2 / L3 | Days  | Effect by level                                                                                                                               |
-| ---------------- | ------------------ | ---------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fuel farm        | 120k / 180k / 300k | 3,000 / 5,000 / 8,000  | 1/2/4 | cost = regional price × (1 − 6/9/12 %); sells ≤ 20,000 / 60,000 / 150,000 kg a day; buy chance 45/55/65 %; own aircraft fuel at cost          |
-| Hangar           | 150k / 200k / 300k | 2,500 / 4,000 / 6,000  | 2/3/5 | 2 / 4 / 8 bays; own aircraft inside lose 60 / 80 / 100 % less storm wear; spare bays rented nightly with 45 / 60 / 75 % chance at $90 × scale |
-| Maintenance shop | 200k / 250k / 400k | 5,000 / 8,000 / 12,000 | 2/3/5 | own repairs × 0.75 cost, × 0.7 time up to minor / major / grounding defects; services traffic (2.5 / 5 / 7.5 %, $600 × class margin)          |
-| Cargo terminal   | 180k / 220k / 350k | 4,000 / 6,000 / 9,000  | 2/3/4 | +4 / 8 / 12 jobs and +5 / 10 / 15 % payouts on boards at the airport; cargo handling of traffic (8 / 16 / 24 %, 1.2 × handling fee)           |
-| Ramp & services  | 60k / 100k / 160k  | 1,500 / 2,500 / 4,000  | 1/1/2 | captures 30 / 38 / 46 % of the airport's movements; landing/parking $15 × class × 1 / 1.15 / 1.3; handling 25 / 32 / 40 %; L2+ crew lounge    |
+| Module           | Cost L1 / L2 / L3  | Upkeep/mo L1 / L2 / L3 | Days  | Effect by level                                                                                                                                                                             |
+| ---------------- | ------------------ | ---------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fuel farm        | 120k / 180k / 300k | 3,000 / 5,000 / 8,000  | 1/2/4 | cost = regional price × (1 − 6/9/12 %); sells ≤ 20,000 / 60,000 / 150,000 kg a day; buy chance 45/55/65 %; own aircraft fuel at cost                                                        |
+| Hangar           | 150k / 200k / 300k | 2,500 / 4,000 / 6,000  | 2/3/5 | 2 / 4 / 8 bays; own aircraft inside lose 60 / 80 / 100 % less storm wear; spare bays rented nightly with 45 / 60 / 75 % chance at $90 × scale                                               |
+| Maintenance shop | 200k / 250k / 400k | 5,000 / 8,000 / 12,000 | 2/3/5 | own repairs × 0.75 cost, × 0.7 time up to minor / major / grounding defects; services traffic (2.5 / 5 / 7.5 %, $600 × class margin)                                                        |
+| Cargo terminal   | 180k / 220k / 350k | 4,000 / 6,000 / 9,000  | 2/3/4 | +4 / 8 / 12 jobs and +5 / 10 / 15 % payouts on boards at the airport; cargo handling of traffic (8 / 16 / 24 %, 1.2 × handling fee); transit cargo stored 4 / 8 / 12 h free of its deadline |
+| Ramp & services  | 60k / 100k / 160k  | 1,500 / 2,500 / 4,000  | 1/1/2 | captures 30 / 38 / 46 % of the airport's movements; landing/parking $15 × class × 1 / 1.15 / 1.3; handling 25 / 32 / 40 %; L2+ crew lounge                                                  |
 
 At KATL (scale 1.2): fuel farm L1 **$144,000**, upkeep **$3,600**/mo; a bought KATL FBO pays
 ramp $1,800 + fuel farm $3,600 = **$5,400** a month. At KLIT (scale 0.4): fuel farm L1 $48,000.

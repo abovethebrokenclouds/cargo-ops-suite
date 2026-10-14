@@ -1,4 +1,12 @@
-import { Crosshair, MapPin, Plane, Route as RouteIcon, Warehouse, Waypoints } from "lucide-react";
+import {
+  CloudSun,
+  Crosshair,
+  MapPin,
+  Plane,
+  Route as RouteIcon,
+  Warehouse,
+  Waypoints,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EmptyState } from "@/components/EmptyState";
@@ -6,9 +14,11 @@ import { SourceTag, StaleTag } from "@/components/status/SourceTag";
 import { isSessionUp, isStale, routeView } from "@/lib/flight/flight-view";
 import { useAirportLookup } from "@/lib/economy/board";
 import { useCompanyView } from "@/lib/economy/company";
+import { transitPins } from "@/lib/economy/transit-pins";
 import { EMPTY, formatDegrees, formatInt, formatMinutes } from "@/lib/format";
 import { loadAirports, nearbyAirports, type AirportIndex } from "@/lib/map/airports";
 import { greatCirclePoints, haversineNm } from "@/lib/map/geo";
+import { mapWeatherStations, metarBadges } from "@/lib/map/metar-badges";
 import { routeEnds, type RouteEnd } from "@/lib/map/route";
 import type { OverlayGroup } from "@/lib/map/style";
 import { useTrail } from "@/lib/map/useTrail";
@@ -19,6 +29,7 @@ import type { ClientSimState } from "@/lib/sim-state";
 import { useNow } from "@/lib/sim-state/hooks";
 import { useSimConnection } from "@/lib/transport/useSimConnection";
 import { cn } from "@/lib/utils";
+import { useMetar } from "@/lib/weather/use-metar";
 
 import { OpsMap, type OpsMapPin } from "./OpsMap";
 
@@ -118,6 +129,7 @@ export function MapView() {
     airports: true,
     trail: true,
     route: true,
+    weather: true,
   });
   const headerBottom = useHeaderBottom();
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
@@ -151,8 +163,16 @@ export function MapView() {
         title: `${e.label} at ${a.name}: payouts +${e.payoutPct} %, fuel +${e.fuelPct} %`,
       });
     }
+    // Transit cargo stored at intermediate airports (connector data only, never in demo).
+    out.push(
+      ...transitPins(
+        state.sim.jobs?.inTransit ?? [],
+        state.sim.company?.clock?.gameMs ?? null,
+        lookup,
+      ),
+    );
     return out;
-  }, [fbos, demand, lookup]);
+  }, [fbos, demand, lookup, state.sim.jobs, state.sim.company?.clock?.gameMs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,6 +202,40 @@ export function MapView() {
   );
 
   const view = routeView(state);
+
+  // METAR badges: route ends, the mission's airports and accepted jobs' airports (at most 8),
+  // loaded through the page's shared METAR cache (lib/weather/weather-store.ts). With a
+  // connector that is one GET /api/weather/metar for these stations, repeated every 5 minutes
+  // while the map is open and the layer is on; the connector fetches the stations it has not
+  // cached (10 min) from aviationweather.gov only when Online weather is on. Nothing is
+  // requested while the layer is off. Demo: SAMPLE reports, no network.
+  const mission = sessionUp ? (state.sim.mission ?? null) : null;
+  const accepted = sessionUp ? (state.sim.jobs?.accepted ?? null) : null;
+  const weatherStations = useMemo(
+    () =>
+      mapWeatherStations({
+        origin: origin?.ident ?? view.origin,
+        destination: destination?.ident ?? view.destination,
+        missionOrigin: mission?.origin,
+        missionDestination: mission?.destination,
+        acceptedJobs: accepted,
+      }),
+    [
+      origin?.ident,
+      destination?.ident,
+      view.origin,
+      view.destination,
+      mission?.origin,
+      mission?.destination,
+      accepted,
+    ],
+  );
+  const metar = useMetar(layers.weather ? weatherStations.map((s) => s.ident) : []);
+  const metarData = metar.status === "ready" ? metar.data : null;
+  const badges = useMemo(
+    () => metarBadges(weatherStations, metarData, airports),
+    [weatherStations, metarData, airports],
+  );
   const distanceNm =
     view.distanceRemainingNm ??
     (position && destination ? haversineNm(position, destination) : null);
@@ -225,6 +279,7 @@ export function MapView() {
         layers={layers}
         pins={pins}
         showPins={showPins}
+        metarBadges={badges}
         follow={follow}
         onFollowChange={setFollow}
         {...(padding ? { padding } : {})}
@@ -315,7 +370,16 @@ export function MapView() {
             <RouteIcon className="size-4" aria-hidden="true" />
           </ControlButton>
           <ControlButton
-            label="FBOs and demand events"
+            label="METAR badges"
+            pressed={layers.weather}
+            onClick={() => toggle("weather")}
+            plain
+            testId="weather-toggle"
+          >
+            <CloudSun className="size-4" aria-hidden="true" />
+          </ControlButton>
+          <ControlButton
+            label="FBOs, demand events and transit cargo"
             pressed={showPins}
             onClick={() => setShowPins((v) => !v)}
             plain

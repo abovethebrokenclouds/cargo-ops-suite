@@ -19,6 +19,11 @@
 //   breakdown. Crash → mission failed, no payout, −20 reputation. A flight that is
 //   aborted (flight.end abort, session reset) aborts the mission; its jobs go back to
 //   accepted.
+// - transit cargo (docs/ECONOMY.md "Transit cargo"): `mission.load {destination}` may end a
+//   leg at an intermediate airport. Jobs going further are unloaded there `in_transit`
+//   (stored, possibly in an own cargo terminal with free storage hours) and loaded again
+//   later for the onward leg from that airport. They are paid in full on the final delivery
+//   only; the time limit covers the whole chain (block minutes + counted ground time).
 //
 // All of it is deterministic: boards come from the company seed, the board airport,
 // the aircraft type and a counter; the clock and ids are injected.
@@ -116,6 +121,16 @@ import {
   round1,
   runwaySuitability,
   verifyLeg,
+  arriveInTransit,
+  checkTransitProgress,
+  finalDeliveryTerms,
+  jobLocation,
+  legReputationDelta,
+  missionLegTerms,
+  transitStorage,
+  LONG_HAUL_JOBS_PER_BOARD,
+  TRANSIT_ABANDON_REPUTATION,
+  type FlownLeg,
   type AirportLookup,
   type EconomyAirport,
 } from "../../economy";
@@ -200,7 +215,7 @@ export class EconomyEngine {
     this.maintenance = options.maintenance;
     this.book = this.loadBook();
     for (const job of this.persistRead(
-      () => this.repo?.listJobs(["available", "accepted", "loaded"]) ?? [],
+      () => this.repo?.listJobs(["available", "accepted", "loaded", "in_transit"]) ?? [],
     ) ?? [])
       this.jobs.set(job.id, job);
     this.mission = this.persistRead(() => this.repo?.openMission() ?? null);
@@ -397,6 +412,7 @@ export class EconomyEngine {
       boards,
       available,
       accepted: all.filter((j) => j.status === "accepted" || j.status === "loaded"),
+      inTransit: all.filter((j) => j.status === "in_transit"),
       aircraft: {
         typeKey: type.key,
         name: type.name,
@@ -433,6 +449,7 @@ export class EconomyEngine {
 
   publish(): void {
     this.flushBook();
+    this.refreshLegTerms();
     if (this.mission && this.mission.id !== this.publishedMissionId) {
       if (this.publishedMissionId !== null) this.store.apply({ mission: null });
       this.publishedMissionId = this.mission.id;
@@ -490,6 +507,8 @@ export class EconomyEngine {
       this.publishedGameMinute = minute;
       this.lastClockPublish = wall;
       this.store.apply({ company: this.companyDomain() });
+      // Transit cargo waiting for departure keeps using its deadline: refresh the leg terms.
+      if (this.refreshLegTerms() && this.mission) this.store.apply({ mission: this.mission });
     }
   }
 
@@ -621,6 +640,19 @@ export class EconomyEngine {
     });
   }
 
+  /**
+   * A loaded mission carrying transit cargo: its deadline and expected payout follow the
+   * company clock until block-out (docs/ECONOMY.md "Transit cargo"). True when they changed.
+   */
+  private refreshLegTerms(): boolean {
+    const m = this.mission;
+    if (!m || m.status !== "loaded" || !m.jobs.some((j) => j.transit)) return false;
+    const t = missionLegTerms(m.jobs, m.destination, this.company.gameMs, this.company.reputation);
+    if (t.timeLimitMin === m.timeLimitMin && t.expectedPayout === m.expectedPayout) return false;
+    this.mission = { ...m, ...t };
+    return true;
+  }
+
   /** Recompute the preview of a loaded mission; true when what it shows changed. */
   private refreshPayloadPreview(): boolean {
     const m = this.mission;
@@ -731,6 +763,10 @@ export class EconomyEngine {
       status: "in_progress",
       flightId: record.id,
       startedAt: new Date(this.now()).toISOString(),
+      // Transit cargo: ground time at the stop is counted up to block-out, where the leg's
+      // deadline and expected payout are frozen.
+      startedGameMs: Math.floor(this.company.gameMs),
+      ...missionLegTerms(m.jobs, m.destination, this.company.gameMs, this.company.reputation),
       flownNm: record.distanceNm,
       elapsedMin: record.blockMin,
       payloadCheck,
@@ -861,7 +897,10 @@ export class EconomyEngine {
           : fail("unknown_airport", "Mission airports are unknown");
     if (!verdict.ok) {
       const crashed = verdict.code === "crashed";
-      const delta = crashed ? REPUTATION.crash : 0;
+      // Transit cargo already stored on an earlier leg and lost by a failed (non-crash) leg
+      // counts as abandoned, like job.release: −3 reputation each (a crash costs −20 already).
+      const lost = crashed ? [] : m.jobs.filter((j) => j.transit);
+      const delta = (crashed ? REPUTATION.crash : 0) + TRANSIT_ABANDON_REPUTATION * lost.length;
       if (delta) this.book.adjustReputation(delta);
       const settled = crashed
         ? this.settle(m, record, origin, null, true)
@@ -890,13 +929,40 @@ export class EconomyEngine {
         code: verdict.code,
         message: verdict.message,
       });
+      for (const j of lost) {
+        this.store.event("job.abandoned", {
+          jobId: j.id,
+          location: jobLocation(j),
+          reputationDelta: TRANSIT_ABANDON_REPUTATION,
+          missionId: m.id,
+        });
+      }
       this.publish();
       return;
     }
 
     const reputation = this.company.reputation;
-    const breakdowns = m.jobs.map((job) =>
-      computePayout({
+    // Transit cargo: jobs whose final destination is this leg's destination are delivered
+    // and paid over their whole chain; the others are unloaded here in transit (no pay yet).
+    const leg: FlownLeg = {
+      missionId: m.id,
+      flightId: record.id,
+      origin: m.origin,
+      destination: m.destination,
+      ...(m.startedGameMs !== undefined ? { startedGameMs: m.startedGameMs } : {}),
+      blockMin: record.blockMin,
+      landingGrade: grade,
+      peakG: landing?.peakG ?? null,
+      noBonus: record.flags.noBonus,
+      // An underloaded departure (sim payload clearly below the cargo) removes bonuses.
+      payloadMismatch: payloadMismatch(m.payloadCheck),
+    };
+    const finals = m.jobs.filter((j) => j.destination === m.destination);
+    const onward = m.jobs.filter((j) => j.destination !== m.destination);
+    const terms = finals.map((job) => finalDeliveryTerms(job, leg));
+    const breakdowns = finals.map((job, i) => {
+      const t = terms[i] ?? finalDeliveryTerms(job, leg);
+      return computePayout({
         jobId: job.id,
         kind: job.kind,
         weightKg: job.weightKg,
@@ -905,32 +971,53 @@ export class EconomyEngine {
         reputation,
         estimate: false,
         landingGrade: grade,
-        lateMin: record.blockMin - job.timeLimitMin,
-        peakG: landing?.peakG ?? null,
-        noBonus: record.flags.noBonus,
-        // An underloaded departure (sim payload clearly below the cargo) removes bonuses.
-        payloadMismatch: payloadMismatch(m.payloadCheck),
+        lateMin: t.lateMin,
+        peakG: t.peakG,
+        noBonus: t.noBonus,
+        payloadMismatch: t.payloadMismatch,
         // P5 part 2: the demand factor promised on the board.
         ...(job.demandFactor !== undefined ? { demand: job.demandFactor } : {}),
-      }),
-    );
+        ...(t.legs > 1 ? { chain: { legs: t.legs, chainMin: t.chainMin } } : {}),
+      });
+    });
     const total = breakdowns.reduce((s, b) => s + b.total, 0);
-    const maxLate = Math.max(0, ...m.jobs.map((j) => record.blockMin - j.timeLimitMin));
-    const delta = deliveryReputationDelta(grade, maxLate);
-    for (const [i, job] of m.jobs.entries()) {
+    const delta = legReputationDelta(
+      grade,
+      terms.map((t) => t.lateMin),
+    );
+    for (const [i, job] of finals.entries()) {
+      const legs = terms[i]?.legs ?? 1;
       this.book.post(
         "mission_payout",
         breakdowns[i]?.total ?? 0,
         "job",
         job.id,
-        `${job.origin}→${job.destination} ${job.kind} ${job.weightKg} kg (mission ${m.id})`,
+        `${job.origin}→${job.destination} ${job.kind} ${job.weightKg} kg (mission ${m.id}${legs > 1 ? `, ${legs} legs via transit` : ""})`,
       );
     }
+    // Storage for the cargo going further: an own cargo terminal keeps hours off the deadline.
+    const fboHere = this.book.activeFboAt(m.destination);
+    const storage = transitStorage({
+      fbo: fboHere !== null,
+      terminalLevel: fboHere?.modules.cargo.level ?? 0,
+    });
+    const arrivedAt = new Date(this.now()).toISOString();
+    const stored = onward.map((job) =>
+      arriveInTransit(this.jobs.get(job.id) ?? job, leg, {
+        arrivedAt,
+        arrivedGameMs: this.company.gameMs,
+        ...(dest?.name ? { locationName: dest.name } : {}),
+        ...storage,
+      }),
+    );
     // Fuel at the destination's price, its landing fee, lease hours and wear.
     const settled = this.settle(m, record, dest, dest, false);
     this.book.adjustReputation(delta);
-    // P5 part 2: demand activity, delivery count and landing streak (milestones).
-    this.book.recordDelivery({ origin: m.origin, destination: m.destination, grade });
+    // P5 part 2: demand activity, delivery count and landing streak (milestones) — only
+    // when cargo actually reached its final destination.
+    if (finals.length > 0) {
+      this.book.recordDelivery({ origin: m.origin, destination: m.destination, grade });
+    }
     const costTotal = round2(settled.costs.reduce((s, c) => s + c.amount, 0));
     const payout = {
       total,
@@ -947,20 +1034,33 @@ export class EconomyEngine {
       wear: settled.wear,
     };
     this.repoTx(() => {
-      this.returnJobs(m, "delivered");
+      for (const job of finals) {
+        this.setJob({ ...(this.jobs.get(job.id) ?? job), status: "delivered" });
+      }
+      for (const job of stored) this.setJob(job);
       this.flushBook();
       this.persistMission();
       this.repo?.linkFlight(record.id, m.jobIds, m.payloadKg, payout);
     });
     this.log(
       "info",
-      `Mission ${m.id} delivered: $${total} − costs $${costTotal} (reputation ${delta >= 0 ? "+" : ""}${delta}, wear ${settled.wear} %)`,
+      `Mission ${m.id} delivered: $${total} − costs $${costTotal} (reputation ${delta >= 0 ? "+" : ""}${delta}, wear ${settled.wear} %)${stored.length ? `; ${stored.length} job(s) in transit at ${m.destination}` : ""}`,
     );
-    for (const [i, job] of m.jobs.entries()) {
+    for (const [i, job] of finals.entries()) {
       this.store.event("job.completed", {
         jobId: job.id,
         missionId: m.id,
         payout: breakdowns[i]?.total ?? 0,
+      });
+    }
+    for (const job of stored) {
+      this.store.event("job.in_transit", {
+        jobId: job.id,
+        missionId: m.id,
+        location: m.destination,
+        destination: job.destination,
+        storage: job.transit?.storage ?? "airport",
+        deadlineGameMs: job.transit?.deadlineGameMs ?? null,
       });
     }
     this.store.event("mission.delivered", { missionId: m.id, flightId: record.id, payout });
@@ -1117,6 +1217,7 @@ export class EconomyEngine {
         const p = jobIdArgsSchema.safeParse(args);
         if (!p.success) return fail("bad_args", "jobId is required");
         const job = this.jobs.get(p.data.jobId);
+        if (job?.status === "in_transit") return this.abandonTransit(job);
         if (!job || job.status !== "accepted") {
           return fail(
             job?.status === "loaded" ? "job_loaded" : "job_not_accepted",
@@ -1132,7 +1233,7 @@ export class EconomyEngine {
       case "mission.load": {
         const p = missionLoadArgsSchema.safeParse(args);
         if (!p.success) return fail("bad_args", "jobIds is required");
-        return this.load(p.data.jobIds);
+        return this.load(p.data.jobIds, p.data.destination?.toUpperCase());
       }
       case "mission.unload": {
         const m = this.mission;
@@ -1405,7 +1506,7 @@ export class EconomyEngine {
     }
   }
 
-  private load(ids: string[]): Ok<Mission> | Fail {
+  private load(ids: string[], legDestination?: string): Ok<Mission> | Fail {
     if (
       this.mission &&
       (this.mission.status === "loaded" || this.mission.status === "in_progress")
@@ -1416,14 +1517,42 @@ export class EconomyEngine {
     const jobs: Job[] = [];
     for (const id of unique) {
       const job = this.jobs.get(id);
-      if (!job || job.status !== "accepted")
+      if (!job || (job.status !== "accepted" && job.status !== "in_transit"))
         return fail("job_not_accepted", `Job ${id} is not accepted`);
       jobs.push(job);
     }
-    const first = jobs[0];
-    if (!first) return fail("bad_args", "No jobs");
-    if (jobs.some((j) => j.origin !== first.origin || j.destination !== first.destination)) {
-      return fail("mixed_route", "Stacked jobs must share the same origin and destination");
+    const firstJob = jobs[0];
+    if (!firstJob) return fail("bad_args", "No jobs");
+    // The leg starts where the cargo is (its origin, or its transit stop).
+    const legOrigin = jobLocation(firstJob);
+    if (jobs.some((j) => jobLocation(j) !== legOrigin)) {
+      return fail("mixed_route", "Stacked jobs must be at the same airport");
+    }
+    let legDest = legDestination;
+    if (!legDest) {
+      if (jobs.some((j) => j.destination !== firstJob.destination)) {
+        return fail(
+          "mixed_route",
+          "Stacked jobs must share the same destination (or set a leg destination for transit)",
+        );
+      }
+      legDest = firstJob.destination;
+    }
+    if (legDest === legOrigin) {
+      return fail("same_airport", `The leg must leave ${legOrigin}`);
+    }
+    const first = { origin: legOrigin, destination: legDest };
+    // Transit cargo: every job going further must get closer to its final destination.
+    if (jobs.some((j) => j.destination !== legDest)) {
+      const from = this.airports?.get(legOrigin);
+      const to = this.airports?.get(legDest);
+      if (!from || !to) return fail("unknown_airport", "Unknown mission airport");
+      for (const j of jobs) {
+        const final = this.airports?.get(j.destination);
+        if (!final) return fail("unknown_airport", `Unknown airport ${j.destination}`);
+        const progress = checkTransitProgress(j, from, to, final);
+        if (!progress.ok) return fail(progress.code, progress.message);
+      }
     }
     // P4: the mission is flown with a fleet aircraft parked at the origin.
     const selection = this.selection();
@@ -1471,6 +1600,8 @@ export class EconomyEngine {
     }
     const id = this.newId();
     const loaded = jobs.map((j) => ({ ...j, status: "loaded" as const, missionId: id }));
+    const transitIds = loaded.filter((j) => j.destination !== first.destination).map((j) => j.id);
+    const gameMs = this.company.gameMs;
     const mission: Mission = {
       id,
       status: "loaded",
@@ -1483,9 +1614,12 @@ export class EconomyEngine {
       registration: aircraft.registration,
       payloadKg,
       distanceNm,
-      timeLimitMin: Math.min(...loaded.map((j) => j.timeLimitMin)),
-      expectedPayout: loaded.reduce((s, j) => s + j.payoutEstimate, 0),
+      // Tightest time left (a transit job has already used part of its chain; negative = late)
+      // and the payout of the jobs delivered on this leg (transit cargo pays on its final
+      // delivery, with the late penalty it has accrued).
+      ...missionLegTerms(loaded, first.destination, gameMs, this.company.reputation),
       createdAt: new Date(this.now()).toISOString(),
+      ...(transitIds.length ? { transitJobIds: transitIds } : {}),
     };
     mission.payloadCheck = this.payloadCheckNow(mission, "preview");
     this.repoTx(() => {
@@ -1551,6 +1685,8 @@ export class EconomyEngine {
     const jobs = generateJobs({
       demand: market.demand,
       extraJobs: market.extraJobs,
+      // Transit cargo: long-haul jobs that need a stop (drawn after the rest).
+      longHaulJobs: LONG_HAUL_JOBS_PER_BOARD,
       origin,
       airports: this.airports.list,
       aircraft: type,
@@ -1619,21 +1755,53 @@ export class EconomyEngine {
   // ---- persistence helpers ----
 
   private setJob(job: Job): void {
-    if (job.status === "available" || job.status === "accepted" || job.status === "loaded") {
+    if (
+      job.status === "available" ||
+      job.status === "accepted" ||
+      job.status === "loaded" ||
+      job.status === "in_transit"
+    ) {
       this.jobs.set(job.id, job);
     } else this.jobs.delete(job.id);
     this.persist(() => this.repo?.saveJob(job));
   }
 
-  /** Move a mission's jobs to a new status (accepted again, delivered or failed). */
+  /**
+   * Move a mission's jobs to a new status (accepted again, delivered or failed). "accepted"
+   * puts transit cargo back where it was stored (in_transit, its stop and clock unchanged).
+   */
   private returnJobs(m: Mission, status: "accepted" | "delivered" | "failed"): void {
     for (const j of m.jobs) {
       const current = this.jobs.get(j.id) ?? j;
       if (status === "accepted") {
         const { missionId: _m, ...rest } = current;
-        this.setJob({ ...rest, status: "accepted" });
+        this.setJob({ ...rest, status: current.transit ? "in_transit" : "accepted" });
       } else this.setJob({ ...current, status });
     }
+  }
+
+  /** job.release of cargo in transit: abandoned there, failed, no payout, reputation −3. */
+  private abandonTransit(job: Job): Ok<unknown> | Fail {
+    const { missionId: _m, ...rest } = job;
+    this.repoTx(() => {
+      this.setJob({ ...rest, status: "failed" });
+      this.book.adjustReputation(TRANSIT_ABANDON_REPUTATION);
+      this.flushBook();
+    });
+    this.log(
+      "warn",
+      `Job ${job.id} abandoned in transit at ${jobLocation(job)} (reputation ${TRANSIT_ABANDON_REPUTATION})`,
+    );
+    this.store.event("job.abandoned", {
+      jobId: job.id,
+      location: jobLocation(job),
+      reputationDelta: TRANSIT_ABANDON_REPUTATION,
+    });
+    this.publish();
+    return {
+      ok: true,
+      data: { jobId: job.id, status: "failed", reputationDelta: TRANSIT_ABANDON_REPUTATION },
+    };
   }
 
   private persistMission(): void {
@@ -1678,7 +1846,7 @@ export class EconomyEngine {
     this.book = this.loadBook();
     this.jobs.clear();
     for (const job of this.persistRead(
-      () => this.repo?.listJobs(["available", "accepted", "loaded"]) ?? [],
+      () => this.repo?.listJobs(["available", "accepted", "loaded", "in_transit"]) ?? [],
     ) ?? [])
       this.jobs.set(job.id, job);
     this.mission = this.persistRead(() => this.repo?.openMission() ?? null);
