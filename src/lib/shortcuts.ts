@@ -85,6 +85,13 @@ export class ShortcutMachine {
     return this.pendingSince !== null;
   }
 
+  /** A pending chord whose window has run out at `now` (it is then reset). */
+  expire(now: number): boolean {
+    if (this.pendingSince === null || now - this.pendingSince <= CHORD_TIMEOUT_MS) return false;
+    this.reset();
+    return true;
+  }
+
   /**
    * The page has just processed a key event of the pending chord (the `g` itself, or its
    * release) at `at`, on the same clock as the timestamps passed to `handle`. The chord window
@@ -118,6 +125,32 @@ export class ShortcutMachine {
     return null;
   }
 }
+
+/**
+ * A clock for the chord window that only advances while the page can respond. Each reading
+ * adds the real time since the previous one, capped at `maxStepMs`; the page reads it on
+ * every key event and every 100 ms while a chord is pending. A main thread blocked for a
+ * second or more (a route chunk or the bundled airport list parsing after hydration, the map
+ * initialising) therefore adds at most one step, whatever the key events' own timestamps
+ * say: those were seen to include the time an input event waited in the queue, which expired
+ * `g` + letter on slow machines. An idle person still runs out of time at the normal rate.
+ */
+export class ResponsiveClock {
+  private value = 0;
+  private last: number | null = null;
+
+  constructor(private readonly maxStepMs = 200) {}
+
+  /** Observe the real time `t` (e.g. performance.now()) and return the clock's value. */
+  read(t: number): number {
+    if (this.last !== null) this.value += Math.min(Math.max(t - this.last, 0), this.maxStepMs);
+    this.last = t;
+    return this.value;
+  }
+}
+
+/** While a chord is pending the page reads the ResponsiveClock this often. */
+export const CHORD_TICK_MS = 100;
 
 /** Window events the shortcuts use to reach components without shared state. */
 export const TOGGLE_FOLLOW_EVENT = "cargo-ops:toggle-follow";

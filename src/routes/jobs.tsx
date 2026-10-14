@@ -24,6 +24,8 @@ import {
   useJobBoard,
 } from "@/lib/economy/board";
 import { useCompanyView } from "@/lib/economy/company";
+import { arrivalEtaMs, routeView } from "@/lib/flight/flight-view";
+import { useNow } from "@/lib/sim-state/hooks";
 import { formatInt, formatUsd } from "@/lib/format";
 import { usePlannedFlight } from "@/lib/settings/connector-data";
 import { useCommand, useSimConnection } from "@/lib/transport/useSimConnection";
@@ -173,6 +175,14 @@ function Jobs() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const demo = state.connection === "demo";
+  // Destination ETA for the mission forecast: only while the mission is being flown and the
+  // plan domain routes to the mission's destination.
+  const now = useNow(30_000);
+  const route = routeView(state);
+  const missionEtaMs =
+    mission?.status === "in_progress" && route.destination === mission.destination
+      ? arrivalEtaMs(now, route.eteMin)
+      : null;
   // P6: the imported SimBrief plan (only when the player turned the import on).
   const plan = usePlannedFlight(connector);
 
@@ -352,6 +362,7 @@ function Jobs() {
             eyebrow={`Mission ${mission.id} weather`}
             origin={mission.origin}
             destination={mission.destination}
+            destinationEtaMs={missionEtaMs}
           />
         ) : null}
 

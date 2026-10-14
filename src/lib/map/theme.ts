@@ -24,6 +24,11 @@ export const MAP_TOKENS = [
   "success",
   "warning",
   "destructive",
+  // Flight categories (METAR badges).
+  "vfr",
+  "mvfr",
+  "ifr",
+  "lifr",
 ] as const;
 export type MapToken = (typeof MAP_TOKENS)[number];
 export type MapTheme = Record<MapToken, Rgba>;

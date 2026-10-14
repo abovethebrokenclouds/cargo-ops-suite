@@ -12,12 +12,13 @@ import type {
   Popup,
   StyleSpecification,
 } from "maplibre-gl";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { airportsGeoJson, type Airport, type AirportIndex } from "@/lib/map/airports";
 import { chooseBasemap } from "@/lib/map/basemap";
 import { graticuleLines, type LonLat } from "@/lib/map/geo";
+import { metarBadgesGeoJson, type MetarBadge } from "@/lib/map/metar-badges";
 import type { RouteEnd } from "@/lib/map/route";
 import {
   ATTRIBUTION,
@@ -26,6 +27,7 @@ import {
   FLOOR_SOURCE,
   GRATICULE_SOURCE,
   LAYER_GROUPS,
+  METAR_BADGE_LAYER,
   OVERLAY_SOURCES,
   adaptProtomapsLayers,
   floorLayers,
@@ -38,10 +40,13 @@ import {
   type OverlayGroup,
 } from "@/lib/map/style";
 import { readMapTheme } from "@/lib/map/theme";
+import { useNow } from "@/lib/sim-state/hooks";
 import { cn } from "@/lib/utils";
+import { CATEGORY_TEXT } from "@/components/weather/category-classes";
 
 import { AircraftMarker } from "./AircraftMarker";
 import { AirportCard } from "./AirportCard";
+import { MetarBadgeCard } from "./MetarBadgeCard";
 
 export interface OpsMapAircraft {
   lat: number;
@@ -83,6 +88,8 @@ export interface OpsMapProps {
   /** P5 part 2: FBO and demand-event pins, and whether they are shown. */
   pins?: readonly OpsMapPin[];
   showPins?: boolean;
+  /** METAR flight-category badges (shown when the weather layer is on). */
+  metarBadges?: readonly MetarBadge[];
   follow: boolean;
   onFollowChange: (follow: boolean) => void;
   /** Screen area covered by overlay panels; the camera centres in the rest. */
@@ -97,6 +104,7 @@ interface MarkerEls {
   origin: HTMLDivElement;
   destination: HTMLDivElement;
   popup: HTMLDivElement;
+  metarPopup: HTMLDivElement;
 }
 
 const FOLLOW_ZOOM = 5.5;
@@ -143,6 +151,10 @@ export function OpsMap(props: OpsMapProps) {
   const libRef = useRef<MapLibre | null>(null);
   const markers = useRef<{ aircraft?: Marker; origin?: Marker; destination?: Marker }>({});
   const popupRef = useRef<Popup | null>(null);
+  const metarPopupRef = useRef<Popup | null>(null);
+  const metarPinned = useRef(false);
+  const metarBadgesRef = useRef<readonly MetarBadge[]>(props.metarBadges ?? []);
+  metarBadgesRef.current = props.metarBadges ?? [];
   const pinMarkers = useRef(new Map<string, Marker>());
   const followChange = useRef(props.onFollowChange);
   followChange.current = props.onFollowChange;
@@ -156,6 +168,23 @@ export function OpsMap(props: OpsMapProps) {
   const [error, setError] = useState<string | null>(null);
   const [els, setEls] = useState<MarkerEls | null>(null);
   const [selected, setSelected] = useState<Airport | null>(null);
+  const [metarStation, setMetarStation] = useState<string | null>(null);
+  const [metarFeatures, setMetarFeatures] = useState(0);
+  const now = useNow(30_000);
+
+  /** Open the METAR tooltip at a badge; `pin` keeps it open after the pointer leaves. */
+  const openMetar = useCallback((station: string, pin: boolean) => {
+    const map = mapRef.current;
+    const popup = metarPopupRef.current;
+    const badge = metarBadgesRef.current.find((b) => b.station === station);
+    if (!map || !popup || !badge) return;
+    metarPinned.current = metarPinned.current || pin;
+    setMetarStation(station);
+    popup.setLngLat([badge.lon, badge.lat]);
+    if (!popup.isOpen()) popup.addTo(map);
+  }, []);
+  const openMetarRef = useRef(openMetar);
+  openMetarRef.current = openMetar;
 
   const { servedByConnector, onlineAllowed } = props;
 
@@ -280,12 +309,32 @@ export function OpsMap(props: OpsMapProps) {
           if (map) map.getCanvas().style.cursor = "";
         });
 
+        // METAR badges: hover shows the tooltip, click (or tap) keeps it open.
+        const metarAt = (ev: MapLayerMouseEvent) => {
+          const station = ev.features?.[0]?.properties?.["station"];
+          return typeof station === "string" ? station : null;
+        };
+        map.on("mousemove", METAR_BADGE_LAYER, (ev) => {
+          if (map) map.getCanvas().style.cursor = "pointer";
+          const station = metarAt(ev);
+          if (station && !metarPinned.current) openMetarRef.current(station, false);
+        });
+        map.on("click", METAR_BADGE_LAYER, (ev) => {
+          const station = metarAt(ev);
+          if (station) openMetarRef.current(station, true);
+        });
+        map.on("mouseleave", METAR_BADGE_LAYER, () => {
+          if (map) map.getCanvas().style.cursor = "";
+          if (!metarPinned.current) metarPopupRef.current?.remove();
+        });
+
         const make = () => document.createElement("div");
         const created: MarkerEls = {
           aircraft: make(),
           origin: make(),
           destination: make(),
           popup: make(),
+          metarPopup: make(),
         };
         popupRef.current = new maplibregl.Popup({
           closeButton: true,
@@ -295,6 +344,17 @@ export function OpsMap(props: OpsMapProps) {
           className: "ops-popup",
         }).setDOMContent(created.popup);
         popupRef.current.on("close", () => setSelected(null));
+        metarPopupRef.current = new maplibregl.Popup({
+          closeButton: true,
+          closeOnClick: false,
+          maxWidth: "18rem",
+          offset: 16,
+          className: "ops-popup",
+        }).setDOMContent(created.metarPopup);
+        metarPopupRef.current.on("close", () => {
+          metarPinned.current = false;
+          setMetarStation(null);
+        });
         setEls(created);
         setBasemap(choice.kind);
         setReady(true);
@@ -311,6 +371,8 @@ export function OpsMap(props: OpsMapProps) {
       pinLayer.clear();
       popupRef.current?.remove();
       popupRef.current = null;
+      metarPopupRef.current?.remove();
+      metarPopupRef.current = null;
       map?.remove();
       mapRef.current = null;
       if (protocolAdded) libRef.current?.removeProtocol("pmtiles");
@@ -345,8 +407,30 @@ export function OpsMap(props: OpsMapProps) {
     );
   }, [ready, props.trail]);
 
+  // METAR badges (from the map's one batched METAR request).
+  const metarBadges = props.metarBadges;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    const badges = metarBadges ?? [];
+    (map.getSource(OVERLAY_SOURCES.metar) as GeoJSONSource | undefined)?.setData(
+      metarBadgesGeoJson(badges),
+    );
+    setMetarFeatures(badges.length);
+    // The tooltip closes when its badge is gone.
+    const open = metarPopupRef.current;
+    if (open?.isOpen() && metarStation && !badges.some((b) => b.station === metarStation)) {
+      open.remove();
+    }
+  }, [ready, metarBadges, metarStation]);
+
   // Layer toggles.
-  const { airports: showAirports, trail: showTrail, route: showRoute } = props.layers;
+  const {
+    airports: showAirports,
+    trail: showTrail,
+    route: showRoute,
+    weather: showWeather,
+  } = props.layers;
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return;
@@ -354,6 +438,7 @@ export function OpsMap(props: OpsMapProps) {
       airports: showAirports,
       trail: showTrail,
       route: showRoute,
+      weather: showWeather,
     };
     for (const group of Object.keys(LAYER_GROUPS) as OverlayGroup[]) {
       for (const id of LAYER_GROUPS[group]) {
@@ -366,7 +451,8 @@ export function OpsMap(props: OpsMapProps) {
       const el = markers.current[key]?.getElement();
       if (el) el.style.display = showRoute ? "" : "none";
     }
-  }, [ready, showAirports, showTrail, showRoute]);
+    if (!showWeather) metarPopupRef.current?.remove();
+  }, [ready, showAirports, showTrail, showRoute, showWeather]);
 
   // Aircraft marker (only with real position data).
   const lat = props.aircraft?.lat;
@@ -486,6 +572,9 @@ export function OpsMap(props: OpsMapProps) {
   }, [ready, lat, lon, follow, route]);
 
   const hdg = props.aircraft?.hdgTrueDeg ?? null;
+  const metarBadge = metarStation
+    ? (metarBadges?.find((b) => b.station === metarStation) ?? null)
+    : null;
 
   return (
     <div className={cn("ops-map relative h-full w-full overflow-hidden", props.className)}>
@@ -496,6 +585,7 @@ export function OpsMap(props: OpsMapProps) {
         data-testid="ops-map"
         data-ready={ready ? "true" : "false"}
         data-basemap={basemap ?? undefined}
+        data-metar-features={ready ? metarFeatures : undefined}
       />
       {!ready && !error ? (
         <div aria-hidden="true" className="bg-radar pointer-events-none absolute inset-0" />
@@ -538,6 +628,12 @@ export function OpsMap(props: OpsMapProps) {
         ? createPortal(<EndpointMarker ident={d.ident} kind="destination" />, els.destination)
         : null}
       {els && selected ? createPortal(<AirportCard airport={selected} />, els.popup) : null}
+      {els && metarBadge
+        ? createPortal(<MetarBadgeCard badge={metarBadge} now={now} />, els.metarPopup)
+        : null}
+      {ready && showWeather && (metarBadges?.length ?? 0) > 0 ? (
+        <MetarLegend badges={metarBadges ?? []} onOpen={(s) => openMetar(s, true)} />
+      ) : null}
     </div>
   );
 }
@@ -555,6 +651,56 @@ function EndpointMarker({ ident, kind }: { ident: string; kind: "origin" | "dest
       <span className="panel absolute top-4 whitespace-nowrap px-1.5 py-0.5 font-mono text-[0.6875rem] font-semibold tracking-[0.12em] text-foreground">
         {ident}
       </span>
+    </div>
+  );
+}
+
+/** Keyboard- and touch-friendly list of the METAR badges; a button opens the map tooltip. */
+function MetarLegend({
+  badges,
+  onOpen,
+}: {
+  badges: readonly MetarBadge[];
+  onOpen: (station: string) => void;
+}) {
+  const sample = badges.some((b) => b.origin === "sample");
+  return (
+    <div
+      className="panel absolute bottom-12 left-3 z-10 flex max-w-[calc(100%-6rem)] flex-wrap items-center gap-x-2 gap-y-1 px-2.5 py-1.5 md:bottom-14 md:left-4"
+      data-testid="metar-legend"
+    >
+      <span className="label-eyebrow">METAR</span>
+      {sample ? (
+        <span
+          className="rounded-sm bg-warning/15 px-1.5 py-0.5 font-mono text-[0.625rem] font-semibold leading-none tracking-[0.16em] text-warning"
+          title="Built-in sample for illustration, not real weather"
+        >
+          SAMPLE
+        </span>
+      ) : null}
+      {badges.map((b) => (
+        <button
+          key={b.station}
+          type="button"
+          className="flex items-center gap-1 rounded px-1 font-mono text-[0.6875rem] font-semibold tracking-[0.1em] text-foreground hover:bg-secondary"
+          onClick={() => onOpen(b.station)}
+          title={`${b.station}: ${b.category ?? "category unknown"} (${b.origin === "sample" ? "sample" : b.stale ? "live, stale" : "live"}). Show the METAR.`}
+          data-testid="metar-badge"
+          data-station={b.station}
+          data-category={b.category ?? "unknown"}
+          data-origin={b.origin}
+        >
+          <span
+            aria-hidden="true"
+            className={cn(
+              "status-dot size-2",
+              b.category ? CATEGORY_TEXT[b.category] : "text-muted-foreground",
+            )}
+          />
+          {b.station}
+          <span className="sr-only"> {b.category ?? "category unknown"}</span>
+        </button>
+      ))}
     </div>
   );
 }

@@ -26,7 +26,7 @@ test.describe("replay mode against the local connector (--sim fake)", () => {
   }) => {
     const weatherCalls: string[] = [];
     page.on("request", (req) => {
-      if (req.url().includes("/api/weather/metar")) weatherCalls.push(req.url());
+      if (req.url().includes("/api/weather/")) weatherCalls.push(req.url());
     });
     await page.goto("/flight");
     const weather = page.getByTestId("route-weather");
@@ -38,7 +38,12 @@ test.describe("replay mode against the local connector (--sim fake)", () => {
       "sample",
     );
     await expect(weather.locator('[data-metar-origin="live"]')).toHaveCount(0);
-    expect(weatherCalls.some((u) => u.includes("ids=KMEM"))).toBe(true);
+    expect(weatherCalls.some((u) => u.includes("/api/weather/metar?ids=KMEM"))).toBe(true);
+    // The destination TAF also comes from the connector, as SAMPLE.
+    const taf = weather.getByTestId("taf-timeline");
+    await expect(taf).toHaveAttribute("data-origin", "sample", { timeout: 15_000 });
+    await expect(taf.getByTestId("taf-period").first()).toBeVisible();
+    expect(weatherCalls.some((u) => u.includes("/api/weather/taf?ids=KATL"))).toBe(true);
   });
 
   test("/flight shows connector-computed phases and a graded landing", async ({ page }) => {

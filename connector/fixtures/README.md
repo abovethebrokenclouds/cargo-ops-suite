@@ -40,6 +40,18 @@ prefix in `rawOb`. Used by `packages/weather/test/recorded.test.ts`,
 `connector/test/weather.test.ts` and the workflow's `--file` self-check. The hand-made file below
 stays for edge cases the recording lacks (IFR/LIFR, VRB wind, missing decoded fields).
 
+## `awc-taf.handmade.json` (HAND-MADE, not a recording)
+
+A response of the aviationweather.gov TAF endpoint (`/api/data/taf?ids=…&format=json`) written by
+hand in the documented JSON shape (`icaoId`, `issueTime`, `validTimeFrom`/`validTimeTo` in unix
+seconds, `rawTAF`, `fcsts`), because the host is not reachable from the cloud container. Station
+ids are real, every forecast is invented. It covers US style (FM, TEMPO, PROB30, BECMG, statute
+miles) and ICAO style (metre visibility, PROB30 TEMPO, NSW); the KSEA entry lacks `fcsts` and
+`issueTime` on purpose and has line breaks in `rawTAF`. Used by
+`packages/weather/test/taf.test.ts`, `connector/test/weather-taf.test.ts` and the `metar-live`
+workflow's TAF `--file` self-check. Once the workflow has run live, save its printed TAF response
+as `awc-taf.recorded-<date>.json` next to it.
+
 ## `awc-metar.handmade.json` (HAND-MADE, not a recording)
 
 A response of the aviationweather.gov Data API (`/api/data/metar?ids=…&format=json`) written by

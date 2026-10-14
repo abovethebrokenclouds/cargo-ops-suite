@@ -176,12 +176,17 @@ export const OVERLAY_SOURCES = {
   route: "ops-route",
   trail: "ops-trail",
   airports: "ops-airports",
+  metar: "ops-metar",
 } as const;
+
+/** METAR flight-category badge layer (hover/click shows the raw report). */
+export const METAR_BADGE_LAYER = "ops-metar-badge";
 
 export const LAYER_GROUPS = {
   route: ["ops-route-glow", "ops-route-line"],
   trail: ["ops-trail-glow", "ops-trail-line"],
   airports: ["ops-airports-halo", "ops-airports-dot", "ops-airports-label"],
+  weather: [METAR_BADGE_LAYER],
 } as const;
 export type OverlayGroup = keyof typeof LAYER_GROUPS;
 
@@ -198,6 +203,41 @@ export function overlaySources(): Record<string, SourceSpecification> {
       type: "geojson",
       data: emptyFc(),
       attribution: ATTRIBUTION.ourAirports,
+    },
+    [OVERLAY_SOURCES.metar]: { type: "geojson", data: emptyFc() },
+  };
+}
+
+/**
+ * Flight-category badge: a small dot up and to the right of the airport, so it stays visible
+ * next to the origin/destination markers. Colour from the --vfr/--mvfr/--ifr/--lifr tokens;
+ * a report without a category is drawn in the muted tone.
+ */
+export function metarBadgeLayer(theme: MapTheme): LayerSpecification {
+  return {
+    id: METAR_BADGE_LAYER,
+    type: "circle",
+    source: OVERLAY_SOURCES.metar,
+    paint: {
+      "circle-color": [
+        "match",
+        ["get", "category"],
+        "VFR",
+        c(theme.vfr),
+        "MVFR",
+        c(theme.mvfr),
+        "IFR",
+        c(theme.ifr),
+        "LIFR",
+        c(theme.lifr),
+        c(theme["muted-foreground"]),
+      ],
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 4, 9, 6],
+      "circle-translate": [11, -11],
+      "circle-stroke-color": c(withAlpha(theme.background, 0.9)),
+      "circle-stroke-width": 1.5,
+      // A stale live report is drawn faded.
+      "circle-opacity": ["case", ["==", ["get", "stale"], true], 0.55, 1],
     },
   };
 }
@@ -323,5 +363,6 @@ export function overlayLayers(theme: MapTheme): LayerSpecification[] {
         ],
       },
     },
+    metarBadgeLayer(theme),
   ];
 }

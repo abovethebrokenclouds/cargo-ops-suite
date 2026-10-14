@@ -32,9 +32,12 @@ Playwright specs, two projects:
   default without any request to simbrief.com, manifest/icons content types, `f` map follow);
   `demo.spec.ts` covers `g`-chord navigation, the `?` dialog and units per browser. Weather:
   `demo.spec.ts` checks the SAMPLE METARs on `/flight` (category chips, raw text toggle,
-  observation age, no external request), the job-detail weather toggle and the per-browser
-  Online weather switch; `replay.spec.ts` checks that a replay's connector serves SAMPLE reports,
-  never live ones. No spec reaches aviationweather.gov.
+  observation age, no external request) and the destination SAMPLE TAF timeline (a category per
+  period, raw text), the job-detail weather toggle, the `/map` METAR badges (SAMPLE legend with
+  VFR/MVFR dots for KMEM/KATL, two features on the badge layer, the raw-METAR tooltip with its
+  age, the layer toggle) and the per-browser Online weather switch; `replay.spec.ts` checks that
+  a replay's connector serves SAMPLE METARs and TAFs, never live ones. No spec reaches
+  aviationweather.gov.
 
 Neither project talks to a simulator. A real SimConnect session is only checked on the owner's
 Windows PC (see `docs/VERIFICATION.md`).
