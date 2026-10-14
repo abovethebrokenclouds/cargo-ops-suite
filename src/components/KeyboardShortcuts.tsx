@@ -12,7 +12,9 @@ import {
 import {
   NAV_SHORTCUTS,
   OPEN_SHORTCUTS_EVENT,
+  CHORD_TICK_MS,
   OTHER_SHORTCUTS,
+  ResponsiveClock,
   ShortcutMachine,
   TOGGLE_FOLLOW_EVENT,
   isTypingTarget,
@@ -38,6 +40,18 @@ export function KeyboardShortcuts() {
   openRef.current = open;
 
   useEffect(() => {
+    // The chord window runs on a clock that only advances while the page can respond (see
+    // ResponsiveClock): time the main thread was blocked (a route rendering, a large module
+    // parsing, the map initialising) must not split `g j`, whether the block fell before the
+    // second key or between the two. While a chord is pending the clock is read every
+    // CHORD_TICK_MS so an idle person still runs out of time at the normal rate.
+    const clock = new ResponsiveClock();
+    const read = () => clock.read(performance.now());
+    let ticker: ReturnType<typeof setInterval> | null = null;
+    const stopTicking = () => {
+      if (ticker !== null) globalThis.clearInterval(ticker);
+      ticker = null;
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing || e.repeat) return;
       if (isTypingTarget(e.target)) return;
@@ -45,14 +59,17 @@ export function KeyboardShortcuts() {
       if (!openRef.current && document.querySelector('[role="dialog"], [role="alertdialog"]')) {
         return;
       }
-      // Time the chord with the event's own timestamp (when the key was pressed), and start
-      // the window when the page actually processed the `g` (and its release, see onKeyUp):
-      // time the main thread was blocked (a route rendering, the map initialising) must not
-      // split `g f`, whether the block fell before the second key or between the two.
-      const action = machine.current.handle(e, e.timeStamp, pathRef.current);
+      const now = read();
+      const action = machine.current.handle(e, now, pathRef.current);
+      if (!machine.current.pending) stopTicking();
       if (!action) return;
       if (action.type === "pending") {
-        machine.current.responded(performance.now());
+        machine.current.responded(now);
+        if (ticker === null) {
+          ticker = globalThis.setInterval(() => {
+            if (machine.current.expire(read()) || !machine.current.pending) stopTicking();
+          }, CHORD_TICK_MS);
+        }
         return;
       }
       e.preventDefault();
@@ -65,7 +82,7 @@ export function KeyboardShortcuts() {
       }
     };
     const onKeyUp = () => {
-      if (machine.current.pending) machine.current.responded(performance.now());
+      if (machine.current.pending) machine.current.responded(read());
     };
     const onOpen = () => setOpen(true);
     window.addEventListener("keydown", onKey);
@@ -75,6 +92,7 @@ export function KeyboardShortcuts() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener(OPEN_SHORTCUTS_EVENT, onOpen);
+      stopTicking();
     };
   }, [navigate]);
 

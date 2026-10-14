@@ -1,9 +1,10 @@
 name: METAR live
 
-# Strict live check of aviationweather.gov through the connector's own fetch + mapping code
-# (scripts/ci/metar-live.mjs). Kept out of ci.yml so an AWC outage never blocks unrelated
-# PRs: it runs only when weather code changes, weekly, and on demand. The job log prints the
-# raw JSON, so it doubles as a recorded response. See docs/VERIFICATION.md.
+# Strict live check of aviationweather.gov METAR and TAF through the connector's own fetch +
+# mapping code (scripts/ci/metar-live.mjs). Kept out of ci.yml so an AWC outage never blocks
+# unrelated PRs: it runs only when weather code changes, weekly, and on demand. The job log
+# prints the raw JSON of both endpoints, so it doubles as a recorded response. See
+# docs/VERIFICATION.md.
 
 on:
   pull_request:
@@ -11,6 +12,7 @@ on:
       - "packages/weather/**"
       - "connector/src/core/weather.ts"
       - "connector/src/**/weather*"
+      - "connector/fixtures/awc-*.json"
       - "scripts/ci/metar-live.mjs"
       - ".github/workflows/metar-live.yml"
   push:
@@ -19,6 +21,7 @@ on:
       - "packages/weather/**"
       - "connector/src/core/weather.ts"
       - "connector/src/**/weather*"
+      - "connector/fixtures/awc-*.json"
       - "scripts/ci/metar-live.mjs"
       - ".github/workflows/metar-live.yml"
   schedule:
@@ -43,8 +46,10 @@ jobs:
         working-directory: connector
         run: npm ci && npm run build
       - name: Self-check against the hand-made fixture
-        run: node scripts/ci/metar-live.mjs --file connector/fixtures/awc-metar.handmade.json --ids KMEM,KATL,KSEA,KORD,EGLL
+        run: node scripts/ci/metar-live.mjs --product metar --file connector/fixtures/awc-metar.handmade.json --ids KMEM,KATL,KSEA,KORD,EGLL
       - name: Self-check against the recorded live response (2026-10-14)
-        run: node scripts/ci/metar-live.mjs --file connector/fixtures/awc-metar.recorded-2026-10-14.json --ids KMEM,KATL,EGLL,KJFK
-      - name: Live METAR check (KMEM, KATL, EGLL, KJFK)
+        run: node scripts/ci/metar-live.mjs --product metar --file connector/fixtures/awc-metar.recorded-2026-10-14.json --ids KMEM,KATL,EGLL,KJFK
+      - name: TAF self-check against the hand-made fixture
+        run: node scripts/ci/metar-live.mjs --product taf --file connector/fixtures/awc-taf.handmade.json --ids KMEM,KATL,EGLL,KSEA
+      - name: Live METAR + TAF check (KMEM, KATL, EGLL, KJFK)
         run: node scripts/ci/metar-live.mjs --ids KMEM,KATL,EGLL,KJFK

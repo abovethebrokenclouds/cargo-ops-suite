@@ -20,6 +20,7 @@ import {
   type MetarDecoded,
   type Wind,
 } from "./metar";
+import { parseTaf, type TafDecoded } from "./taf";
 
 export const AWC_METAR_URL = "https://aviationweather.gov/api/data/metar";
 export const AWC_DOCS_URL = "https://aviationweather.gov/data/api/";
@@ -151,6 +152,74 @@ export function fromAwcResponse(body: unknown, ref: Date = new Date()): AwcDecod
   for (const item of body) {
     const m = fromAwcMetar(item, ref);
     if (m) out.push(m);
+  }
+  return out;
+}
+
+// ---- TAF ----------------------------------------------------------------------------------
+//
+//   GET https://aviationweather.gov/api/data/taf?ids=KMEM,KATL&format=json
+//
+// Same service, terms and limits as METAR. Documented JSON: an array with one object per TAF
+// carrying `icaoId`, `rawTAF`, `issueTime` (ISO string), `validTimeFrom`/`validTimeTo` (unix
+// seconds) and `fcsts` (the API's own period decoding). Our parser on `rawTAF` is the source
+// of the periods so their semantics (BECMG/TEMPO/PROB merging, categories) are ours and do
+// not depend on the unversioned `fcsts` shape; the header fields only fill gaps. The number
+// of `fcsts` is kept so the live check can compare it with our period count.
+
+export const AWC_TAF_URL = "https://aviationweather.gov/api/data/taf";
+export const AWC_TAF_ATTRIBUTION = "TAF: NOAA Aviation Weather Center (aviationweather.gov)";
+
+export function awcTafUrl(stations: readonly string[]): string {
+  return `${AWC_TAF_URL}?ids=${stations.map(encodeURIComponent).join(",")}&format=json`;
+}
+
+export interface AwcTafDecoded extends TafDecoded {
+  rawText: string;
+  /** Length of the API's `fcsts` array (null when absent); diagnostics only. */
+  apiPeriodCount: number | null;
+}
+
+function isoFrom(v: unknown): string | null {
+  if (typeof v === "number" && Number.isFinite(v)) return new Date(v * 1000).toISOString();
+  if (typeof v === "string" && v.trim() !== "") {
+    if (/^\d+$/.test(v.trim())) return new Date(Number(v) * 1000).toISOString();
+    const d = new Date(v.includes("T") || v.endsWith("Z") ? v : `${v.replace(" ", "T")}Z`);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  return null;
+}
+
+/** Map one element of the TAF JSON array; null without a station or raw text. */
+export function fromAwcTaf(value: unknown, ref: Date = new Date()): AwcTafDecoded | null {
+  if (!value || typeof value !== "object") return null;
+  const o = value as Obj;
+  const rawText = typeof o["rawTAF"] === "string" ? o["rawTAF"].trim().replace(/\s+/g, " ") : "";
+  if (!rawText) return null;
+  const issued = isoFrom(o["issueTime"]);
+  // Date the raw DDHHMMZ against the API's issue time when it has one.
+  const parsed = parseTaf(rawText, issued ? new Date(issued) : ref);
+  const id = typeof o["icaoId"] === "string" ? o["icaoId"].trim().toUpperCase() : "";
+  const station = id || parsed?.station || "";
+  if (!station || !parsed) return null;
+  return {
+    ...parsed,
+    station,
+    issuedAt: parsed.issuedAt ?? issued,
+    validFrom: parsed.validFrom ?? isoFrom(o["validTimeFrom"]),
+    validTo: parsed.validTo ?? isoFrom(o["validTimeTo"]),
+    rawText,
+    apiPeriodCount: Array.isArray(o["fcsts"]) ? o["fcsts"].length : null,
+  };
+}
+
+/** Map the TAF JSON body (an array; anything else is an empty result). */
+export function fromAwcTafResponse(body: unknown, ref: Date = new Date()): AwcTafDecoded[] {
+  if (!Array.isArray(body)) return [];
+  const out: AwcTafDecoded[] = [];
+  for (const item of body) {
+    const t = fromAwcTaf(item, ref);
+    if (t) out.push(t);
   }
   return out;
 }

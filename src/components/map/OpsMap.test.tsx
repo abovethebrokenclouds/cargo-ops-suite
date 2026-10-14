@@ -50,7 +50,7 @@ const baseProps: OpsMapProps = {
   destination: null,
   trail: [],
   airports: null,
-  layers: { airports: true, trail: true, route: true },
+  layers: { airports: true, trail: true, route: true, weather: true },
   follow: true,
   onFollowChange: () => {},
 };

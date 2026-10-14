@@ -118,9 +118,17 @@ test("PWA: manifest and icons served same-origin with the right content types", 
 
 test("f toggles map follow on /map; g + letter navigates the local build", async ({ page }) => {
   await page.goto("/map");
-  // Wait for the map to finish initialising: its start-up can block the page long enough to
-  // expire a key chord on a slow CI runner.
-  await expect(page.getByTestId("basemap-badge")).toBeVisible();
+  // Wait for hydration and for the map to finish initialising: the basemap badge alone is in
+  // the server-rendered HTML ("Loading map"), so a key pressed when it is visible can reach
+  // the page before the shortcut listener exists. The chip turns REPLAY and the map reports
+  // ready only from client effects.
+  await expect(page.locator('header [role="status"]').first()).toHaveAttribute(
+    "data-status",
+    "replay",
+  );
+  await expect(page.getByTestId("ops-map")).toHaveAttribute("data-ready", "true", {
+    timeout: 30_000,
+  });
   const follow = page.getByTestId("follow-toggle");
   await expect(follow).toHaveAttribute("aria-pressed", "true");
   await page.keyboard.press("f");
