@@ -37,6 +37,15 @@ Values are tagged `SIM`, `REPLAY` or `DEMO`; a dash means "no data", never a mad
    with a reason when the aircraft is not airworthy, not at the origin, busy, or too heavy.
 4. With SimBrief import on (Settings), the job board shows your planned route and a button for
    contracts on it.
+   **Airport data** on Jobs shows the board airport as the job generator sees it. Each field is
+   labelled **MSFS** (your simulator returned it, add-on scenery included) or **OurAirports**
+   (the bundled data); with MSFS data it also lists the sim's runways. Opening or refreshing
+   the board asks the sim about the board airport, your **Jobs to** airport and nearby airports;
+   their answers are used by the next board you refresh, so MSFS data can change which jobs an
+   airport offers (a longer runway, another surface). An add-on airport that is not in the
+   bundled data: refresh with it as **Board airport** or **Jobs to** once (the board answers
+   "asked the simulator for it"), then refresh again. Runway badges on each job carry the same
+   labels. Replays and the demo always use OurAirports.
 5. **Load the cargo in the sim too.** The mission strip shows a **payload check**: the sim's
    payload stations minus the crew (the first Pilot/Co-pilot/Captain seat plus any Crew seats,
    otherwise nothing; change it in

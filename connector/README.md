@@ -446,6 +446,14 @@ connector/
   it); until then the chip relies on `welcome.sim`.
 - AI traffic (`requestDataOnSimObjectType`, AIRCRAFT) skips the user aircraft's own object
   id (taken from the user-aircraft frames) in case the request returns it.
+- Facilities (`src/sim/facilities.ts`, `src/core/facilities.ts`): one airport facility
+  definition per connection (airport + runway members, docs/SIMVARS.md "Facility
+  definition") and `requestFacilityData` per ICAO, never the list calls. The economy asks for
+  the board airport, the chosen destination and the 24 nearest candidates on `jobs.list` /
+  `jobs.refresh`, the mission airports on `mission.load` and on connect; at most 4 requests
+  in flight, 64 queued, 10 s timeout. Answers go to `msfs_airports` (migration 10, source
+  `msfs`, refreshed after 7 days) and the `facilities` domain; misses, timeouts and a refused
+  definition fall back to OurAirports (logged once per kind and connection).
 
 ## Testing without the simulator
 

@@ -188,6 +188,83 @@ trust them alone (`connector/src/sim/pause-state.ts`, tests in
 - A real link loss is different: see the flight core header (`connector/src/core/flight-core.ts`)
   for the disconnect rules (flight suspended, offline time not counted, commands refused).
 
+## Facility definition (`AddToFacilityDefinition`)
+
+MSFS facilities override (plan §6.1 "Facilities", §8, §14.3): `connector/src/sim/facilities.ts`
+registers one airport definition per SimConnect connection (lazily, on the first request) and
+asks for airports **one ICAO at a time** with `requestFacilityData(defineId, requestId, icao)`
+(no region, no type: the plain `SimConnect_RequestFacilityData`). It never uses the facility
+**list** calls (`requestFacilitiesList(Ex1)`, `subscribeToFacilities(Ex1)`,
+`requestAllFacilities`): §14.3 notes the 2024 list callbacks are regressed, and the connector
+only needs the airports a board, a job or a mission refers to. node-simconnect 4.2.1 is used
+unmodified through its public methods and its `facilityData` / `facilityDataEnd` events.
+
+Docs: SimConnect_AddToFacilityDefinition and SimConnect_RequestFacilityData, with the
+"Airport" and "Runway" member pages (2020:
+[SimConnect_AddToFacilityDefinition](https://docs.flightsimulator.com/html/Programming_Tools/SimConnect/API_Reference/Facilities/SimConnect_AddToFacilityDefinition.htm);
+2024: the same page under `msfs2024/.../simconnect/api-reference/facilities/`).
+
+**How it was reached (2026-10-14).** Same situation as the SimVar audit, plus GitHub:
+
+| Route tried                                                                                                                    | Result                                                                                                                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `curl` through the proxy, `docs.flightsimulator.com/.../SimConnect_AddToFacilityDefinition.htm`                                | `CONNECT tunnel failed, response 403` (egress policy); not retried or routed around                                                                                |
+| GitHub API (`gh api`) for node-simconnect's facility sample                                                                    | refused: GitHub access to that repository is not enabled for the session                                                                                           |
+| npm registry: `msfs-simconnect-api-wrapper` 4.7.0 (Pomax, **CC0-1.0**), files `special/airports.js` and `special/constants.js` | worked: an airport/runway facility definition written against MSFS, with the type it reads for each member and the runway surface enum in order (marked **[tx2]**) |
+| node-simconnect 4.2.1 type declarations (`RecvFacilityData`, `FacilityDataType`)                                               | the record header (userRequestId, uniqueRequestId, parent, type, isListItem, itemIndex, listSize) and the type numbers AIRPORT 0, RUNWAY 1                         |
+
+So every row below rests on **one** secondary source (**[tx2]**) plus the SDK structure as
+node-simconnect decodes it; nothing was read from the SDK page itself. Only facts were taken
+(names, data types, units, enum order); no code was copied. The emulator
+(`connector/test/support/simconnect-emulator.ts`) was written from the same facts and so cannot
+catch a wrong fact: PC-57 checks them on the sim.
+
+Members are returned packed in definition order without padding (**[tx2]** reads them
+back-to-back, e.g. a FLOAT32 directly followed by a STRING32). The airport arrives as one
+`SIMCONNECT_RECV_FACILITY_DATA` of type AIRPORT, then one per runway (type RUNWAY,
+`isListItem` 1, `itemIndex`/`listSize`), then `SIMCONNECT_RECV_FACILITY_DATA_END`.
+
+| Order | Member               | Block   | SDK type | Unit (as documented)   | Used for                                                     |
+| ----- | -------------------- | ------- | -------- | ---------------------- | ------------------------------------------------------------ |
+| 1     | OPEN AIRPORT         | —       | marker   | —                      | opens the airport block                                      |
+| 2     | LATITUDE             | airport | FLOAT64  | degrees                | position (replaces OurAirports when present)                 |
+| 3     | LONGITUDE            | airport | FLOAT64  | degrees                | position                                                     |
+| 4     | ALTITUDE             | airport | FLOAT64  | metres (→ ft, rounded) | elevation                                                    |
+| 5     | NAME64               | airport | STRING64 | —                      | name of an airport only the sim knows (empty → its ICAO)     |
+| 6     | N_RUNWAYS            | airport | INT32    | count                  | cross-check only (a mismatch is logged at debug level)       |
+| 7     | OPEN RUNWAY          | —       | marker   | —                      | opens the runway block (inside the airport block)            |
+| 8     | HEADING              | runway  | FLOAT32  | degrees true           | runway list                                                  |
+| 9     | LENGTH               | runway  | FLOAT32  | metres (→ ft, rounded) | longest runway: the job generator's runway-length constraint |
+| 10    | WIDTH                | runway  | FLOAT32  | metres (→ ft, rounded) | runway list                                                  |
+| 11    | SURFACE              | runway  | INT32    | enum (below)           | surface class of the longest runway: the surface constraint  |
+| 12    | PRIMARY_NUMBER       | runway  | INT32    | enum: 1–36, 37–44 N…NW | runway ident ("18C/36C")                                     |
+| 13    | PRIMARY_DESIGNATOR   | runway  | INT32    | enum: none L R C W A B | runway ident                                                 |
+| 14    | SECONDARY_NUMBER     | runway  | INT32    | enum                   | runway ident                                                 |
+| 15    | SECONDARY_DESIGNATOR | runway  | INT32    | enum                   | runway ident                                                 |
+| 16    | CLOSE RUNWAY         | —       | marker   | —                      |                                                              |
+| 17    | CLOSE AIRPORT        | —       | marker   | —                      |                                                              |
+
+**SURFACE enum** (**[tx2]** order; names and the class the generator uses are in
+`MSFS_SURFACES`, `packages/economy/src/facilities.ts`): 0 concrete, 1 grass, 2 water (FSX),
+3 bumpy grass, 4 asphalt, 5 short grass, 6 long grass, 7 hard turf, 8 snow, 9 ice, 10 urban,
+11 forest, 12 dirt, 13 coral, 14 gravel, 15 oil treated, 16 steel mats, 17 bituminous, 18 brick,
+19 macadam, 20 planks, 21 sand, 22 shale, 23 tarmac, 24 wright flyer track, 25 ocean, 26 water,
+27 pond, 28 lake, 29 river, 30 waste water, 31 paint; 254/255 unknown. Values 0–23 follow the
+long-standing FSX surface order; **24 and up rest on [tx2] alone** (an SDK copy elsewhere may
+number them differently). A value not in the table (254 "unknown", or anything new) keeps the
+OurAirports surface, labelled OurAirports. Snow, ice, urban, forest, oil treated, brick, planks,
+shale, wright flyer track and paint have no surface class, so such a runway suits no aircraft
+(the same rule as an unknown OurAirports surface).
+
+**Unanswered and refused requests (ASSUMPTION).** The SDK does not say how an ICAO the sim does
+not know is answered; the connector treats both FACILITY_DATA_END without an AIRPORT record and
+an exception against the request as a miss, and a request with no answer after 10 s as a miss.
+An exception against any `addToFacilityDefinition` call refuses the whole definition for that
+connection. In every one of these cases nothing is stored and the airport keeps its OurAirports
+data (logged once per kind and connection). The literal-name scan in
+`connector/test/simvar-catalog.test.ts` also covers `addToFacilityDefinition`: member names go
+through `AIRPORT_FACILITY_DEFINITION` only.
+
 ## What still needs the PC
 
 - **PC-53**: SimStop / SimStart and the `"Sim"` state on the real sim: back to the main menu
@@ -202,6 +279,10 @@ trust them alone (`connector/src/sim/pause-state.ts`, tests in
 - **PC-20**: touchdown values are latched and fresh after each landing; record the sign of
   `PLANE TOUCHDOWN NORMAL VELOCITY` (descending) and of `PLANE TOUCHDOWN PITCH DEGREES`
   (nose-up) and update the notes above.
+- **PC-57**: the facility definition on MSFS 2024 and 2020: no `refused the airport facility
+definition` line; an add-on airport's runways (ident, length, heading, surface) match the
+  scenery; record how an unknown ICAO is answered (end only, exception, or nothing) and
+  whether SURFACE values above 23 match the table ("Facility definition").
 - **PC-55**: GPS flight plan on MSFS 2024: whether a plan made in the EFB (and one entered in
   the aircraft's GPS) sets `GPS IS ACTIVE FLIGHT PLAN` with real values, whether
   `GPS FLIGHT PLAN WP INDEX` is `count − 1` on the last leg, and whether `GPS WP DISTANCE` /
