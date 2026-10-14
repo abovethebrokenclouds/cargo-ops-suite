@@ -119,7 +119,7 @@ test("a KRDU job flown to KATL waits there in transit: /jobs and /map show it", 
   const pin = page.getByTestId("map-transit-pin");
   await expect(pin).toHaveCount(1, { timeout: 30_000 });
   await expect(pin).toContainText("KATL · 1 in transit");
-  await expect(pin).toHaveAttribute("title", new RegExp(`${jobId} → KRDU, due Month`));
+  await expect(pin).toHaveAttribute("title", new RegExp(`${jobId} → KRDU, Due Month`));
   await page.getByTestId("pins-toggle").click();
   await expect(pin).toHaveCount(0);
 });
