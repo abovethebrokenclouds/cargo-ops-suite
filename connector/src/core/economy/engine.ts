@@ -9,6 +9,10 @@
 //   the sim reports them). A flight that starts by itself at takeoff picks up the
 //   loaded mission when the last parked sample (on ground, brake set) was within
 //   3 nm of the origin; otherwise the mission stays loaded with `startBlocked`.
+// - payload check: while the mission is loaded the cargo is compared with the payload
+//   stations the sim reports (minus a crew allowance) as a live preview; at the start
+//   the check is frozen on the mission. An underloaded departure removes the payout
+//   bonuses (like noBonus); no stations reported → unknown, never a penalty.
 // - deliver: when the flight completes (Arrived: parked, engines off, brake set) the
 //   leg is verified (distance ≥ 90 % of the great circle, parked within 3 nm of the
 //   destination, no teleport, not invalidated) and every job is paid with a full
@@ -73,6 +77,8 @@ import {
   type SimStatePatch,
   type WeightsState,
   type FuelState,
+  type PayloadCheck,
+  type PayloadState,
 } from "../../protocol";
 import {
   ARRIVAL_RADIUS_NM,
@@ -95,6 +101,7 @@ import {
   airportLookup,
   boardSeed,
   checkAtOrigin,
+  checkPayload,
   clampReputation,
   computePayout,
   deliveryReputationDelta,
@@ -104,6 +111,7 @@ import {
   maxJobDistanceNm,
   nearestAirport,
   payloadLimitKg,
+  payloadMismatch,
   reputationTier,
   round1,
   runwaySuitability,
@@ -211,6 +219,7 @@ export class EconomyEngine {
       boardCounter: 0,
       boards: [],
       aircraftTypeOverride: null,
+      crewAllowanceKg: null,
       ...newCompanyCore(STARTING_CASH),
     };
     if (stored && this.repo) {
@@ -328,6 +337,7 @@ export class EconomyEngine {
       reputation: this.company.reputation,
       reputationTier: reputationTier(this.company.reputation),
       ...this.book.companyFields(),
+      crewAllowanceKg: this.company.crewAllowanceKg,
     };
   }
 
@@ -596,6 +606,45 @@ export class EconomyEngine {
     return { ok: true, data: null };
   }
 
+  /** Cargo vs the payload stations the sim reports now (docs/ECONOMY.md "Payload check"). */
+  private payloadCheckNow(m: Mission, stage: PayloadCheck["stage"]): PayloadCheck {
+    const payload = this.store.getDomain("payload") as PayloadState | null | undefined;
+    const weights = this.store.getDomain("weights") as WeightsState | null | undefined;
+    return checkPayload({
+      cargoKg: m.payloadKg,
+      stations: payload?.stations ?? null,
+      weights: weights ?? null,
+      crewAllowanceKg: this.company.crewAllowanceKg,
+      source: this.store.source,
+      stage,
+      checkedAt: new Date(this.now()).toISOString(),
+    });
+  }
+
+  /** Recompute the preview of a loaded mission; true when what it shows changed. */
+  private refreshPayloadPreview(): boolean {
+    const m = this.mission;
+    if (!m || m.status !== "loaded") return false;
+    const next = this.payloadCheckNow(m, "preview");
+    const prev = m.payloadCheck;
+    const key = (c: PayloadCheck | undefined) =>
+      c
+        ? [
+            c.stage,
+            c.status,
+            c.source,
+            c.simPayloadKg,
+            c.crewKg,
+            c.loadedKg,
+            c.totalLb,
+            c.maxGrossLb,
+          ].join("|")
+        : "";
+    if (key(prev) === key(next)) return false;
+    this.mission = { ...m, payloadCheck: next };
+    return true;
+  }
+
   private onSample(s: FlightSample, flight: FlightState | null, onGround: boolean | null): void {
     if (onGround === true && s.parkingBrake === true) this.lastParked = { lat: s.lat, lon: s.lon };
     else if (onGround === false) this.lastParked = null;
@@ -636,6 +685,7 @@ export class EconomyEngine {
     const wall = this.now();
     if (wall - this.lastExpiryCheck > 60_000) changed = this.expire(false) || changed;
 
+    changed = this.refreshPayloadPreview() || changed;
     const m = this.mission;
     if (m && m.status === "in_progress" && flight && flight.id === m.flightId) {
       const flown = round1(flight.distanceNm ?? 0);
@@ -674,6 +724,8 @@ export class EconomyEngine {
       }
     }
     const { startBlocked: _drop, ...rest } = m;
+    // The payload check is frozen at departure with what the sim reports right now.
+    const payloadCheck = this.payloadCheckNow(m, "departure");
     this.mission = {
       ...rest,
       status: "in_progress",
@@ -681,6 +733,7 @@ export class EconomyEngine {
       startedAt: new Date(this.now()).toISOString(),
       flownNm: record.distanceNm,
       elapsedMin: record.blockMin,
+      payloadCheck,
     };
     if (m.aircraftId) this.book.setFlying(m.aircraftId, true);
     const type = aircraftTypeByKey(m.aircraftKey);
@@ -689,7 +742,19 @@ export class EconomyEngine {
     this.persist(() => this.repo?.linkFlight(record.id, m.jobIds, m.payloadKg, null));
     this.persistMission();
     this.log("info", `Mission ${m.id} started on flight ${record.id}`);
+    this.log(
+      payloadCheck.status === "ok" || payloadCheck.status === "unknown" ? "info" : "warn",
+      `Payload check (${payloadCheck.source}) ${payloadCheck.status}: ${payloadCheck.message}${
+        payloadMismatch(payloadCheck) ? " — no payout bonuses on this mission" : ""
+      }`,
+    );
     this.store.event("mission.started", { missionId: m.id, flightId: record.id });
+    this.store.event("mission.payload_check", {
+      missionId: m.id,
+      flightId: record.id,
+      check: payloadCheck,
+      payoutBonuses: !payloadMismatch(payloadCheck),
+    });
     this.publish();
   }
 
@@ -843,6 +908,8 @@ export class EconomyEngine {
         lateMin: record.blockMin - job.timeLimitMin,
         peakG: landing?.peakG ?? null,
         noBonus: record.flags.noBonus,
+        // An underloaded departure (sim payload clearly below the cargo) removes bonuses.
+        payloadMismatch: payloadMismatch(m.payloadCheck),
         // P5 part 2: the demand factor promised on the board.
         ...(job.demandFactor !== undefined ? { demand: job.demandFactor } : {}),
       }),
@@ -1105,6 +1172,11 @@ export class EconomyEngine {
           const base = p.data.base.toUpperCase();
           if (!this.airports?.get(base)) return fail("unknown_airport", `Unknown airport ${base}`);
           this.company = { ...this.company, base };
+        }
+        if (p.data.crewAllowanceKg !== undefined) {
+          const kg = p.data.crewAllowanceKg === null ? null : round1(p.data.crewAllowanceKg);
+          this.company = { ...this.company, crewAllowanceKg: kg };
+          this.refreshPayloadPreview();
         }
         this.persist(() => this.repo?.saveCompany(this.company));
         if (this.activeType().type.key !== before) this.retypeBoard();
@@ -1415,6 +1487,7 @@ export class EconomyEngine {
       expectedPayout: loaded.reduce((s, j) => s + j.payoutEstimate, 0),
       createdAt: new Date(this.now()).toISOString(),
     };
+    mission.payloadCheck = this.payloadCheckNow(mission, "preview");
     this.repoTx(() => {
       for (const j of loaded) this.setJob(j);
       this.mission = mission;

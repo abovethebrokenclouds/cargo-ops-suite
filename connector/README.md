@@ -121,7 +121,7 @@ and `flight.end` (completed when Arrived; otherwise `not_arrived` unless
 `args.abort === true`, which ends it as `aborted`; `no_flight` without one). Cargo
 commands (P3, see `docs/ECONOMY.md`): `jobs.list`, `jobs.refresh {airport?, destination?}`,
 `job.accept {jobId}`, `job.release {jobId}`, `mission.load {jobIds}`, `mission.unload`,
-`mission.abort`, `settings.update {aircraftType?: key | null, base?}`; errors include
+`mission.abort`, `settings.update {aircraftType?: key | null, base?, crewAllowanceKg?: kg | null}`; errors include
 `bad_args`, `unknown_airport`, `job_unavailable`, `job_not_accepted`, `job_loaded`,
 `mixed_route`, `payload_exceeded`, `runway_unsuitable`, `out_of_range`, `mission_active`,
 `no_mission`, `mission_in_progress`, `unknown_type`. Every other command is answered with
@@ -168,8 +168,11 @@ to the database of the session's mode: `demo.db` for replays, `cargo-ops.db` liv
 ## Cargo operations (P3)
 
 `src/core/economy/engine.ts` owns the `company`, `jobs` and `mission` domains and the
-`mission.started`, `mission.delivered`, `mission.failed` and `job.completed` events. It
-observes the flight core through hooks: start at the origin (3 nm), leg verification at
+`mission.started`, `mission.delivered`, `mission.failed`, `mission.payload_check` and
+`job.completed` events. It observes the flight core through hooks: start at the origin
+(3 nm), the payload check (cargo vs `PAYLOAD STATION WEIGHT:n` minus a crew allowance,
+previewed while loaded, frozen at departure; no stations → `unknown`, no penalty), leg
+verification at
 Arrived (≥ 90 % of the great circle, parked within 3 nm of the destination, no teleport,
 not invalidated), payout with a full breakdown, crash → failed. Its domains survive a
 replay restart (they are merged into the reset snapshot). Boards are seeded from the
