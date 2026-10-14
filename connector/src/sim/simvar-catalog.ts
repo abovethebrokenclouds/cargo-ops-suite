@@ -21,7 +21,8 @@ export const DOC = {
   brakes: `${SDK}/SimVars/Aircraft_SimVars/Aircraft_Brake_Landing_Gear_Variables.htm`,
   radioNav: `${SDK}/SimVars/Aircraft_SimVars/Aircraft_RadioNavigation_Variables.htm`,
   misc: `${SDK}/SimVars/Miscellaneous_Variables.htm`,
-  environment: `${SDK}/SimVars/Environment_Variables.htm`,
+  environment:
+    "https://docs.flightsimulator.com/msfs2024/html/6_Programming_APIs/Environment_Variables.htm",
   systemEvents: `${SDK}/SimConnect/API_Reference/Events_And_Data/SimConnect_SubscribeToSystemEvent.htm`,
   systemState: `${SDK}/SimConnect/API_Reference/General/SimConnect_RequestSystemState.htm`,
 } as const;
@@ -54,7 +55,10 @@ export interface CatalogSimVar {
   dimension: UnitDimension;
   /** Requires `:N` (engine/station index). */
   indexed: boolean;
-  /** Settable per the SDK table; null = not confirmed in the audit (we never set it). */
+  /**
+   * Settable: true only where the documented description says so; null = not confirmed in
+   * the audit (the sources used did not carry the SDK's settable column). We never set any.
+   */
   settable: boolean | null;
   /** Present in the SimVar tables of each simulator's SDK. */
   msfs2020: boolean;
@@ -84,44 +88,37 @@ const v = (
 export const SIMVAR_CATALOG: readonly CatalogSimVar[] = [
   // Counts
   v("NUMBER OF ENGINES", "Number", "number", DOC.engine, {
-    settable: false,
     note: "0..4 per the SDK",
   }),
-  v("PAYLOAD STATION COUNT", "Number", "number", DOC.system, { settable: false }),
+  v("PAYLOAD STATION COUNT", "Number", "number", DOC.system),
   // Identity
   v("TITLE", null, "string", DOC.aircraftMisc, {
-    settable: false,
-    note: "aircraft.cfg title; 2024 modular aircraft report the variant/livery title",
+    note: "aircraft.cfg title; what 2024 modular aircraft report is PC-26",
   }),
   v("ATC ID", null, "string", DOC.radioNav, {
     note: "2024 can briefly report an auto-generated registration after a livery change",
   }),
   // Fuel
-  v("FUEL TOTAL QUANTITY", "Gallons", "volume", DOC.fuel, { settable: false }),
-  v("FUEL TOTAL QUANTITY WEIGHT", "Pounds", "weight", DOC.fuel, { settable: false }),
+  v("FUEL TOTAL QUANTITY", "Gallons", "volume", DOC.fuel),
+  v("FUEL TOTAL QUANTITY WEIGHT", "Pounds", "weight", DOC.fuel),
   v("ENG FUEL FLOW PPH", "Pounds per hour", "massFlow", DOC.engine, {
     indexed: true,
-    settable: false,
   }),
   v("ENG FUEL FLOW GPH", "Gallons per hour", "volumeFlow", DOC.engine, {
     indexed: true,
-    settable: false,
     note: "catalogued alternative; not requested",
   }),
   // Weights
-  v("TOTAL WEIGHT", "Pounds", "weight", DOC.flightModel, { settable: false }),
-  v("EMPTY WEIGHT", "Pounds", "weight", DOC.flightModel, { settable: false }),
-  v("MAX GROSS WEIGHT", "Pounds", "weight", DOC.flightModel, { settable: false }),
-  v("PAYLOAD STATION WEIGHT", "Pounds", "weight", DOC.system, {
-    indexed: true,
-    settable: true,
-  }),
-  v("PAYLOAD STATION NAME", null, "string", DOC.system, { indexed: true, settable: false }),
+  v("TOTAL WEIGHT", "Pounds", "weight", DOC.flightModel),
+  v("EMPTY WEIGHT", "Pounds", "weight", DOC.flightModel),
+  v("MAX GROSS WEIGHT", "Pounds", "weight", DOC.flightModel),
+  v("PAYLOAD STATION WEIGHT", "Pounds", "weight", DOC.system, { indexed: true }),
+  v("PAYLOAD STATION NAME", null, "string", DOC.system, { indexed: true }),
   // Engines, controls
   v("GENERAL ENG COMBUSTION", "Bool", "bool", DOC.engine, { indexed: true, settable: true }),
   v("BRAKE PARKING POSITION", "Bool", "bool", DOC.brakes),
   // Simulation
-  v("SIMULATION RATE", "Number", "number", DOC.environment, { settable: false }),
+  v("SIMULATION RATE", "Number", "number", DOC.environment),
   v("ZULU TIME", "Seconds", "time", DOC.environment),
   v("ZULU DAY OF MONTH", "Number", "number", DOC.environment),
   v("ZULU MONTH OF YEAR", "Number", "number", DOC.environment),
@@ -133,23 +130,20 @@ export const SIMVAR_CATALOG: readonly CatalogSimVar[] = [
   v("PLANE ALT ABOVE GROUND", "Feet", "length", DOC.aircraftMisc),
   v("AIRSPEED INDICATED", "Knots", "speed", DOC.aircraftMisc),
   v("AIRSPEED TRUE", "Knots", "speed", DOC.aircraftMisc),
-  v("GROUND VELOCITY", "Knots", "speed", DOC.aircraftMisc, { settable: false }),
+  v("GROUND VELOCITY", "Knots", "speed", DOC.aircraftMisc),
   v("PLANE HEADING DEGREES MAGNETIC", "Radians", "angle", DOC.aircraftMisc),
   v("PLANE HEADING DEGREES TRUE", "Radians", "angle", DOC.aircraftMisc),
   v("VERTICAL SPEED", "Feet per second", "speed", DOC.aircraftMisc),
   v("G FORCE", "GForce", "gforce", DOC.flightModel),
-  v("SIM ON GROUND", "Bool", "bool", DOC.misc, { settable: false }),
+  v("SIM ON GROUND", "Bool", "bool", DOC.misc),
   // Touchdown (latched at the last touchdown of the user aircraft)
   v("PLANE TOUCHDOWN NORMAL VELOCITY", "Feet per second", "speed", DOC.aircraftMisc, {
-    settable: false,
     note: "sign convention not documented",
   }),
   v("PLANE TOUCHDOWN BANK DEGREES", "Degrees", "angle", DOC.aircraftMisc, {
-    settable: false,
     note: "sign convention not documented",
   }),
   v("PLANE TOUCHDOWN PITCH DEGREES", "Degrees", "angle", DOC.aircraftMisc, {
-    settable: false,
     note: "sign convention not documented",
   }),
 ];
