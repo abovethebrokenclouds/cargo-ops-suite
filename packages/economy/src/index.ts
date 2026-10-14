@@ -32,3 +32,5 @@ export * from "./milestones";
 export * from "./hired-pilots";
 // Transit cargo: jobs carried over several legs, paid on the final delivery.
 export * from "./transit";
+// MSFS facilities override: sim airport data merged over the bundled OurAirports records.
+export * from "./facilities";
