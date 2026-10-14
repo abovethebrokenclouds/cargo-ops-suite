@@ -115,6 +115,66 @@ describe("token contrast (WCAG AA)", () => {
     });
   });
 
+  // Flight operations room (Ops dashboard): phosphor readouts, call-sign strips and status
+  // lamps on the near-black console surfaces.
+  describe("console surfaces (Ops dashboard) ≥ 4.5:1", () => {
+    const tok = (name: string) => {
+      const v = t[name];
+      if (!v) throw new Error(`token --${name} missing`);
+      return v;
+    };
+    const consoleBg = rgb("console");
+    const consolePanel = rgb("console-panel");
+    // .console-panel: a 2.5 % white sheen at the top of the screen.
+    const panelSheen = over({ r: 1, g: 1, b: 1 }, 0.025, consolePanel);
+    // .console-strip: bezel 22 % into the panel.
+    const strip = oklabToRgb(mixOklab(tok("console-bezel"), tok("console-panel"), 0.22));
+    const consoleSurfaces: Record<string, Rgb> = {
+      console: consoleBg,
+      "console-panel": consolePanel,
+      "console-panel sheen": panelSheen,
+      "console-strip": strip,
+    };
+    const consoleText: Array<[string, Rgb]> = [
+      ["console-foreground", rgb("console-foreground")],
+      ["muted-foreground", rgb("muted-foreground")],
+      ["phosphor-green", rgb("phosphor-green")],
+      ["phosphor-amber", rgb("phosphor-amber")],
+      ["phosphor-cyan", rgb("phosphor-cyan")],
+      ["phosphor-red", rgb("phosphor-red")],
+      // Source tags inside consoles (DEMO = warning, REPLAY = foreground).
+      ["warning", rgb("warning")],
+      ["foreground", rgb("foreground")],
+    ];
+    for (const [name, fg] of consoleText) {
+      for (const [surface, bg] of Object.entries(consoleSurfaces)) {
+        it(`${name} on ${surface}`, () => {
+          expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(4.5);
+        });
+      }
+    }
+
+    // .lamp[data-state]: the lit lamp fills with its own colour at 12 % over the console.
+    for (const lit of ["phosphor-green", "phosphor-amber", "phosphor-cyan", "phosphor-red"]) {
+      it(`lit lamp: ${lit} on its own 12 % fill`, () => {
+        const fill = oklabToRgb(mixOklab(tok(lit), tok("console"), 0.12));
+        expect(contrastRatio(rgb(lit), fill)).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+
+    it("dark lamp (NO DATA): lamp-off-foreground on lamp-off", () => {
+      expect(contrastRatio(rgb("lamp-off-foreground"), rgb("lamp-off"))).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    });
+
+    it("a lit lamp is distinguishable from a dark one (fill luminance differs)", () => {
+      // Grey NO DATA lamps must never read as lit: their text is neutral, not phosphor.
+      const off = tok("lamp-off-foreground");
+      expect(Math.hypot(off.a, off.b)).toBeLessThan(0.02);
+    });
+  });
+
   it("focus ring (primary) is visible against the page and panels ≥ 3:1", () => {
     for (const bg of [background, panel80, secondary]) {
       expect(contrastRatio(rgb("primary"), bg)).toBeGreaterThanOrEqual(3);
