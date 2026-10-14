@@ -11,28 +11,11 @@ import {
   monthlyPayment,
   REFERENCE_HANDLING_USD,
   type AirportLookup,
-  type EconomyAirport,
 } from "@cargo-ops/economy";
 import { inputClass, primaryButton, secondaryButton } from "@/components/company/styles";
+import { searchAirports } from "@/lib/economy/airport-search";
 import { formatInt, formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
-
-const MAX_RESULTS = 6;
-
-function search(lookup: AirportLookup, query: string): EconomyAirport[] {
-  const q = query.trim().toUpperCase();
-  if (q.length < 2) return [];
-  const exact = lookup.get(q);
-  const out: EconomyAirport[] = exact ? [exact] : [];
-  for (const a of lookup.list) {
-    if (out.length >= MAX_RESULTS) break;
-    if (a === exact) continue;
-    if (a.ident.startsWith(q) || a.iata?.toUpperCase() === q || a.name.toUpperCase().includes(q)) {
-      out.push(a);
-    }
-  }
-  return out;
-}
 
 export interface FboFinancing {
   lenderId: string;
@@ -66,7 +49,7 @@ export function FboBuyPanel({
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
   const [finance, setFinance] = useState(false);
-  const results = useMemo(() => (lookup ? search(lookup, query) : []), [lookup, query]);
+  const results = useMemo(() => (lookup ? searchAirports(lookup, query) : []), [lookup, query]);
   const airport = picked && lookup ? lookup.get(picked) : null;
   const quote = useMemo(() => (airport ? fboQuote(airport) : null), [airport]);
   const estimate = useMemo(() => {

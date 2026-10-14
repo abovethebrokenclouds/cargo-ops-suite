@@ -6,6 +6,7 @@ import {
   type EnginesState,
   type FlightState,
   type FuelState,
+  type PlanBasis,
   type PositionState,
   type RateSource,
   type Source,
@@ -98,6 +99,8 @@ export function simRateBadge(rate: number | null | undefined): SimRateBadge | nu
 }
 
 export interface RouteView {
+  /** Where the destination comes from (plan frames without a basis are GPS plans). */
+  basis: PlanBasis | null;
   origin: string | null;
   destination: string | null;
   distanceRemainingNm: number | null;
@@ -108,12 +111,20 @@ export interface RouteView {
 }
 
 const EMPTY_ROUTE: RouteView = {
+  basis: null,
   origin: null,
   destination: null,
   distanceRemainingNm: null,
   eteMin: null,
   progress: null,
   flownNm: null,
+};
+
+/** Short label for the route source; the connector computes manual/mission figures. */
+export const PLAN_BASIS_LABELS: Record<PlanBasis, string> = {
+  gps: "GPS plan",
+  manual: "Manual",
+  mission: "Mission",
 };
 
 /**
@@ -136,11 +147,21 @@ export function routeView(state: ClientSimState): RouteView {
       ? Math.min(1, Math.max(0, 1 - remaining / planned))
       : null;
   const flown = state.sim.flight?.flownDistanceNm;
+  const basis = plan.basis ?? "gps";
+  // The plan's own ETE (GPS ETE, or the connector's distance / ground speed) comes first.
+  // Manual and mission plans have no ETE below taxi speeds and none is made up here; older
+  // GPS plans without one keep the remaining distance / ground speed estimate.
+  const ete = finite(plan.eteSec)
+    ? plan.eteSec / 60
+    : basis === "gps"
+      ? eteMin(remaining, state.sim.motion?.gsKt)
+      : null;
   return {
+    basis,
     origin: plan.origin ?? null,
     destination: plan.destination ?? null,
     distanceRemainingNm: remaining,
-    eteMin: eteMin(remaining, state.sim.motion?.gsKt),
+    eteMin: ete,
     progress,
     flownNm: finite(flown) ? flown : null,
   };

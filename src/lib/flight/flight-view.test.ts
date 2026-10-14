@@ -108,6 +108,7 @@ describe("flight values", () => {
 describe("routeView", () => {
   it("is all null without a plan domain", () => {
     expect(routeView(withSnapshot({ flight: { active: true, plannedDistanceNm: 100 } }))).toEqual({
+      basis: null,
       origin: null,
       destination: null,
       distanceRemainingNm: null,
@@ -133,6 +134,7 @@ describe("routeView", () => {
       },
     });
     expect(routeView(s)).toEqual({
+      basis: "gps",
       origin: "KMEM",
       destination: "KATL",
       distanceRemainingNm: 75,
@@ -146,6 +148,54 @@ describe("routeView", () => {
     const s = withSnapshot({ plan: { active: true, destDistanceNm: 75 } });
     expect(routeView(s).progress).toBeNull();
     expect(routeView(s).eteMin).toBeNull();
+  });
+
+  const cruising = {
+    iasKt: 150,
+    tasKt: 170,
+    gsKt: 150,
+    hdgMagDeg: 100,
+    hdgTrueDeg: 99,
+    vsFpm: 0,
+    gForce: 1,
+    onGround: false,
+  };
+
+  it("uses the plan's own ETE (GPS or connector) before any estimate", () => {
+    const gps = withSnapshot({
+      plan: { active: true, basis: "gps", destDistanceNm: 75, eteSec: 2400 },
+      motion: cruising,
+    });
+    expect(routeView(gps)).toMatchObject({ basis: "gps", eteMin: 40 });
+    const manual = withSnapshot({
+      plan: {
+        active: true,
+        basis: "manual",
+        destination: "KATL",
+        destDistanceNm: 75,
+        eteSec: 1800,
+      },
+      motion: cruising,
+    });
+    expect(routeView(manual)).toMatchObject({ basis: "manual", destination: "KATL", eteMin: 30 });
+  });
+
+  it("never estimates an ETE for manual or mission plans the connector left without one", () => {
+    const parked = withSnapshot({
+      plan: {
+        active: true,
+        basis: "mission",
+        origin: "KMEM",
+        destination: "KATL",
+        destDistanceNm: 287,
+      },
+      motion: { ...cruising, gsKt: 12, onGround: true },
+    });
+    expect(routeView(parked)).toMatchObject({
+      basis: "mission",
+      distanceRemainingNm: 287,
+      eteMin: null,
+    });
   });
 });
 
