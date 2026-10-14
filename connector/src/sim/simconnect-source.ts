@@ -44,8 +44,8 @@ const OPEN_TIMEOUT_MS = 15_000;
 const RETRY_MIN_MS = 2_000;
 const RETRY_MAX_MS = 30_000;
 
-/** System events subscribed on connect (plan §6.1). */
-const SYSTEM_EVENTS = [
+/** System events subscribed on connect (plan §6.1); each must be in SYSTEM_EVENT_CATALOG. */
+export const SYSTEM_EVENTS = [
   "Pause",
   "Pause_EX1",
   "SimStart",
@@ -65,6 +65,8 @@ const EVENT_NAME_BY_ID = new Map<number, SystemEventName>(
 );
 
 const SYSTEM_STATE_SIM_REQUEST = 900;
+/** System states requested on connect; each must be in SYSTEM_STATE_CATALOG. */
+export const SYSTEM_STATES = ["Sim"] as const;
 
 type ProtocolName = "SunRise" | "KittyHawk";
 const PROTOCOLS: { name: ProtocolName; value: Protocol }[] = [
@@ -252,7 +254,7 @@ export class SimConnectSource implements SimSource {
     });
 
     for (const name of SYSTEM_EVENTS) handle.subscribeToSystemEvent(EVENT_ID[name], name);
-    handle.requestSystemState(SYSTEM_STATE_SIM_REQUEST, "Sim");
+    handle.requestSystemState(SYSTEM_STATE_SIM_REQUEST, SYSTEM_STATES[0]);
     this.defineFast();
     this.requestCounts();
     this.startAiTraffic(handle);

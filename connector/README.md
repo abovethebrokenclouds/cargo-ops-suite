@@ -340,10 +340,16 @@ connector/
   (10 Hz below 1,000 ft AGL). If the sim rejects a SimVar, the exception is logged with
   its name, the entry is dropped and the definition rebuilt; dependent domains are then
   simply not reported.
-- Entries marked `verified: false`: `SIMULATION RATE`, `PAYLOAD STATION WEIGHT`/`NAME`
-  units, `ENG FUEL FLOW PPH`, `IS ON GROUND` (falls back to `SIM ON GROUND`),
-  `PLANE TOUCHDOWN NORMAL VELOCITY` (ft/s, ×60; sign taken as unknown, the analyser
-  uses its magnitude) and `PLANE TOUCHDOWN BANK/PITCH DEGREES` (fast definition).
+- Every requested SimVar, system event and system state is in the allow-list
+  `src/sim/simvar-catalog.ts` with its documented unit (audit: `docs/SIMVARS.md`);
+  `test/simvar-catalog.test.ts` fails on an unknown name, an incompatible unit, a wrong
+  datum type or a missing/extra `:index`.
+- Entries marked `verified: false` still need the PC check: `SIMULATION RATE`,
+  `PAYLOAD STATION WEIGHT`/`NAME`, `ENG FUEL FLOW PPH`, `PLANE TOUCHDOWN NORMAL VELOCITY`
+  (ft/s, ×60; sign not documented, the analyser uses its magnitude) and
+  `PLANE TOUCHDOWN BANK/PITCH DEGREES` (fast definition). On-ground comes from
+  `SIM ON GROUND` (`IS ON GROUND` is not in either SDK's SimVar tables).
+- `Pause_EX1`: any non-zero flag value (pause, active pause, esc-menu sim pause) is paused.
 - System events: `Pause`, `Pause_EX1`, `SimStart`, `SimStop`, `FlightLoaded`,
   `AircraftLoaded`, `Crashed`, `CrashReset`, `1sec`; `requestSystemState("Sim")` on connect.
 - The `sim` domain is only sent once a real `SIMULATION RATE` arrives (the schema needs

@@ -131,6 +131,23 @@ export class AiArrivalDetector {
 
 export type AiBatchListener = (samples: AiObjectSample[], at: number) => void;
 
+/**
+ * The AI traffic data definition, in buffer order (onData reads it in the same order).
+ * Every entry must be in simvar-catalog.ts (enforced by test/simvar-catalog.test.ts).
+ */
+export const AI_TRAFFIC_DATUMS: ReadonlyArray<{
+  simvar: string;
+  unit: string | null;
+  type: "f64" | "string64";
+}> = [
+  { simvar: "PLANE LATITUDE", unit: "degrees", type: "f64" },
+  { simvar: "PLANE LONGITUDE", unit: "degrees", type: "f64" },
+  // SIM ON GROUND: the documented on-ground flag, also available for AI/multiplayer objects.
+  { simvar: "SIM ON GROUND", unit: "bool", type: "f64" },
+  { simvar: "GROUND VELOCITY", unit: "knots", type: "f64" },
+  { simvar: "ATC ID", unit: null, type: "string64" },
+];
+
 /** Largest radius SimConnect accepts for requestDataOnSimObjectType, metres. */
 export const SIMCONNECT_MAX_RADIUS_M = 200_000;
 export const AI_SAMPLE_INTERVAL_MS = 30_000;
@@ -168,14 +185,14 @@ export class SimConnectAiSampler {
     private readonly log: LogFn,
     private readonly onBatch: AiBatchListener,
   ) {
-    const def = ids.defineId;
-    // Order matters: onData reads the buffer in the same order.
-    handle.addToDataDefinition(def, "PLANE LATITUDE", "degrees", SimConnectDataType.FLOAT64);
-    handle.addToDataDefinition(def, "PLANE LONGITUDE", "degrees", SimConnectDataType.FLOAT64);
-    // SIM ON GROUND is the long-standing variable for AI objects (IS ON GROUND is unverified there).
-    handle.addToDataDefinition(def, "SIM ON GROUND", "bool", SimConnectDataType.FLOAT64);
-    handle.addToDataDefinition(def, "GROUND VELOCITY", "knots", SimConnectDataType.FLOAT64);
-    handle.addToDataDefinition(def, "ATC ID", null, SimConnectDataType.STRING64);
+    for (const d of AI_TRAFFIC_DATUMS) {
+      handle.addToDataDefinition(
+        ids.defineId,
+        d.simvar,
+        d.unit,
+        d.type === "string64" ? SimConnectDataType.STRING64 : SimConnectDataType.FLOAT64,
+      );
+    }
   }
 
   /** Request one batch if an FBO airport is in reach of the user aircraft. */

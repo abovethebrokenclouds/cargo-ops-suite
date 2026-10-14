@@ -14,7 +14,7 @@ import type {
 export interface FlightSample {
   /** Simulation clock, ms (see SimClock). */
   tMs: number;
-  /** Raw IS ON GROUND (or SIM ON GROUND) as reported; debounce before use. */
+  /** Raw SIM ON GROUND as reported; debounce before use. */
   onGround: boolean;
   lat: number;
   lon: number;
