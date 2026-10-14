@@ -106,8 +106,8 @@ Event names are not case-sensitive (**[search]**, from that page).
 | -------------- | ------------------------------- | ---- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pause          | `dwData` 1 = paused             | ✓    | ✓    | kept alongside Pause_EX1, which distinguishes the pause kinds                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Pause_EX1      | `dwData` flags                  | ✓    | ✓    | **Fixed:** any non-zero value is now a pause. The SDK header defines PAUSE 1, PAUSE_WITH_SOUND 2 (legacy), ACTIVE_PAUSE 4, SIM_PAUSE 8 (esc menu); the old mask `0b111` read 8 as running. These flag values could not be re-read from the SDK page in this audit; treating any non-zero as paused does not depend on them. Forum reports (2020): with the keyboard pause key active-pause values arrived reversed, and some builds sent 0 for the esc pause; PC-11 checks it |
-| SimStart       | —                               | ✓    | ✓    | re-reads engine/station counts                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| SimStop        | —                               | ✓    | ✓    |                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| SimStart       | —                               | ✓    | ✓    | user in control again: ends the SimStop pause, re-requests the "Sim" state, re-reads engine/station counts (see "Effective pause")                                                                                                                                                                                                                                                                                                                                            |
+| SimStop        | —                               | ✓    | ✓    | back to the main menu: counts as a pause (flight clock frozen), not a disconnect (see "Effective pause")                                                                                                                                                                                                                                                                                                                                                                      |
 | FlightLoaded   | file name (`RecvEventFilename`) | ✓    | ✓    | **[search]** also fires when a flight ends (a default flight loads)                                                                                                                                                                                                                                                                                                                                                                                                           |
 | AircraftLoaded | file name (`RecvEventFilename`) | ✓    | ✓    | **[search]** fires when the aircraft flight dynamics file changes                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Crashed        | —                               | ✓    | ✓    | **[search]** user aircraft crash                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -119,12 +119,44 @@ Event names are not case-sensitive (**[search]**, from that page).
 Doc: [SimConnect_RequestSystemState](https://docs.flightsimulator.com/html/Programming_Tools/SimConnect/API_Reference/General/SimConnect_RequestSystemState.htm)
 (2024: [simconnect_requestsystemstate](https://docs.flightsimulator.com/msfs2024/retail/programming-apis/simconnect/api-reference/general/simconnect_requestsystemstate/)).
 
-| State | Read as                                           | Notes                                                                                                                        |
-| ----- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Sim   | `dataInteger` 1 = user in control of the aircraft | **[search]** 0 = the user is navigating the UI. Documented states: AircraftLoaded, DialogMode, FlightLoaded, FlightPlan, Sim |
+| State | Read as                                           | Notes                                                                                                                                                                                                                          |
+| ----- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Sim   | `dataInteger` 1 = user in control of the aircraft | **[search]** 0 = the user is navigating the UI. Requested on connect and again after every SimStart; 0 counts as a pause (see "Effective pause"). Documented states: AircraftLoaded, DialogMode, FlightLoaded, FlightPlan, Sim |
+
+## Effective pause (plan §14.4)
+
+Pause / Pause_EX1 misreport in some builds (forum reports, PC-11), so the connector does not
+trust them alone (`connector/src/sim/pause-state.ts`, tests in
+`connector/test/sim-running-pause.test.ts` and the emulator suite):
+
+- **effective paused = pause flag OR sim not running.** The pause flag is the latest Pause or
+  Pause_EX1 report; "sim running" comes from SimStart / SimStop and the `"Sim"` system state
+  (requested on connect and after every SimStart to resync). Before the first answer the run
+  state is unknown and counts as running: no pause is invented without a report.
+- The `sim` domain's `paused` and the `sim.paused` event (`event`: `Pause`, `Pause_EX1`,
+  `SimStop`, `SimStart`, `SimState` or `stuck_pause`) carry the effective value; they change
+  only when it changes.
+- **SimStop is a pause, not a disconnect.** The link stays up, nothing is cleared, the running
+  flight keeps its id and phase; its sim clock (block time, the deadline clock, the
+  economy's simulator minutes) stops at SimStop and resumes at SimStart. The interval that ends
+  a pause is never counted, so the menu time is not added by the first frame after SimStart.
+  No frames are made up during a stop; frames the simulator does send keep the `sim` source tag.
+- **Stuck pause rule.** A pause flag that never clears is overridden only when all of these
+  hold: a SimStart arrived after the latest pause report; the sim is running; and consecutive
+  fresh position frames have shown the aircraft really moving (position changed from the
+  previous frame and ground speed ≥ 5 kt) for at least **10 s**. One frame without movement
+  restarts the count. A warning is logged and `sim.paused` reports `event: "stuck_pause"`. A
+  parked aircraft therefore stays paused until it moves, and any later Pause / Pause_EX1 report
+  replaces the flag (a pause reported after the SimStart is always honoured).
+- A real link loss is different: see the flight core header (`connector/src/core/flight-core.ts`)
+  for the disconnect rules (flight suspended, offline time not counted, commands refused).
 
 ## What still needs the PC
 
+- **PC-53**: SimStop / SimStart and the `"Sim"` state on the real sim: back to the main menu
+  mid-flight pauses the flight clock and resumes it after the next SimStart; record whether
+  MSFS sends user-aircraft frames in the menu and whether Pause_EX1 ever stays set (see
+  "Effective pause").
 - **PC-07**: no `SimConnect rejected` lines at all on MSFS 2020 and 2024 (the audit removes
   the one name that was not in the SDK tables; everything else is a documented name).
 - **PC-12**: values, not names: `SIMULATION RATE` follows rate changes, payload station
