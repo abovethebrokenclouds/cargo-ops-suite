@@ -317,11 +317,13 @@ nothing until you pair it.
 **Turn it on**, either:
 
 - for one run: `scripts\start-cargo-ops.cmd --lan` (every network interface of this PC), or
-  `--lan 192.168.1.23` (only that address of this PC; the connector refuses an address that is
-  not this PC's); or
+  `--lan 192.168.1.23` (only that address of this PC; the connector refuses to start with an
+  address that is not this PC's); or
 - for every start: **Settings → LAN access → Allow LAN access (next start)** on this PC. It
-  asks for confirmation and applies when you restart the connector. `--no-lan` keeps it off
-  for one run.
+  asks for confirmation (listing the addresses tablets would use) and applies when you restart
+  the connector. `--no-lan` keeps it off for one run. If the saved address is no longer this
+  PC's (the router gave it another one), the connector starts on 127.0.0.1 only, logs a
+  warning and Settings → LAN access says why.
 
 Windows then shows the firewall prompt (§5): **Private networks only**. The connector window
 prints the address to open on the tablet, for example `http://192.168.1.23:4311/`, and
@@ -338,11 +340,12 @@ prints the address to open on the tablet, for example `http://192.168.1.23:4311/
    PC's access token never leaves the PC.
 
 A code works once and expires after 5 minutes. Five wrong codes from one device lock it out
-for 15 minutes, and ten wrong codes in total cancel the code; generate a new one.
+for 15 minutes, and ten wrong codes in total cancel the code (Settings → LAN access then says
+"Code cancelled after too many wrong attempts — create a new one").
 
 **What a paired device can do:** everything you do while flying — Live Flight, the map, jobs,
 loading and starting missions, fleet, loans, FBOs. **What stays on this PC:** career import,
-**Back up now**, clearing the SimBrief plan (any delete), and LAN access itself (pairing codes,
+backups (the list and **Back up now**; file paths on this PC are never shown to a tablet), clearing the SimBrief plan (any delete), and LAN access itself (pairing codes,
 the setting, the device list). A paired device that tries these gets "only available on the PC
 running Cargo Ops".
 

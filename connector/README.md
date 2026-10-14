@@ -86,8 +86,10 @@ IPv4 literal of a bound interface with the port), which blocks DNS rebinding.
 
 Off by default. `--lan` (or the setting saved from `/settings` via `PUT /api/lan/settings`,
 applied on the next start; `--no-lan` overrides it) listens on `0.0.0.0`, or with
-`--lan <IPv4>` on `127.0.0.1` plus that one address (refused when it is not an address of this
-PC). The Host/Origin allowlist grows by `http://<bound IPv4>:<port>` only; with `0.0.0.0` the
+`--lan <IPv4>` on `127.0.0.1` plus that one address. An address that is not this PC's is
+refused at start when it comes from the command line (the message names `--lan` and
+`--no-lan`); a saved address that left this PC (DHCP) logs a warning, stays on `127.0.0.1` and
+is reported as `warning` in `GET /api/lan`. The Host/Origin allowlist grows by `http://<bound IPv4>:<port>` only; with `0.0.0.0` the
 interface list is re-read at most every 5 s when an unknown IP Host arrives (DHCP).
 
 - The main token is **loopback-only**: `GET /api/session` gives it only to a loopback client,
@@ -96,11 +98,16 @@ interface list is re-read at most every 5 s when an unknown IP Host arrives (DHC
   from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, 5 min, single use; a new code replaces the old one);
   `POST /api/lan/pair { code, name }` from the LAN page (connector Origin required) returns a
   separate 32-byte device token. Five wrong codes from one address within 15 min lock it out
-  for 15 min (`429 pairing_locked` + `Retry-After`); ten wrong codes in total burn the code.
+  for 15 min (`429 pairing_locked` + `Retry-After`); ten wrong codes in total burn the code
+  (logged at warn, `codeBurned: true` in `GET /api/lan` until a new code). Device names lose
+  Unicode control (Cc) and format (Cf: bidi overrides, zero-width) characters.
 - A paired device sends its token to `GET /api/session` (Bearer) to get it confirmed, or gets
   `403 pairing_required`. It has full control (`/api/*` reads, all WebSocket commands) except
-  the local-only routes: `POST /api/import`, `POST /api/backups`, every `DELETE`, and
-  `/api/lan*` → `403 local_only`.
+  the local-only routes: `POST /api/import`, `GET`/`POST /api/backups` (the list and restore
+  steps carry paths), every `DELETE`, and `/api/lan*` → `403 local_only`. Its `/api/status`
+  omits the path fields `dataDir`, `database` and `recording`.
+- A WebSocket opened with `?token=` is bound to that identity (this PC, or one device): a
+  `hello` resolving to another identity is closed with `4401`.
 - Revoking (`DELETE /api/lan/devices/:id`) closes that device's sockets with `4401`.
   `--reset-token` forgets every device. Pairing, failures and revokes are logged.
 
