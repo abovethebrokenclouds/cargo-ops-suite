@@ -836,7 +836,10 @@ export class SimConnectEmulator extends EventEmitter {
     return n;
   }
 
-  /** Pause_EX1 flags (0 running; FULL 1 | ACTIVE 2 | SIM 4) plus the legacy Pause event. */
+  /**
+   * Pause_EX1 flags (0 running; PAUSE 1 | PAUSE_WITH_SOUND 2 | ACTIVE_PAUSE 4 | SIM_PAUSE 8,
+   * docs/SIMVARS.md) plus the legacy Pause event.
+   */
   pause(flags: number): void {
     this.systemEvent("Pause_EX1", flags);
     this.systemEvent("Pause", flags !== 0 ? 1 : 0);

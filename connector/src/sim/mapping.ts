@@ -51,7 +51,7 @@ export function mapPosition(raw: RawValues): PositionState | undefined {
 }
 
 export function mapMotion(raw: RawValues): MotionState | undefined {
-  const onGround = bool(raw, "isOnGround") ?? bool(raw, "simOnGround");
+  const onGround = bool(raw, "simOnGround");
   const fields = {
     iasKt: num(raw, "iasKt"),
     tasKt: num(raw, "tasKt"),
@@ -215,7 +215,12 @@ export function simNameFor(applicationName: string, protocol: "SunRise" | "Kitty
   return protocol === "SunRise" ? "MSFS 2024" : "MSFS";
 }
 
-/** Pause_EX1 flags: 0 = running; any of FULL(1)/ACTIVE(2)/SIM(4) = paused. */
+/**
+ * Pause_EX1 dwData: 0 = running; any set flag = some kind of pause. The SDK header defines
+ * PAUSE (1), PAUSE_WITH_SOUND (2, legacy), ACTIVE_PAUSE (4) and SIM_PAUSE (8, esc menu);
+ * every one of them stops the user aircraft, so any non-zero value counts as paused
+ * (docs/SIMVARS.md). The previous mask (0b111) treated SIM_PAUSE (8) as running.
+ */
 export function pausedFromEx1(flags: number): boolean {
-  return (flags & 0b111) !== 0;
+  return Number.isFinite(flags) && flags !== 0;
 }
