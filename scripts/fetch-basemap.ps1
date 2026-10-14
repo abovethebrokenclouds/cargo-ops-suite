@@ -34,8 +34,12 @@ New-Item -ItemType Directory -Force -Path $bin | Out-Null
 $pmtiles = Join-Path $bin "pmtiles.exe"
 if (-not (Test-Path $pmtiles)) {
   Write-Host "Looking up the latest go-pmtiles release..."
+  $headers = @{ "User-Agent" = "CargoOps-fetch-basemap" }
+  # Optional and never needed on a PC: CI passes its own token only to avoid GitHub's
+  # anonymous API rate limit on shared runner addresses.
+  if ($env:GITHUB_TOKEN) { $headers["Authorization"] = "Bearer $env:GITHUB_TOKEN" }
   $release = Invoke-RestMethod -Uri "https://api.github.com/repos/protomaps/go-pmtiles/releases/latest" `
-    -Headers @{ "User-Agent" = "CargoOps-fetch-basemap" }
+    -Headers $headers
   $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x86_64" }
   $asset = $release.assets | Where-Object { $_.name -like "*_Windows_$arch.zip" } | Select-Object -First 1
   if (-not $asset) { throw "No go-pmtiles release asset for Windows_$arch" }
