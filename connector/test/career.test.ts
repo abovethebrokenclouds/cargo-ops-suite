@@ -109,9 +109,12 @@ describe("cargo /api routes and career export/import", () => {
       assert.equal(lines.length, 2);
       assert.ok(lines[0]?.startsWith("date,flight_id,status,source,origin,destination"));
       assert.match(lines[1] ?? "", /,completed,replay,KMEM,KATL,/);
-      // Last columns: mission status, payout, departure payload check (fixture: ok).
-      assert.match(lines[1] ?? "", /,delivered,7124,ok$/);
-      assert.ok(lines[0]?.endsWith(",payout_usd,payload_check"));
+      // Last columns: mission status, payout, departure payload check (fixture: ok), the
+      // payload entered by you (none) and the TOTAL WEIGHT − EMPTY WEIGHT − fuel payload.
+      assert.match(lines[1] ?? "", /,delivered,7124,ok,,907\.\d$/);
+      assert.ok(
+        lines[0]?.endsWith(",payout_usd,payload_check,payload_entered_kg,payload_implied_kg"),
+      );
 
       const flightId = (c.session.store.getDomain("mission") as Mission).flightId ?? "";
       const gpx = await api(c, `/api/export/gpx?flight=${flightId}`);

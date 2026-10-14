@@ -397,8 +397,9 @@ export const missionSchema = z.object({
   /**
    * Payload entered by the player for this mission, kg (`mission.load` or `mission.payload`
    * before departure). Labelled "entered by you"; only used when the sim reports no stations.
+   * null = cleared by the player (a state delta cannot remove a field).
    */
-  enteredPayloadKg: finite().nonnegative().optional(),
+  enteredPayloadKg: finite().nonnegative().nullable().optional(),
   /** METAR flight category at departure (origin) and arrival (destination); weather bonus. */
   weather: missionWeatherSchema.optional(),
   /**

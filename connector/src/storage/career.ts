@@ -47,6 +47,8 @@ export const LOGBOOK_CSV_COLUMNS = [
   "mission_status",
   "payout_usd",
   "payload_check",
+  "payload_entered_kg",
+  "payload_implied_kg",
 ] as const;
 
 export function logbookCsv(entries: readonly LogbookEntry[]): string {
@@ -73,6 +75,8 @@ export function logbookCsv(entries: readonly LogbookEntry[]): string {
         e.mission?.status,
         e.mission?.payout,
         e.mission?.payloadCheck?.status,
+        e.mission?.payloadCheck?.enteredKg,
+        e.mission?.payloadCheck?.impliedKg,
       ]
         .map(csvField)
         .join(","),
