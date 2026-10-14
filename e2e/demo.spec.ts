@@ -71,6 +71,31 @@ test.describe("demo mode (no connector)", () => {
     await expect(page.getByTestId("ops-map")).toHaveAttribute("data-ready", "true", {
       timeout: 30_000,
     });
+    // The wall frames the whole route: both ends (KMEM, KATL) and the aircraft on screen.
+    const frame = page.getByTestId("front-wall-map-frame");
+    await expect(frame).toHaveAttribute("data-route-framed", "true", { timeout: 30_000 });
+    await expect(frame.getByTestId("aircraft-marker")).toBeVisible({ timeout: 15_000 });
+    // fitBounds may still be easing: poll until every marker sits inside the wall map.
+    await expect
+      .poll(
+        async () => {
+          const box = await frame.boundingBox();
+          if (!box) return false;
+          for (const id of ["map-origin", "map-destination", "aircraft-marker"]) {
+            const m = await frame.getByTestId(id).boundingBox();
+            if (!m) return false;
+            const cx = m.x + m.width / 2;
+            const cy = m.y + m.height / 2;
+            if (cx < box.x || cx > box.x + box.width || cy < box.y || cy > box.y + box.height) {
+              return false;
+            }
+          }
+          return true;
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    await expect(frame.getByTestId("map-destination")).toContainText("KATL");
 
     // Status board: the demo link is HOLD (never GO), and every lit lamp says where its
     // data came from (DEMO, or SAMPLE weather); NO DATA lamps carry no tag.
