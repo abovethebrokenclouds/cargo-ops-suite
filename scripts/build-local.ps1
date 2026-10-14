@@ -19,7 +19,13 @@ $shell = Join-Path $repo "dist\client\_shell.html"
 
 function Run([string]$what, [scriptblock]$block) {
   Write-Host "==> $what"
-  & $block
+  # Windows PowerShell 5.1 turns each stderr line of a native command (npm prints
+  # "npm warn deprecated ..." there) into an error record when its output is redirected,
+  # e.g. `start-cargo-ops.cmd > log.txt 2>&1`; under "Stop" the first warning would abort
+  # the build. The exit code decides success instead.
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try { & $block } finally { $ErrorActionPreference = $previous }
   if ($LASTEXITCODE -ne 0) {
     Write-Host "$what failed (exit code $LASTEXITCODE)." -ForegroundColor Red
     exit $LASTEXITCODE

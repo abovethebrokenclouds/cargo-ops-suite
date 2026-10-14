@@ -1,0 +1,218 @@
+# Windows checks without a simulator (docs/VERIFICATION.md rows W-xx). They run the owner's
+# Windows-side steps on GitHub's windows-latest runners so they need not be done by hand.
+# A green run here is evidence for the PC rows, NOT a PC ✅: the runner is not the owner's PC
+# and has no MSFS. Assertion logic lives in scripts/ci/ (node, also runnable on Linux).
+name: Windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_OPS_CI_LOGS: ${{ github.workspace }}\ci-logs
+
+jobs:
+  launcher:
+    # W-01 (PC-01) and W-40 (PC-40): a clean checkout, Node 24 only (no bun, no pre-installed
+    # dependencies), started through scripts\start-cargo-ops.cmd exactly as the owner does.
+    name: Launcher + PWA (W-01, W-40)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # One step on purpose: the runner ends the processes a step leaves behind when the step
+      # finishes, so a launcher started in its own step dies before the checks run (seen as a
+      # launcher log that stops mid `npm ci`). The launcher lives for exactly this step.
+      - name: W-01 start-cargo-ops.cmd -NoOpen --sim fake --loop, SPA + welcome; W-40 PWA installability
+        timeout-minutes: 40
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CARGO_OPS_CI_LOGS | Out-Null
+          Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "CargoOps") -ErrorAction SilentlyContinue
+          $out = Join-Path $env:CARGO_OPS_CI_LOGS "launcher.out.log"
+          $err = Join-Path $env:CARGO_OPS_CI_LOGS "launcher.err.log"
+          $p = Start-Process -FilePath "cmd.exe" `
+            -ArgumentList "/d", "/c", "scripts\start-cargo-ops.cmd", "-NoOpen", "--sim", "fake", "--loop" `
+            -WorkingDirectory $env:GITHUB_WORKSPACE `
+            -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow -PassThru
+          Write-Host "launcher pid $($p.Id)"
+          $failure = $null
+          try {
+            Write-Host "::group::W-01 SPA on 127.0.0.1:4311, WebSocket welcome (replay)"
+            node scripts/ci/check-launcher.mjs --port 4311 --timeout-ms 1500000 --pid $p.Id --log $out --err-log $err
+            if ($LASTEXITCODE -ne 0) { throw "W-01 check-launcher.mjs failed (exit $LASTEXITCODE)" }
+            Write-Host "::endgroup::"
+            Write-Host "::group::W-40 install Playwright Chromium (CI runner only)"
+            npx playwright install chromium
+            if ($LASTEXITCODE -ne 0) { throw "W-40 playwright install failed (exit $LASTEXITCODE)" }
+            Write-Host "::endgroup::"
+            Write-Host "::group::W-40 PWA installability over CDP"
+            node scripts/ci/pwa-installability.mjs --url http://127.0.0.1:4311/
+            if ($LASTEXITCODE -ne 0) { throw "W-40 pwa-installability.mjs failed (exit $LASTEXITCODE)" }
+            Write-Host "::endgroup::"
+          } catch {
+            $failure = $_
+          } finally {
+            Write-Host "::group::Stop the launcher"
+            taskkill /T /F /PID $p.Id 2>&1 | Write-Host
+            Start-Sleep -Seconds 2
+            $still = Get-NetTCPConnection -LocalPort 4311 -State Listen -ErrorAction SilentlyContinue
+            Write-Host "::endgroup::"
+          }
+          if ($failure) { Write-Host "::error::$failure"; exit 1 }
+          if ($still) { Write-Host "::error::port 4311 still listening (pid $($still.OwningProcess)) after taskkill /T"; exit 1 }
+          exit 0
+
+      - name: Collect logs
+        if: failure()
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CARGO_OPS_CI_LOGS | Out-Null
+          $logs = Join-Path $env:LOCALAPPDATA "CargoOps\logs"
+          if (Test-Path $logs) { Copy-Item -Recurse $logs (Join-Path $env:CARGO_OPS_CI_LOGS "CargoOps-logs") }
+          # Also into the job log: the artifact is not always reachable for whoever reads the run.
+          Get-ChildItem $env:CARGO_OPS_CI_LOGS -Recurse -Filter *.log -File | ForEach-Object {
+            Write-Host "----- $($_.Name)"
+            Get-Content $_.FullName -Tail 200 | Write-Host
+          }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: windows-launcher-logs
+          path: ci-logs
+          if-no-files-found: ignore
+
+  connector:
+    # W-06, W-29/33/36, W-44, W-45, W-41: the real connector build on Windows paths
+    # (%LOCALAPPDATA%\CargoOps), Windows PowerShell 5.1 for the owner-facing scripts.
+    name: Connector on Windows paths (W-06, W-29, W-33, W-36, W-44, W-45, W-41)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: connector/package-lock.json
+
+      - name: Build the connector
+        id: build
+        working-directory: connector
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+
+      - name: W-06 SimConnect discovery from HKCU (logic only, no MSFS)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node --disable-warning=ExperimentalWarning scripts/ci/simconnect-discovery.mjs
+
+      - name: W-29 / W-33 / W-36 career migrations and export/import in %LOCALAPPDATA%
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node --disable-warning=ExperimentalWarning scripts/ci/career-windows.mjs
+
+      - name: W-44 backups at start, --backup-keep 2, Back up now, restore steps
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: node --disable-warning=ExperimentalWarning scripts/ci/backups-windows.mjs
+
+      - name: W-45 create-shortcut.ps1 (Start menu, desktop, -Startup, -Remove)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\ci\check-shortcuts.ps1
+
+      - name: W-41 fetch-basemap.ps1 -MaxZoom 2
+        id: basemap
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 15
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # Daily builds appear some hours after midnight UTC and are pruned later: try the
+          # last few days, newest first.
+          $ok = $false
+          foreach ($back in 1..4) {
+            $date = (Get-Date).ToUniversalTime().AddDays(-$back).ToString("yyyyMMdd")
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\fetch-basemap.ps1 -Date $date -MaxZoom 2
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "Protomaps build $date not usable (exit $LASTEXITCODE); trying an older one"
+          }
+          if (-not $ok) { throw "no usable Protomaps daily build in the last 4 days" }
+          $file = Join-Path $env:LOCALAPPDATA "CargoOps\basemap\basemap.pmtiles"
+          if (-not (Test-Path $file)) { throw "$file was not written" }
+
+      - name: W-41 the connector serves the extract
+        if: ${{ !cancelled() && steps.basemap.outcome == 'success' }}
+        timeout-minutes: 5
+        run: node --disable-warning=ExperimentalWarning scripts/ci/basemap-served.mjs --max-zoom 2
+
+      - name: Collect logs
+        if: failure()
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:CARGO_OPS_CI_LOGS | Out-Null
+          $logs = Join-Path $env:LOCALAPPDATA "CargoOps\logs"
+          if (Test-Path $logs) { Copy-Item -Recurse $logs (Join-Path $env:CARGO_OPS_CI_LOGS "CargoOps-logs") }
+          Get-ChildItem $env:CARGO_OPS_CI_LOGS -Recurse -Filter *.log -File | ForEach-Object {
+            Write-Host "----- $($_.Name)"
+            Get-Content $_.FullName -Tail 200 | Write-Host
+          }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: windows-connector-logs
+          path: ci-logs
+          if-no-files-found: ignore
+
+  network:
+    # W-42 and W-43: the online services the owner's PC uses, reached from a Windows runner.
+    name: Online services from Windows (W-42, W-43)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: W-42 OpenFreeMap style, TileJSON and a tile
+        timeout-minutes: 5
+        run: node scripts/ci/openfreemap.mjs
+
+      - name: W-43 node scripts\refresh-airports.mjs and data shape
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          $committed = Join-Path $env:RUNNER_TEMP "airports-major.committed.json"
+          Copy-Item src\assets\data\airports-major.json $committed
+          node scripts\refresh-airports.mjs
+          if ($LASTEXITCODE -ne 0) { throw "refresh-airports.mjs exited $LASTEXITCODE" }
+          node scripts/ci/airports-shape.mjs $committed
+          if ($LASTEXITCODE -ne 0) { throw "airports-shape.mjs exited $LASTEXITCODE" }
+
+      - name: Never keep regenerated data
+        if: always()
+        run: git checkout -- src/assets/data/airports-major.json data/ourairports/SOURCE.md
