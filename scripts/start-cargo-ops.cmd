@@ -3,7 +3,8 @@ rem Cargo Ops launcher for Windows. Double-click it or run it from a terminal.
 rem Checks Node.js, then hands over to start-cargo-ops.ps1, which installs the
 rem connector dependencies, builds what is missing and starts the connector on
 rem http://127.0.0.1:4311 with the browser opening automatically.
-rem Extra arguments are passed to the connector, e.g. --sim fake --loop
+rem Extra arguments are passed to the connector, e.g. --sim fake --loop, or
+rem --lan to let a paired tablet on your home network in (docs\SETUP_WINDOWS.md section 15)
 setlocal
 
 where node >nul 2>nul

@@ -164,5 +164,12 @@ Shortcuts are ignored while you type in a field.
   is manual with the connector stopped — steps in the page and in setup guide §6.
 - **SimBrief** (optional, off): your own username or pilot ID; Import fetches your latest OFP
   from simbrief.com.
+- **LAN access** (optional, off): open Cargo Ops on a tablet or second PC on your home network.
+  Turn it on here (applies after a connector restart) or start once with
+  `scripts\start-cargo-ops.cmd --lan`. Windows asks about the firewall the first time: allow
+  **Private networks** only. Then press **Generate pairing code**, open the address shown on the
+  tablet and type the code (it works once, for 5 minutes). The tablet can fly and run the
+  company; career import, backups, deleting data and LAN access itself stay on the PC. **Revoke**
+  removes a device. Details: setup guide §15.
 
 Animations respect Windows' "Show animations" / `prefers-reduced-motion` setting.

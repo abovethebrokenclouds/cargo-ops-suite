@@ -187,7 +187,8 @@ export function ConnectorPanel({ ctx }: { ctx: SettingsContext }) {
             Reset it: stop the connector and start it with{" "}
             <code className="font-mono">--reset-token</code> (or delete{" "}
             <code className="font-mono">%LOCALAPPDATA%\CargoOps\config.json</code>), then reload
-            open tabs. A reset also unpairs every LAN device.
+            open tabs. <code className="font-mono">--reset-token</code> also unpairs every LAN
+            device.
           </li>
         </ul>
       </details>

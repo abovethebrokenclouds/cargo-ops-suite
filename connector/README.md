@@ -50,7 +50,9 @@ for you; see `docs/SETUP_WINDOWS.md`.
                         METAR source (default online with simconnect, sample with fake)
 --open                  Open the browser when ready (start / open / xdg-open)
 --verbose               Debug logging
---lan                   Not implemented; refuses to start
+--lan [address]         LAN opt-in: also listen on 0.0.0.0 or one IPv4 of this PC
+                        (pairing required, see "LAN access" below)
+--no-lan                Stay on 127.0.0.1 even if LAN access is saved as on
 --help, --version
 ```
 
@@ -70,18 +72,47 @@ npm start -- --record fixtures/kmem-katl-2026-10-20.jsonl   # record a real flig
 | Others  | `$XDG_CONFIG_HOME/cargo-ops`, else `~/.config/cargo-ops` |
 
 Contents: `config.json` (the access token, 32 random bytes as hex, created on first
-run), `cargo-ops.db` (live sessions), `demo.db` (replay sessions; plan §3.2 demo
+run, and the saved LAN opt-in `lan: { enabled, address }`), `lan-devices.json` (paired LAN
+devices: id, name, SHA-256 of the device token, paired at/from), `cargo-ops.db` (live sessions), `demo.db` (replay sessions; plan §3.2 demo
 separation), `logs/connector.log`, `backups/` (P6, below).
 
 ## HTTP and WebSocket API
 
-Bound to `127.0.0.1` only. Every request must carry a `Host` header naming the
-connector (`127.0.0.1:<port>` or `localhost:<port>`), which blocks DNS rebinding.
+Bound to `127.0.0.1` only unless LAN access is on (below). Every request must carry a
+`Host` header naming the connector (`127.0.0.1:<port>`, `localhost:<port>`, or with LAN on an
+IPv4 literal of a bound interface with the port), which blocks DNS rebinding.
+
+### LAN access (opt-in)
+
+Off by default. `--lan` (or the setting saved from `/settings` via `PUT /api/lan/settings`,
+applied on the next start; `--no-lan` overrides it) listens on `0.0.0.0`, or with
+`--lan <IPv4>` on `127.0.0.1` plus that one address (refused when it is not an address of this
+PC). The Host/Origin allowlist grows by `http://<bound IPv4>:<port>` only; with `0.0.0.0` the
+interface list is re-read at most every 5 s when an unknown IP Host arrives (DHCP).
+
+- The main token is **loopback-only**: `GET /api/session` gives it only to a loopback client,
+  and it is refused on `/api/*` and `/ws` from any other address.
+- A LAN client pairs: `POST /api/lan/code` on this PC creates a one-time code (8 characters
+  from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, 5 min, single use; a new code replaces the old one);
+  `POST /api/lan/pair { code, name }` from the LAN page (connector Origin required) returns a
+  separate 32-byte device token. Five wrong codes from one address within 15 min lock it out
+  for 15 min (`429 pairing_locked` + `Retry-After`); ten wrong codes in total burn the code.
+- A paired device sends its token to `GET /api/session` (Bearer) to get it confirmed, or gets
+  `403 pairing_required`. It has full control (`/api/*` reads, all WebSocket commands) except
+  the local-only routes: `POST /api/import`, `POST /api/backups`, every `DELETE`, and
+  `/api/lan*` → `403 local_only`.
+- Revoking (`DELETE /api/lan/devices/:id`) closes that device's sockets with `4401`.
+  `--reset-token` forgets every device. Pairing, failures and revokes are logged.
 
 | Route                                   | Auth                                                            | Response                                                                                                                                                                                                                                                           |
 | --------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `GET /api/health`                       | none                                                            | `{ ok, version, mode, sim }`                                                                                                                                                                                                                                       |
-| `GET /api/session`                      | `Origin` absent or an allowed origin                            | `{ token, wsUrl: "/ws" }`                                                                                                                                                                                                                                          |
+| `GET /api/session`                      | `Origin` absent or an allowed origin                            | loopback: `{ token, wsUrl: "/ws", scope: "local" }`; LAN client with a valid device token (Bearer): `{ token, wsUrl, scope: "lan", device }`; other LAN clients `403 pairing_required`                                                                             |
+| `POST /api/lan/pair`                    | LAN on, connector `Origin`, no token                            | `{ code, name }` → `{ token, wsUrl, scope: "lan", device }`; `401 invalid_code`, `429 pairing_locked`, `404 lan_off`                                                                                                                                               |
+| `GET /api/lan`                          | main token (this PC only)                                       | `{ active, bind, port, urls, interfaces, setting, restartRequired, code, devices }`                                                                                                                                                                                |
+| `POST`/`DELETE /api/lan/code`           | main token (this PC only)                                       | new one-time pairing code (`409 lan_off` when LAN is off) / cancel it                                                                                                                                                                                              |
+| `PUT /api/lan/settings`                 | main token (this PC only)                                       | `{ enabled, address? }` saved for the next start (`400 bad_address`)                                                                                                                                                                                               |
+| `DELETE /api/lan/devices/:id`           | main token (this PC only)                                       | revoke a paired device (`404 unknown_device`)                                                                                                                                                                                                                      |
 | `GET /api/status`                       | `Authorization: Bearer <token>`                                 | health + seq, clients, paths, store stats                                                                                                                                                                                                                          |
 | `GET /api/flights`                      | Bearer token                                                    | `{ flights: [...] }`, newest first (≤ 50)                                                                                                                                                                                                                          |
 | `GET /api/flights/:id/track`            | Bearer token                                                    | `{ id, points: [{ t, lat, lon, altFt, ... }] }`                                                                                                                                                                                                                    |
