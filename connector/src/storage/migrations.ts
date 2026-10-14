@@ -255,4 +255,15 @@ export const MIGRATIONS: readonly Migration[] = [
       INSERT OR REPLACE INTO settings (key, json) VALUES ('economy.phase', '6');
     `,
   },
+  {
+    // Weather: TAF cache next to the v1 metar_cache (same columns; survives restarts).
+    version: 7,
+    sql: `
+      CREATE TABLE IF NOT EXISTS taf_cache (
+        station TEXT PRIMARY KEY,
+        fetched_at INTEGER NOT NULL,
+        json TEXT NOT NULL
+      );
+    `,
+  },
 ];

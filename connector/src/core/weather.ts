@@ -1,11 +1,12 @@
-// METAR fetcher (plan §3 "METAR fetcher (cached)", §8 Weather). Server-side so the browser
-// needs no CORS and never talks to a third party itself.
+// METAR and TAF fetcher (plan §3 "METAR fetcher (cached)", §8 Weather). Server-side so the
+// browser needs no CORS and never talks to a third party itself.
 //
 // Network etiquette for aviationweather.gov (documented limits: 100 requests/min, custom
 // User-Agent, at most one request per minute per thread):
-//   - one request at a time, all due stations in one `ids=` list;
-//   - a station is fetched again only when its cache entry is older than 10 minutes, and
-//     never more than once a minute (also after failures);
+//   - one request at a time per product, all due stations in one `ids=` list;
+//   - a station is fetched again only when its cache entry is older than the product's TTL
+//     (METAR 10 minutes; TAF 30 minutes, TAFs are issued about every 6 hours), and never
+//     more than once a minute (also after failures);
 //   - hard timeout, no automatic retries; failures serve the last report marked stale;
 //   - nothing is fetched unless the connector runs in "online" mode AND the page's
 //     "online weather" switch is on (sent as `online=1`).
@@ -15,49 +16,149 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   AWC_ATTRIBUTION,
   AWC_METAR_URL,
+  AWC_TAF_ATTRIBUTION,
+  AWC_TAF_URL,
   awcMetarUrl,
+  awcTafUrl,
   fromAwcResponse,
+  fromAwcTafResponse,
+  isTafExpired,
   sampleMetar,
+  sampleTaf,
   SAMPLE_NOTE,
+  SAMPLE_TAF_NOTE,
   type MetarReport,
   type MetarResponse,
-  type MetarStationResult,
+  type StationResult,
+  type TafReport,
+  type TafResponse,
   type WeatherMode,
+  type WeatherResponse,
 } from "../weather";
 import type { LogFn } from "../sim/source";
 
 export const WEATHER_TTL_MS = 10 * 60_000;
+export const TAF_TTL_MS = 30 * 60_000;
 export const WEATHER_MIN_INTERVAL_MS = 60_000;
 export const WEATHER_TIMEOUT_MS = 10_000;
-/** A cached live report older than this is not shown at all, even as stale. */
+/** A cached live METAR older than this is not shown at all, even as stale. */
 export const WEATHER_STALE_MAX_MS = 3 * 3600_000;
+/** A cached live TAF older than this is not shown (it is also dropped once its validity ends). */
+export const TAF_STALE_MAX_MS = 12 * 3600_000;
 const MAX_BODY_BYTES = 1024 * 1024;
 
 export interface WeatherServiceOptions {
   mode: WeatherMode;
   version: string;
   log: LogFn;
-  /** Database holding the `metar_cache` table (survives restarts); null = memory only. */
+  /** Database holding the `metar_cache` and `taf_cache` tables; null = memory only. */
   db?: DatabaseSync | null;
   fetch?: typeof fetch;
   now?: () => number;
   timeoutMs?: number;
 }
 
-interface CacheEntry {
+interface CacheEntry<R> {
   fetchedAt: number;
   /** null = the API had no report for this station. */
-  report: MetarReport | null;
+  report: R | null;
+}
+
+/** One product (METAR or TAF): endpoint, cache table, TTLs, mapping and samples. */
+interface Product<R extends { stale: boolean }> {
+  name: "METAR" | "TAF";
+  table: "metar_cache" | "taf_cache";
+  ttlMs: number;
+  staleMaxMs: number;
+  url: (stations: string[]) => string;
+  endpoint: string;
+  attribution: string;
+  /** Latest report per station from a response body. */
+  map: (body: unknown, fetchedAt: number) => Map<string, R>;
+  sample: (station: string, at: Date) => R | null;
+  sampleNote: string;
+  noneNote: string;
+  /** Extra check on a cached report (TAF: not expired). */
+  usable?: (report: R, now: number) => boolean;
+  expiredNote?: string;
+}
+
+const METAR: Product<MetarReport> = {
+  name: "METAR",
+  table: "metar_cache",
+  ttlMs: WEATHER_TTL_MS,
+  staleMaxMs: WEATHER_STALE_MAX_MS,
+  url: awcMetarUrl,
+  endpoint: AWC_METAR_URL,
+  attribution: AWC_ATTRIBUTION,
+  map: (body, fetchedAt) => {
+    const iso = new Date(fetchedAt).toISOString();
+    const latest = new Map<string, MetarReport>();
+    for (const d of fromAwcResponse(body, new Date(fetchedAt))) {
+      const prev = latest.get(d.station);
+      if (prev && (prev.observedAt ?? "") >= (d.observedAt ?? "")) continue;
+      latest.set(d.station, { ...d, origin: "live", fetchedAt: iso, stale: false });
+    }
+    return latest;
+  },
+  sample: sampleMetar,
+  sampleNote: SAMPLE_NOTE,
+  noneNote: "No current METAR from this station.",
+};
+
+const TAF: Product<TafReport> = {
+  name: "TAF",
+  table: "taf_cache",
+  ttlMs: TAF_TTL_MS,
+  staleMaxMs: TAF_STALE_MAX_MS,
+  url: awcTafUrl,
+  endpoint: AWC_TAF_URL,
+  attribution: AWC_TAF_ATTRIBUTION,
+  map: (body, fetchedAt) => {
+    const iso = new Date(fetchedAt).toISOString();
+    const latest = new Map<string, TafReport>();
+    for (const d of fromAwcTafResponse(body, new Date(fetchedAt))) {
+      const prev = latest.get(d.station);
+      if (prev && (prev.issuedAt ?? "") >= (d.issuedAt ?? "")) continue;
+      latest.set(d.station, {
+        station: d.station,
+        issuedAt: d.issuedAt,
+        validFrom: d.validFrom,
+        validTo: d.validTo,
+        amended: d.amended,
+        corrected: d.corrected,
+        cancelled: d.cancelled,
+        periods: d.periods,
+        rawText: d.rawText,
+        origin: "live",
+        decodedBy: "parser",
+        fetchedAt: iso,
+        stale: false,
+      });
+    }
+    return latest;
+  },
+  sample: sampleTaf,
+  sampleNote: SAMPLE_TAF_NOTE,
+  noneNote: "No current TAF for this station (many smaller airports have none).",
+  usable: (report, now) => !report.cancelled && !isTafExpired(report, now),
+  expiredNote: "The last TAF for this station has expired.",
+};
+
+/** Cache and request state of one product. */
+class ProductState<R> {
+  readonly memory = new Map<string, CacheEntry<R>>();
+  readonly lastAttempt = new Map<string, number>();
+  readonly lastError = new Map<string, string>();
+  inFlight: Promise<void> | null = null;
 }
 
 export class WeatherService {
   readonly mode: WeatherMode;
   private readonly options: WeatherServiceOptions;
-  private readonly memory = new Map<string, CacheEntry>();
-  private readonly lastAttempt = new Map<string, number>();
-  private readonly lastError = new Map<string, string>();
-  private inFlight: Promise<void> | null = null;
-  /** Number of HTTP requests made (diagnostics and tests). */
+  private readonly metarState = new ProductState<MetarReport>();
+  private readonly tafState = new ProductState<TafReport>();
+  /** Number of HTTP requests made, all products (diagnostics and tests). */
   requests = 0;
 
   constructor(options: WeatherServiceOptions) {
@@ -69,57 +170,77 @@ export class WeatherService {
     return (this.options.now ?? Date.now)();
   }
 
-  private cached(station: string): CacheEntry | null {
-    const mem = this.memory.get(station);
+  /** METARs for `stations` (already normalised). `online` is the page's switch. */
+  metar(stations: readonly string[], online: boolean): Promise<MetarResponse> {
+    return this.lookup(METAR, this.metarState, stations, online);
+  }
+
+  /** TAFs for `stations` (already normalised). `online` is the page's switch. */
+  taf(stations: readonly string[], online: boolean): Promise<TafResponse> {
+    return this.lookup(TAF, this.tafState, stations, online);
+  }
+
+  private cached<R extends { stale: boolean }>(
+    p: Product<R>,
+    st: ProductState<R>,
+    station: string,
+  ): CacheEntry<R> | null {
+    const mem = st.memory.get(station);
     if (mem) return mem;
     const db = this.options.db;
     if (!db) return null;
     try {
       const row = db
-        .prepare("SELECT fetched_at, json FROM metar_cache WHERE station = ?")
+        .prepare(`SELECT fetched_at, json FROM ${p.table} WHERE station = ?`)
         .get(station) as { fetched_at: number; json: string } | undefined;
       if (!row) return null;
-      const entry: CacheEntry = {
+      const entry: CacheEntry<R> = {
         fetchedAt: row.fetched_at,
-        report: JSON.parse(row.json) as MetarReport | null,
+        report: JSON.parse(row.json) as R | null,
       };
-      this.memory.set(station, entry);
+      st.memory.set(station, entry);
       return entry;
     } catch {
       return null;
     }
   }
 
-  private store(station: string, entry: CacheEntry): void {
-    this.memory.set(station, entry);
+  private store<R extends { stale: boolean }>(
+    p: Product<R>,
+    st: ProductState<R>,
+    station: string,
+    entry: CacheEntry<R>,
+  ): void {
+    st.memory.set(station, entry);
     try {
       this.options.db
         ?.prepare(
-          "INSERT INTO metar_cache (station, fetched_at, json) VALUES (?, ?, ?) ON CONFLICT(station) DO UPDATE SET fetched_at = excluded.fetched_at, json = excluded.json",
+          `INSERT INTO ${p.table} (station, fetched_at, json) VALUES (?, ?, ?) ON CONFLICT(station) DO UPDATE SET fetched_at = excluded.fetched_at, json = excluded.json`,
         )
         .run(station, entry.fetchedAt, JSON.stringify(entry.report));
     } catch (err) {
       this.options.log(
         "debug",
-        `METAR cache write failed: ${err instanceof Error ? err.message : err}`,
+        `${p.name} cache write failed: ${err instanceof Error ? err.message : err}`,
       );
     }
   }
 
-  private response(onlineAllowed: boolean, stations: MetarStationResult[]): MetarResponse {
-    return {
+  private async lookup<R extends { stale: boolean }>(
+    p: Product<R>,
+    st: ProductState<R>,
+    stations: readonly string[],
+    online: boolean,
+  ): Promise<WeatherResponse<R>> {
+    const response = (onlineAllowed: boolean, results: StationResult<R>[]) => ({
       mode: this.mode,
       onlineAllowed,
-      stations,
-      attribution: AWC_ATTRIBUTION,
-      endpoint: AWC_METAR_URL,
-    };
-  }
-
-  /** METARs for `stations` (already normalised). `online` is the page's switch. */
-  async metar(stations: readonly string[], online: boolean): Promise<MetarResponse> {
+      stations: results,
+      attribution: p.attribution,
+      endpoint: p.endpoint,
+    });
     if (this.mode === "off") {
-      return this.response(
+      return response(
         online,
         stations.map((station) => ({
           station,
@@ -130,17 +251,17 @@ export class WeatherService {
     }
     if (this.mode === "sample") {
       const at = new Date(this.now());
-      return this.response(
+      return response(
         online,
         stations.map((station) => ({
           station,
-          report: sampleMetar(station, at),
-          note: SAMPLE_NOTE,
+          report: p.sample(station, at),
+          note: p.sampleNote,
         })),
       );
     }
     if (!online) {
-      return this.response(
+      return response(
         false,
         stations.map((station) => ({
           station,
@@ -149,54 +270,66 @@ export class WeatherService {
         })),
       );
     }
-    if (this.inFlight) await this.inFlight;
+    if (st.inFlight) await st.inFlight;
     const now = this.now();
     const due = stations.filter((s) => {
-      const c = this.cached(s);
-      const fresh = c !== null && now - c.fetchedAt <= WEATHER_TTL_MS;
-      const recentlyTried = now - (this.lastAttempt.get(s) ?? -Infinity) < WEATHER_MIN_INTERVAL_MS;
+      const c = this.cached(p, st, s);
+      const fresh = c !== null && now - c.fetchedAt <= p.ttlMs;
+      const recentlyTried = now - (st.lastAttempt.get(s) ?? -Infinity) < WEATHER_MIN_INTERVAL_MS;
       return !fresh && !recentlyTried;
     });
     if (due.length > 0) {
-      this.inFlight = this.fetchStations(due).finally(() => {
-        this.inFlight = null;
+      st.inFlight = this.fetchStations(p, st, due).finally(() => {
+        st.inFlight = null;
       });
-      await this.inFlight;
+      await st.inFlight;
     }
     const at = this.now();
-    return this.response(
+    return response(
       true,
-      stations.map((station) => this.result(station, at)),
+      stations.map((station) => this.result(p, st, station, at)),
     );
   }
 
-  private result(station: string, now: number): MetarStationResult {
-    const c = this.cached(station);
-    const error = this.lastError.get(station) ?? null;
-    if (c && now - c.fetchedAt <= WEATHER_TTL_MS && !error) {
+  private result<R extends { stale: boolean }>(
+    p: Product<R>,
+    st: ProductState<R>,
+    station: string,
+    now: number,
+  ): StationResult<R> {
+    const c = this.cached(p, st, station);
+    const error = st.lastError.get(station) ?? null;
+    if (c?.report && p.usable && !p.usable(c.report, now)) {
+      return { station, report: null, note: error ?? p.expiredNote ?? p.noneNote };
+    }
+    if (c && now - c.fetchedAt <= p.ttlMs && !error) {
       return c.report
         ? { station, report: { ...c.report, stale: false }, note: null }
-        : { station, report: null, note: "No current METAR from this station." };
+        : { station, report: null, note: p.noneNote };
     }
-    if (c?.report && now - c.fetchedAt <= WEATHER_STALE_MAX_MS) {
+    if (c?.report && now - c.fetchedAt <= p.staleMaxMs) {
       return {
         station,
         report: { ...c.report, stale: true },
         note: error ?? "Refresh pending.",
       };
     }
-    if (c && !c.report && now - c.fetchedAt <= WEATHER_STALE_MAX_MS && !error) {
-      return { station, report: null, note: "No current METAR from this station." };
+    if (c && !c.report && now - c.fetchedAt <= p.staleMaxMs && !error) {
+      return { station, report: null, note: p.noneNote };
     }
     return { station, report: null, note: error ?? "Weather not fetched yet." };
   }
 
-  private async fetchStations(stations: string[]): Promise<void> {
+  private async fetchStations<R extends { stale: boolean }>(
+    p: Product<R>,
+    st: ProductState<R>,
+    stations: string[],
+  ): Promise<void> {
     const startedAt = this.now();
-    for (const s of stations) this.lastAttempt.set(s, startedAt);
+    for (const s of stations) st.lastAttempt.set(s, startedAt);
     const fail = (message: string) => {
-      for (const s of stations) this.lastError.set(s, message);
-      this.options.log("warn", `METAR fetch failed (${stations.join(",")}): ${message}`);
+      for (const s of stations) st.lastError.set(s, message);
+      this.options.log("warn", `${p.name} fetch failed (${stations.join(",")}): ${message}`);
     };
     const fetchImpl = this.options.fetch ?? globalThis.fetch;
     const controller = new AbortController();
@@ -208,7 +341,7 @@ export class WeatherService {
     try {
       let res: Response;
       try {
-        res = await fetchImpl(awcMetarUrl(stations), {
+        res = await fetchImpl(p.url(stations), {
           signal: controller.signal,
           headers: {
             Accept: "application/json",
@@ -248,16 +381,10 @@ export class WeatherService {
         }
       }
       const fetchedAt = this.now();
-      const iso = new Date(fetchedAt).toISOString();
-      const latest = new Map<string, MetarReport>();
-      for (const d of fromAwcResponse(body, new Date(fetchedAt))) {
-        const prev = latest.get(d.station);
-        if (prev && (prev.observedAt ?? "") >= (d.observedAt ?? "")) continue;
-        latest.set(d.station, { ...d, origin: "live", fetchedAt: iso, stale: false });
-      }
+      const latest = p.map(body, fetchedAt);
       for (const s of stations) {
-        this.lastError.delete(s);
-        this.store(s, { fetchedAt, report: latest.get(s) ?? null });
+        st.lastError.delete(s);
+        this.store(p, st, s, { fetchedAt, report: latest.get(s) ?? null });
       }
     } finally {
       clearTimeout(timer);
