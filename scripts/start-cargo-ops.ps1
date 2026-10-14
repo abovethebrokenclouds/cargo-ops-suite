@@ -63,5 +63,8 @@ Write-Host "Starting Cargo Ops. Leave this window open while you fly; press Ctrl
 # Run from the caller's folder (no Push-Location): relative paths you pass, such as
 # --record connector\fixtures\my-flight.jsonl, then resolve from where you ran the
 # script. The connector's own defaults are anchored to its install folder.
+# Connector warnings go to stderr: let them through (see Run in build-local.ps1); the exit
+# code is what counts.
+$ErrorActionPreference = "Continue"
 & node @runArgs
 exit $LASTEXITCODE
