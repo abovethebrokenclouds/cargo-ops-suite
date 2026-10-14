@@ -150,6 +150,11 @@ describe("mission.abort while the flight is running", () => {
       assert.equal(m?.id, aborted.id);
       assert.equal(m?.status, "aborted");
       assert.equal(m?.payout, undefined);
+      // Weather bonus: frozen at departure only; an aborted mission never decides a bonus.
+      assert.equal(m?.weather?.departure?.station, "KMEM");
+      assert.equal(m?.weather?.arrival, undefined);
+      assert.equal(m?.weather?.bonus, undefined);
+      assert.equal(m?.weather?.outcome, undefined);
       const fuel = m?.costs?.find((c) => c.key === "fuel");
       assert.ok(fuel && fuel.amount > 0, `fuel billed: ${JSON.stringify(m?.costs)}`);
       assert.ok(
@@ -287,11 +292,18 @@ describe("connector restart in the middle of a mission flight", () => {
       assert.equal(back?.status, "loaded");
       assert.equal(back?.flightId, undefined);
       assert.equal(back?.startedAt, undefined);
+      // The lost flight's departure weather is cleared with its start: a loaded mission
+      // carries no frozen check, and the new departure freezes a fresh one.
+      assert.equal(back?.weather, undefined);
       assert.equal(r2.events("mission.recovered").length, 1);
       r2.source.playRange(10);
       const done = r2.mission();
       assert.equal(done?.status, "delivered", JSON.stringify(done?.failure ?? done?.startBlocked));
       assert.equal(done?.flightId, "N-flight-1");
+      assert.equal(done?.weather?.departure?.station, "KMEM");
+      assert.equal(done?.weather?.arrival?.station, "KATL");
+      assert.equal(done?.weather?.outcome, "not_live"); // no weather lookup in this rig
+      assert.equal(done?.weather?.bonus, 0);
       assert.ok((done?.payout?.total ?? 0) > 0);
       assert.equal(r2.fleet().aircraft.find((a) => a.id === done?.aircraftId)?.status, "available");
       assertBalanced(r2);

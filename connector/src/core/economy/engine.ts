@@ -281,6 +281,8 @@ export class EconomyEngine {
         elapsedMin: _e,
         payloadCheck: _p,
         startBlocked: _b,
+        // The departure METAR was frozen for the lost flight; the next departure freezes anew.
+        weather: _w,
         ...rest
       } = m;
       this.mission = {

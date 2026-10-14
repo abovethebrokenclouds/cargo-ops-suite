@@ -234,11 +234,14 @@ sim-stamped test frames and hand-made live reports):
   it parked, lease hours) and wear are booked on the aborted mission (`mission.costs`) and
   the aircraft is released where it parked. No payout, no reputation change (a crash on
   that flight is settled as a crash, without the −20: no cargo was being flown for pay).
+  An aborted mission keeps only its departure weather check: no arrival is frozen and no
+  weather bonus is decided.
 - **connector restart**: a fresh connector has no running flight and the tracker's
   in-memory leg (distance, fuel, landings) is gone, so a lost flight is never resumed or
   billed. At startup every aircraft left `in_flight` (mission, ferry or an aborted flight)
   is available again, and a mission left `in_progress` goes back to `loaded` (its start,
-  flown distance and departure payload check cleared). The first sample decides: on the
+  flown distance, departure payload check and departure weather check cleared; the next
+  departure freezes a fresh METAR check). The first sample decides: on the
   ground within **3 nm** of the origin → it stays loaded and flies normally from the next
   departure; otherwise (airborne or elsewhere) → `aborted` (failure code
   `flight_lost`), jobs back to accepted / transit cargo back at its stop, no penalty.
