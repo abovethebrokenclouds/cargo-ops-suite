@@ -54,10 +54,13 @@ export interface OpsMapAircraft {
   hdgTrueDeg: number | null;
 }
 
-/** P5 part 2: an owned FBO or an active demand event, drawn as an HTML marker. */
+/**
+ * P5 part 2: an owned FBO or an active demand event, drawn as an HTML marker; transit cargo
+ * stored at an airport (docs/ECONOMY.md "Transit cargo") uses the same pins.
+ */
 export interface OpsMapPin {
   id: string;
-  kind: "fbo" | "event";
+  kind: "fbo" | "event" | "transit";
   lat: number;
   lon: number;
   /** Short text on the pin (ICAO, or ICAO + event). */
@@ -70,6 +73,14 @@ const PIN_CLASS: Record<OpsMapPin["kind"], string> = {
   fbo: "panel flex items-center gap-1 whitespace-nowrap px-1.5 py-0.5 font-mono text-[0.6875rem] font-semibold tracking-[0.1em] text-success",
   event:
     "panel flex items-center gap-1 whitespace-nowrap px-1.5 py-0.5 font-mono text-[0.6875rem] font-semibold tracking-[0.1em] text-warning",
+  transit:
+    "panel flex items-center gap-1 whitespace-nowrap px-1.5 py-0.5 font-mono text-[0.6875rem] font-semibold tracking-[0.1em] text-accent",
+};
+
+const PIN_TESTID: Record<OpsMapPin["kind"], string> = {
+  fbo: "map-fbo-pin",
+  event: "map-event-pin",
+  transit: "map-transit-pin",
 };
 
 export interface OpsMapProps {
@@ -519,12 +530,14 @@ export function OpsMap(props: OpsMapProps) {
       if (existing) {
         existing.setLngLat([pin.lon, pin.lat]);
         existing.getElement().title = pin.title;
+        const label = existing.getElement().lastChild;
+        if (label && label.textContent !== pin.label) label.textContent = pin.label;
         continue;
       }
       const el = document.createElement("div");
       el.className = PIN_CLASS[pin.kind];
       el.title = pin.title;
-      el.dataset["testid"] = pin.kind === "fbo" ? "map-fbo-pin" : "map-event-pin";
+      el.dataset["testid"] = PIN_TESTID[pin.kind];
       const dot = document.createElement("span");
       dot.className = "status-dot size-1.5";
       dot.setAttribute("aria-hidden", "true");

@@ -94,6 +94,15 @@ export function MissionCard({
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-xs text-muted-foreground">{job.id}</span>
           <KindBadge kind={job.kind} />
+          {job.longHaul ? (
+            <span
+              className="rounded-md border border-warning/40 bg-warning/10 px-2 py-0.5 font-mono text-[0.625rem] uppercase tracking-[0.16em] text-warning"
+              title="Beyond one leg's direct range: fly it to an intermediate airport first (transit cargo)"
+              data-testid="long-haul-tag"
+            >
+              Needs a stop
+            </span>
+          ) : null}
           <SourceTag source={source} />
         </div>
         <p className="mt-2 font-display text-3xl font-bold tracking-tight md:text-4xl">

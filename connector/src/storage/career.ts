@@ -185,17 +185,21 @@ const aircraftEventRowSchema = z.object({
 
 export const CAREER_FORMAT = "cargo-ops-career";
 /**
+ * Version 5 (transit cargo) may carry jobs with status `in_transit` and a `transit` record
+ * (their stop, chain clock and flown legs), long-haul jobs and missions with
+ * `transitJobIds`; nothing else changed, so versions 1–4 import unchanged (they have no
+ * transit cargo). An older connector refuses a version 5 file instead of misreading it.
  * Version 4 (P5 part 2) adds FBOs, FBO transactions and demand events (the company carries
  * demand activity, counters and milestones; fleet rows carry insurance and incidents);
  * version 3 (P5) adds the used market's listings (and fleet rows carry systems, defects,
  * annual, ferry permit and maintenance orders); version 2 (P4) adds fleet, loans and
- * aircraft events; versions 1–3 are still accepted.
+ * aircraft events.
  */
-export const CAREER_VERSION = 4;
+export const CAREER_VERSION = 5;
 
 export const careerExportSchema = z.object({
   format: z.literal(CAREER_FORMAT),
-  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
   exportedAt: z.string(),
   database: z.enum(["live", "demo"]),
   company: companyRecordSchema.nullable(),
@@ -301,7 +305,7 @@ export type ImportResult =
         market: number;
         fbos: number;
       };
-      version: 1 | 2 | 3 | 4;
+      version: 1 | 2 | 3 | 4 | 5;
     }
   | { ok: false; status: number; code: string; message: string };
 

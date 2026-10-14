@@ -68,6 +68,13 @@ export function MissionStrip({
             <span className="font-tabular">{formatInt(mission.payloadKg)} kg</span> ·{" "}
             {mission.distanceNm} nm
           </p>
+          {mission.transitJobIds?.length ? (
+            <p className="mt-1 text-xs text-accent" data-testid="mission-strip-transit">
+              Transit leg: {mission.transitJobIds.length} job
+              {mission.transitJobIds.length === 1 ? " goes" : "s go"} beyond {mission.destination}
+              {" · stored there, paid on final delivery"}
+            </p>
+          ) : null}
           {mission.startBlocked && mission.status === "loaded" ? (
             <p className="mt-1 text-xs text-warning" data-testid="mission-start-blocked">
               Not started: {mission.startBlocked.message}
@@ -87,12 +94,14 @@ export function MissionStrip({
           <p
             className={cn(
               "mt-1 font-mono text-lg font-tabular",
-              left !== null && left < 0 ? "text-destructive" : "text-foreground",
+              (left ?? mission.timeLimitMin) < 0 ? "text-destructive" : "text-foreground",
             )}
             data-testid="mission-deadline"
           >
             {left === null
-              ? `${formatMinutes(mission.timeLimitMin)} from block-out`
+              ? mission.timeLimitMin < 0
+                ? `${formatMinutes(-mission.timeLimitMin)} late already`
+                : `${formatMinutes(mission.timeLimitMin)} from block-out`
               : left >= 0
                 ? `${formatMinutes(left)} left`
                 : `${formatMinutes(-left)} late`}

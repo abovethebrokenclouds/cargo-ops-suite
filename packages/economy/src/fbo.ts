@@ -136,7 +136,7 @@ export function moduleEffect(kind: FboModuleKind, level: number): string {
     case "maintenance":
       return `Own repairs × 0.75 cost, × 0.7 time up to ${MAINT_SHOP.maxSeverity[i]} defects; services traffic`;
     case "cargo":
-      return `+${CARGO_TERMINAL.extraJobs[i]} jobs, +${Math.round((CARGO_TERMINAL.payoutBonus[i] ?? 0) * 100)} % payouts from here; cargo handling fees`;
+      return `+${CARGO_TERMINAL.extraJobs[i]} jobs, +${Math.round((CARGO_TERMINAL.payoutBonus[i] ?? 0) * 100)} % payouts from here; cargo handling fees; transit cargo stored ${CARGO_TERMINAL.transitFreeStorageHours[i]} h off the deadline`;
     case "ramp":
       return `${Math.round((RAMP.capture[i] ?? 0) * 100)} % of the airport's traffic; landing/parking and handling fees${level >= RAMP.loungeMinLevel ? "; crew lounge +1 reputation per own arrival (once a day)" : ""}`;
   }

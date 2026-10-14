@@ -90,6 +90,12 @@ export interface PayoutInput {
    * 1 adds no line (P4/P5 payouts are unchanged).
    */
   demand?: number;
+  /**
+   * Transit cargo: the final delivery of a job carried over several legs. The late penalty
+   * uses the chain minutes (every leg's block time + counted ground time); only the note
+   * changes here, the numbers come from lateMin/peakG/noBonus as usual.
+   */
+  chain?: { legs: number; chainMin: number };
 }
 
 const fmt = (n: number, d = 2) => n.toFixed(d);
@@ -200,9 +206,12 @@ export function computePayout(input: PayoutInput): PayoutBreakdown {
       value: round2(late),
       label: "Late penalty",
       note:
-        lateMin > 0
+        (lateMin > 0
           ? `${fmt(lateMin, 1)} min late: 10 % of gross per hour (${fmt(lateShare * 100, 1)} %)`
-          : "On time",
+          : "On time") +
+        (input.chain && input.chain.legs > 1
+          ? ` · transit chain of ${input.chain.legs} legs, ${fmt(input.chain.chainMin, 1)} min incl. ground time`
+          : ""),
     });
     let damage = 0;
     let damageNote = "No damage";

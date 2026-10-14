@@ -3,7 +3,10 @@ import {
   AIRCRAFT_TYPES,
   aircraftTypeSchema,
   EVENT_NAMES,
+  jobSchema,
+  jobsDomainSchema,
   matchAircraftType,
+  missionLoadArgsSchema,
   parseServerMessage,
   resolveAircraftType,
   simStatePatchSchema,
@@ -85,5 +88,77 @@ describe("P3 protocol additions are backward compatible", () => {
     expect(simStatePatchSchema.safeParse({ company: { cash: 1 }, mission: null }).success).toBe(
       true,
     );
+  });
+});
+
+describe("transit cargo protocol additions", () => {
+  const job = {
+    id: "J-1",
+    status: "in_transit",
+    origin: "KMEM",
+    destination: "KRDU",
+    kind: "cargo",
+    weightKg: 500,
+    units: 1,
+    distanceNm: 549.2,
+    timeLimitMin: 630,
+    aircraftKey: "c208b",
+    createdAt: "2026-10-13T12:00:00.000Z",
+    expiresAt: "2026-10-14T12:00:00.000Z",
+    payoutEstimate: 8319,
+    breakdown: {
+      base: 7999.43,
+      factors: [],
+      gross: 8319.41,
+      deductions: 0,
+      total: 8319,
+      estimate: true,
+      noBonus: false,
+    },
+    transit: {
+      location: "KATL",
+      arrivedAt: "2026-10-13T14:00:00.000Z",
+      arrivedGameMs: 0,
+      elapsedMin: 119,
+      storage: "airport",
+      freeStorageMin: 0,
+      deadlineGameMs: 30_660_000,
+      legs: [
+        {
+          missionId: "M-1",
+          origin: "KMEM",
+          destination: "KATL",
+          blockMin: 119,
+          groundMin: 0,
+          landingGrade: "B",
+          arrivedAt: "2026-10-13T14:00:00.000Z",
+        },
+      ],
+    },
+  };
+
+  it("an in-transit job and the inTransit list parse; frames without them still do", () => {
+    expect(jobSchema.safeParse(job).success).toBe(true);
+    const noLegs = { ...job, transit: { ...job.transit, legs: [] } };
+    expect(jobSchema.safeParse(noLegs).success).toBe(false);
+    const domain = {
+      boards: [],
+      available: [],
+      accepted: [],
+      inTransit: [job],
+      aircraft: { typeKey: "c208b", name: "C208B", source: "default" },
+    };
+    expect(jobsDomainSchema.safeParse(domain).success).toBe(true);
+    const { inTransit: _t, ...older } = domain;
+    expect(jobsDomainSchema.safeParse(older).success).toBe(true);
+  });
+
+  it("mission.load takes an optional leg destination; transit events are known", () => {
+    const load = (args: unknown) => missionLoadArgsSchema.safeParse(args).success;
+    expect(load({ jobIds: ["J-1"], destination: "KATL" })).toBe(true);
+    expect(load({ jobIds: ["J-1"] })).toBe(true);
+    expect(load({ jobIds: ["J-1"], destination: "" })).toBe(false);
+    expect(EVENT_NAMES).toContain("job.in_transit");
+    expect(EVENT_NAMES).toContain("job.abandoned");
   });
 });
