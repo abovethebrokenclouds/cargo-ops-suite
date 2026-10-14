@@ -41,13 +41,6 @@ async function main(): Promise<number> {
     console.log(connectorVersion());
     return 0;
   }
-  if (options.lan) {
-    console.error(
-      "--lan is not implemented. The connector only listens on 127.0.0.1; LAN access is a later, explicit opt-in (plan §3.2).",
-    );
-    return 2;
-  }
-
   const defaultWeb = resolve(connectorRoot(), "..", "dist", "client");
   const web = options.web ?? (existsSync(join(defaultWeb, "_shell.html")) ? defaultWeb : undefined);
 
@@ -63,6 +56,7 @@ async function main(): Promise<number> {
       resetToken: options.resetToken,
       backupKeep: options.backupKeep,
       verbose: options.verbose,
+      ...(options.lan !== undefined ? { lan: options.lan } : {}),
       ...(options.fixture ? { fixture: resolve(options.fixture) } : {}),
       ...(options.record ? { record: options.record } : {}),
       ...(web ? { web } : {}),
@@ -86,6 +80,13 @@ async function main(): Promise<number> {
 
   const url = `http://127.0.0.1:${connector.server.port}/`;
   console.log(`\nCargo Ops is running at ${url}`);
+  const lanUrls = connector.server.lanUrls();
+  if (connector.lanBind !== null) {
+    console.log(
+      `LAN access is ON. On your tablet open ${lanUrls.join(" or ") || "(no LAN address found)"}`,
+    );
+    console.log("and pair it with the code from Settings on this PC.");
+  }
   if (connector.logFile) console.log(`Log file: ${connector.logFile}`);
   console.log("Press Ctrl+C to stop.\n");
   if (options.open) openBrowser(url);

@@ -12,7 +12,11 @@ export interface CliOptions {
   basemapDir?: string;
   devOrigins: string[];
   open: boolean;
-  lan: boolean;
+  /**
+   * LAN opt-in for this run: a bind address ("0.0.0.0" for every interface, or one IPv4 of
+   * this PC), false for --no-lan, undefined to follow the setting saved from /settings.
+   */
+  lan?: string | false;
   resetToken: boolean;
   backupKeep: number;
   /** Weather source; unset = "online" for simconnect, "sample" for fake. */
@@ -47,7 +51,12 @@ Server
   --dev-origin [origin]   Also accept this page origin (repeatable). Without a value:
                           the Vite dev server origins http://localhost:8080 and
                           http://127.0.0.1:8080
-  --lan                   Not implemented; the connector only listens on 127.0.0.1
+  --lan [address]         Opt in to LAN access (tablet or second PC on your home network):
+                          also listen on every interface (0.0.0.0) or only on the given IPv4
+                          address of this PC. LAN devices must pair with a one-time code from
+                          Settings on this PC; career import, backups and deleting data stay
+                          on this PC. Windows asks for firewall access: allow Private only
+  --no-lan                Stay on 127.0.0.1 for this run even if LAN access is saved as on
 
 Data
   --data-dir <dir>        Config, databases and logs (default: %LOCALAPPDATA%\\CargoOps on
@@ -83,7 +92,6 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
     port: 4311,
     devOrigins: [],
     open: false,
-    lan: false,
     resetToken: false,
     backupKeep: 14,
     verbose: false,
@@ -118,8 +126,14 @@ export function parseArgs(argv: readonly string[]): ParseArgsResult {
       case "--open":
         options.open = true;
         break;
-      case "--lan":
-        options.lan = true;
+      case "--lan": {
+        const next = inline ?? (args[0] && !args[0].startsWith("--") ? args.shift() : undefined);
+        if (next !== undefined && next.trim() === "") return { ok: false, error: "--lan address is empty" };
+        options.lan = next ?? "0.0.0.0";
+        break;
+      }
+      case "--no-lan":
+        options.lan = false;
         break;
       case "--reset-token":
         options.resetToken = true;
