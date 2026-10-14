@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, afterEach, describe, it } from "node:test";
 import { configPath } from "../src/core/config";
-import type { SimStatePatch } from "../src/protocol";
+import type { ServerMessage, SimStatePatch } from "../src/protocol";
 import { SimConnectSource } from "../src/sim/simconnect-source";
 import { SIMVARS, buildDatums } from "../src/sim/simvars";
 import type { LogLevel, SimUpdate } from "../src/sim/source";
@@ -754,33 +754,45 @@ describe("SimConnect emulator: real connector CLI end to end", () => {
     const token = (JSON.parse(readFileSync(configPath(tmp.dir), "utf8")) as { token: string })
       .token;
     const client = await connectClient(`ws://127.0.0.1:${port}/ws`, `http://127.0.0.1:${port}`);
+    // Every failure below carries the connector's output and what the client received.
+    const diag = () =>
+      `\n--- received: ${client.messages.map((m) => m.type).join(", ") || "nothing"}` +
+      `\n--- connector output ---\n${out}`;
+    const onlyFrames = (m: ServerMessage) =>
+      (m.type === "snapshot" || m.type === "delta") && "source" in m && m.source === "sim";
     try {
       client.send(hello(token));
-      const welcome = await client.next((m) => m.type === "welcome", 5000);
+      const welcome = await client
+        .next((m) => m.type === "welcome", 10_000)
+        .catch((err: Error) => {
+          throw new Error(`welcome: ${err.message}${diag()}`);
+        });
       assert.equal(welcome.type, "welcome");
       if (welcome.type !== "welcome") return;
-      assert.equal(welcome.mode, "live");
-      assert.deepEqual(welcome.sim, {
-        connected: true,
-        name: "MSFS 2024",
-        version: "12.1.282174.999",
-        protocol: "SunRise",
+      assert.equal(welcome.mode, "live", diag());
+      assert.deepEqual(
+        welcome.sim,
+        { connected: true, name: "MSFS 2024", version: "12.1.282174.999", protocol: "SunRise" },
+        diag(),
+      );
+      // Telemetry from the emulator reaches the browser side. Deltas only carry what changed,
+      // so the position is in the snapshot when the connector had it before the hello (as on
+      // a slower Windows runner) and in a later delta otherwise: look at every frame received.
+      await waitFor(
+        () =>
+          client.messages.some(
+            (m) =>
+              onlyFrames(m) &&
+              ((m.type === "snapshot" && m.state.position?.lat === 35.0424) ||
+                (m.type === "delta" && m.patch.position?.lat === 35.0424)),
+          ),
+        "a sim frame with the emulated position",
+        10_000,
+      ).catch((err: Error) => {
+        throw new Error(`${err.message}${diag()}`);
       });
-      const frame = await client.next(
-        (m) => (m.type === "snapshot" || m.type === "delta") && "source" in m && m.source === "sim",
-        5000,
-      );
-      assert.ok(frame);
-      // Telemetry from the emulator reaches the browser side.
-      const withPosition = await client.next(
-        (m) =>
-          (m.type === "snapshot" && m.state.position?.lat === 35.0424) ||
-          (m.type === "delta" && m.patch.position?.lat === 35.0424),
-        5000,
-      );
-      assert.ok(withPosition);
       for (const m of client.messages) {
-        if ("source" in m) assert.equal(m.source, "sim", `${m.type} frame source`);
+        if ("source" in m) assert.equal(m.source, "sim", `${m.type} frame source${diag()}`);
       }
     } finally {
       client.ws.close();
