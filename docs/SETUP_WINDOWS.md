@@ -1,7 +1,8 @@
 # Cargo Ops — Windows setup
 
 How to run Cargo Ops on the Windows PC that runs Microsoft Flight Simulator 2020 or 2024. Everything runs on this one PC, on `127.0.0.1`; there are no accounts, keys or
-cloud services.
+cloud services. Opening it from a tablet or a second PC on your home network is an explicit
+opt-in (§15).
 
 > **Honest status:** the connector's SimConnect path has been type-checked and its
 > mapping logic unit-tested, but it has **never been run against a real simulator**.
@@ -55,7 +56,8 @@ is rebuilt. `scripts\build-local.ps1` builds without starting.
 
 Extra arguments go to the connector, for example
 `scripts\start-cargo-ops.cmd --sim fake --loop` for a replay without the simulator,
-or `-NoOpen` to skip opening the browser.
+`scripts\start-cargo-ops.cmd --lan` to let a tablet on your home network in (§15), or
+`-NoOpen` to skip opening the browser.
 
 ## 4. What the status chip shows
 
@@ -76,27 +78,46 @@ of the things to confirm on the first run.
 
 ## 5. Firewall
 
-The connector listens only on `127.0.0.1` (loopback), so Windows Defender Firewall is
-not expected to ask anything. If a firewall prompt does appear, you can choose
-**Cancel / do not allow** for all networks — Cargo Ops does not need network access
-from other machines. Please note in `docs/VERIFICATION.md` whether a prompt appeared.
+By default the connector listens only on `127.0.0.1` (loopback), so Windows Defender
+Firewall is not expected to ask anything. If a firewall prompt does appear without LAN
+access, you can choose **Cancel / do not allow** for all networks — Cargo Ops does not need
+network access from other machines. Please note in `docs/VERIFICATION.md` whether a prompt
+appeared (PC-17).
+
+**With LAN access on (§15)** the connector also listens on your network, and the first start
+shows a **Windows Security Alert** for "Node.js JavaScript Runtime" (Windows remembers the
+answer for that `node.exe`; a Node.js installed in another folder asks again):
+
+- tick **Private networks, such as my home or work network**,
+- leave **Public networks** unticked,
+- press **Allow access**.
+
+Your home Wi-Fi must be set to **Private** for this to work (Settings → Network & internet →
+Wi-Fi → your network → Network profile type → Private). On a Public network (café, hotel,
+airport) the tablet cannot reach the PC, which is what you want. Changed your mind? Windows
+Security → Firewall & network protection → Allow an app through firewall → Node.js
+JavaScript Runtime → Private only. Please note in `docs/VERIFICATION.md` what the prompt said
+(PC-56).
 
 ## 6. Files and the access token
 
 Everything lives in `%LOCALAPPDATA%\CargoOps` (paste that into Explorer's address bar):
 
-| File / folder        | What it is                                                         |
-| -------------------- | ------------------------------------------------------------------ |
-| `config.json`        | The access token (random, created on first run).                   |
-| `cargo-ops.db`       | Your career database (live flights only).                          |
-| `demo.db`            | Database used by replays (`--sim fake`), kept separate on purpose. |
-| `logs\connector.log` | Connector log. Attach it when something goes wrong.                |
-| `backups\`           | Daily and on-demand database backups (newest 14 kept).             |
+| File / folder        | What it is                                                          |
+| -------------------- | ------------------------------------------------------------------- |
+| `config.json`        | The access token (random, created on first run) and the LAN opt-in. |
+| `lan-devices.json`   | Paired LAN devices (token hashes only; §15).                        |
+| `cargo-ops.db`       | Your career database (live flights only).                           |
+| `demo.db`            | Database used by replays (`--sim fake`), kept separate on purpose.  |
+| `logs\connector.log` | Connector log. Attach it when something goes wrong.                 |
+| `backups\`           | Daily and on-demand database backups (newest 14 kept).              |
 
 **Token reset:** stop the connector and start it with `--reset-token`
 (`scripts\start-cargo-ops.cmd --reset-token`), or delete `config.json`. Reload open
 browser tabs afterwards. The token only protects the local API from other web pages;
-the page served by the connector fetches it automatically.
+the page served by the connector fetches it automatically. It is only ever handed to, and
+only accepted from, this PC. `--reset-token` also unpairs every LAN device (§15);
+deleting `config.json` does not (revoke them in Settings or delete `lan-devices.json`).
 
 Use `--data-dir <folder>` to keep everything somewhere else.
 
@@ -161,7 +182,8 @@ finds the simulator through its named pipe / the registry once MSFS has started.
 
 `SimConnect.xml` (on the simulator PC) and `SimConnect.cfg` (on the client) are only
 needed if you ever run the connector on a **different** PC than MSFS. That setup is
-not supported by Cargo Ops yet (`--lan` is not implemented). If a `SimConnect.cfg`
+not supported by Cargo Ops yet (`--lan` is about a browser on another device, §15, not
+about SimConnect). If a `SimConnect.cfg`
 exists in the `connector` folder or your user folder, node-simconnect will use it —
 remove it if you are not deliberately connecting to another PC.
 
@@ -285,3 +307,54 @@ At most one request per 30 s, 10 s timeout, no automatic retries. The username i
 in your local database (`settings` table), never in the repository. The field mapping was
 written against SimBrief's documented format and a hand-made sample: please check that the
 imported route, fuel and payload match your OFP and note it in `docs/VERIFICATION.md`.
+
+## 15. Tablet or second PC on your home network (LAN access, optional, off by default)
+
+Cargo Ops can show its pages on a tablet, phone or second PC on the same home network while
+MSFS and the connector run on this PC. It is off unless you turn it on, and a device gets
+nothing until you pair it.
+
+**Turn it on**, either:
+
+- for one run: `scripts\start-cargo-ops.cmd --lan` (every network interface of this PC), or
+  `--lan 192.168.1.23` (only that address of this PC; the connector refuses to start with an
+  address that is not this PC's); or
+- for every start: **Settings → LAN access → Allow LAN access (next start)** on this PC. It
+  asks for confirmation (listing the addresses tablets would use) and applies when you restart
+  the connector. `--no-lan` keeps it off for one run. If the saved address is no longer this
+  PC's (the router gave it another one), the connector starts on 127.0.0.1 only, logs a
+  warning and Settings → LAN access says why.
+
+Windows then shows the firewall prompt (§5): **Private networks only**. The connector window
+prints the address to open on the tablet, for example `http://192.168.1.23:4311/`, and
+**Settings → LAN access** lists it too.
+
+**Pair the tablet:**
+
+1. On this PC open **Settings → LAN access** and press **Generate pairing code**. A code such
+   as `K7QM-4XTP` appears with a 5-minute countdown, plus a link
+   (`http://192.168.1.23:4311/settings#pair=K7QM4XTP`).
+2. On the tablet open the address (or the link, which fills the code in). Cargo Ops shows
+   **Pair this device**: type the code, name the device and press **Pair**.
+3. The tablet now shows the live pages. It keeps its own device token in that browser; the
+   PC's access token never leaves the PC.
+
+A code works once and expires after 5 minutes. Five wrong codes from one device lock it out
+for 15 minutes, and ten wrong codes in total cancel the code (Settings → LAN access then says
+"Code cancelled after too many wrong attempts — create a new one").
+
+**What a paired device can do:** everything you do while flying — Live Flight, the map, jobs,
+loading and starting missions, fleet, loans, FBOs. **What stays on this PC:** career import,
+backups (the list and **Back up now**; file paths on this PC are never shown to a tablet), clearing the SimBrief plan (any delete), and LAN access itself (pairing codes,
+the setting, the device list). A paired device that tries these gets "only available on the PC
+running Cargo Ops".
+
+**Revoke a device:** **Settings → LAN access → Paired devices → Revoke** on this PC. Its open
+pages disconnect at once and show **Pair this device** again. `--reset-token` unpairs every
+device.
+
+Notes: plain `http` on your own network (no certificate); the browser may say "Not secure",
+and the installable app (PWA) only works on this PC. IPv4 only. On this PC keep using
+<http://127.0.0.1:4311>: opening the LAN address on the PC itself counts as a LAN device and
+asks for a code. Do not forward the port on your router: LAN access is for your home network,
+never the internet.

@@ -37,6 +37,10 @@ export interface WebSocketLike {
 export type WebSocketCtor = new (url: string) => WebSocketLike;
 
 const WS_OPEN = 1;
+/** Close code the connector uses for a refused or revoked token. */
+export const CLOSE_UNAUTHORIZED = 4401;
+/** Status error emitted when the connector refuses the token (no automatic retry). */
+export const UNAUTHORIZED_ERROR = "unauthorized";
 const DEFAULT_WANTS: Topic[] = ["telemetry", "flight", "jobs", "company"];
 
 export interface LiveWsTransportOptions {
@@ -152,11 +156,26 @@ export class LiveWsTransport implements Transport {
       this.watchdog.kick();
       this.handleData(ev.data);
     };
-    ws.onclose = () => {
-      if (this.ws === ws) this.handleClose();
+    ws.onclose = (ev) => {
+      if (this.ws !== ws) return;
+      const code = (ev as { code?: unknown } | null)?.code;
+      if (code === CLOSE_UNAUTHORIZED) this.handleUnauthorized();
+      else this.handleClose();
     };
     // An error is always followed by close; nothing to do here.
     ws.onerror = () => {};
+  }
+
+  /**
+   * The token was refused or revoked: retrying with the same token cannot work. Stop and let
+   * the owner fetch a new session (a revoked LAN device then has to pair again).
+   */
+  private handleUnauthorized(): void {
+    this.watchdog.stop();
+    this.cancelRetry();
+    this.dropSocket();
+    this.step({ type: "stop" });
+    this.emitter.emit({ type: "status", status: "error", error: UNAUTHORIZED_ERROR });
   }
 
   private handleData(data: unknown): void {

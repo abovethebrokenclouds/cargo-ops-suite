@@ -147,10 +147,26 @@ describe("main entry point", () => {
     assert.match(r.stdout, /--record <path>/);
   });
 
-  it("refuses --lan", () => {
-    const r = spawnSync(process.execPath, [MAIN, "--lan"], { encoding: "utf8" });
-    assert.equal(r.status, 2);
-    assert.match(r.stderr, /not implemented/);
+  it("documents --lan and --no-lan in --help", () => {
+    const r = spawnSync(process.execPath, [MAIN, "--help"], { encoding: "utf8" });
+    assert.match(r.stdout, /--lan \[address\]/);
+    assert.match(r.stdout, /--no-lan/);
+    assert.match(r.stdout, /allow Private only/);
+  });
+
+  it("refuses --lan on an address that is not this PC's", () => {
+    const tmp = tempDir();
+    try {
+      const r = spawnSync(
+        process.execPath,
+        [MAIN, "--sim", "fake", "--port", "0", "--data-dir", tmp.dir, "--lan", "203.0.113.9"],
+        { encoding: "utf8", timeout: 20_000 },
+      );
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /not an address of this PC/);
+    } finally {
+      tmp.cleanup();
+    }
   });
 
   it("rejects unknown flags with exit code 2", () => {

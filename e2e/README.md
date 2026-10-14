@@ -43,6 +43,15 @@ Playwright specs, two projects:
   a replay's connector serves SAMPLE METARs and TAFs, never live ones. No spec reaches
   aviationweather.gov.
 
+  LAN opt-in: `lan.replay.spec.ts` starts its connector with `--lan <first non-loopback IPv4>`
+  and plays the tablet on `http://<that address>:<port>` (a real non-loopback client) and the
+  PC on 127.0.0.1: no token for the tablet, pairing with the code from the PC's `/settings`,
+  REPLAY data and a command round-trip after pairing, career import and backups refused
+  (`local_only`), back to the pairing form after a revoke; foreign Origin and rebinding Host
+  refused on the LAN address. Chromium runs with `--no-proxy-server` there (sandbox proxies
+  would otherwise carry `ws://` to a non-loopback host). Skipped on hosts without such an
+  address.
+
 - `live` — `sim-offline.live.spec.ts` starts the real connector in SimConnect mode
   (`--simconnect-host/--simconnect-port`, `--weather off`) against the TEST-ONLY SimConnect
   protocol emulator (`connector/test/support/simconnect-emulator.ts`): `/flight` shows LIVE and
