@@ -49,6 +49,10 @@ Playwright specs, two projects:
   Cruise; when the emulated simulator quits the chip reads SIM OFFLINE, the phase and every
   readout are empty and the data light reads SIM OFF (never SIM); after it is back the phase
   returns from new frames. Emulated evidence about our code, not about MSFS.
+  `payload-entered.live.spec.ts` parks an emulated Caravan with `PAYLOAD STATION COUNT` 0 at
+  KMEM, loads a KATL mission on `/jobs` and enters 181 kg in **Payload entered by you**: the
+  payload check stays `unknown` (source sim), the entered value is tagged YOURS and "used",
+  TOTAL WEIGHT − EMPTY WEIGHT − fuel (259 kg) matches it, and `/flight` shows the same check.
 
 No project talks to a real simulator. A real SimConnect session is only checked on the owner's
 Windows PC (see `docs/VERIFICATION.md`).

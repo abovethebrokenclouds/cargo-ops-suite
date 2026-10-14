@@ -44,7 +44,12 @@ Values are tagged `SIM`, `REPLAY` or `DEMO`; a dash means "no data", never a mad
    25 kg) tolerance. If the sim payload is clearly below the cargo when you depart, the
    mission still flies but pays **no bonuses**. Above max gross weight the start is refused.
    An aircraft that reports no payload stations shows "Payload unknown" and is never
-   penalised.
+   penalised. For such aircraft (some MSFS 2024 aircraft load cargo outside the legacy payload
+   stations) you can type the cargo you loaded in **Payload entered by you** on Jobs before
+   departure. It is marked **YOURS**, stays "unknown" for the payout (bonuses kept, no
+   penalty), warns if it would put the aircraft above max gross weight, and is ignored
+   whenever the sim does report stations. The check also shows **total weight − empty − fuel**
+   as a second source and flags it when it disagrees.
 
 ## 4. Fly and deliver
 

@@ -159,7 +159,9 @@ export function checkPayload(input: PayloadCheckInput): PayloadCheck {
     const crewKg = setting ?? 0;
     const cc = crossCheck(entered + crewKg, "entered");
     const estLb =
-      emptyLb !== null && fuelLb !== null ? emptyLb + fuelLb + (entered + crewKg) / KG_PER_LB : null;
+      emptyLb !== null && fuelLb !== null
+        ? emptyLb + fuelLb + (entered + crewKg) / KG_PER_LB
+        : null;
     const versus =
       entered < cargoKg - toleranceKg
         ? `below the ${Math.round(cargoKg)} kg cargo`

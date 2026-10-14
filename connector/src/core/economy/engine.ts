@@ -1501,11 +1501,7 @@ export class EconomyEngine {
       case "mission.load": {
         const p = missionLoadArgsSchema.safeParse(args);
         if (!p.success) return fail("bad_args", "jobIds is required");
-        return this.load(
-          p.data.jobIds,
-          p.data.destination?.toUpperCase(),
-          p.data.enteredPayloadKg,
-        );
+        return this.load(p.data.jobIds, p.data.destination?.toUpperCase(), p.data.enteredPayloadKg);
       }
       case "mission.payload": {
         // docs/ECONOMY.md "Payload entered by you": before departure only (frozen after).

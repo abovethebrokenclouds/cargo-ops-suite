@@ -2,7 +2,7 @@ import { CircleHelp, Scale, TriangleAlert } from "lucide-react";
 
 import type { PayloadCheck } from "@cargo-ops/protocol";
 import { SourceTag } from "@/components/status/SourceTag";
-import { payloadCheckAdvice } from "@/lib/economy/payload-check";
+import { enteredPayloadNote, payloadCheckAdvice } from "@/lib/economy/payload-check";
 import { formatInt } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +37,22 @@ const CREW: Record<NonNullable<PayloadCheck["crewBasis"]>, string> = {
   default: "no crew station",
 };
 
+/** Marks a number the player typed in: never a simulator value. */
+export function PlayerTag({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-sm border border-accent/40 px-1.5 py-0.5 font-mono text-[0.625rem] font-semibold leading-none tracking-[0.16em] text-accent",
+        className,
+      )}
+      data-source-tag="player"
+      title="Entered by you, not reported by the simulator"
+    >
+      YOURS
+    </span>
+  );
+}
+
 /** Compact status pill (logbook rows). */
 export function PayloadCheckPill({
   check,
@@ -63,6 +79,15 @@ export function PayloadCheckPill({
         {SHORT[check.status]}
       </span>
       <SourceTag source={check.source} />
+      {check.enteredKg !== undefined ? <PlayerTag /> : null}
+      {check.crossCheck === "mismatch" ? (
+        <span
+          className="font-mono text-[0.625rem] text-warning"
+          data-testid="payload-check-pill-mismatch"
+        >
+          WT≠
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -117,6 +142,41 @@ export function PayloadCheckLine({
           {check.totalLb !== undefined && check.maxGrossLb !== undefined
             ? ` · gross ${formatInt(check.totalLb)} / ${formatInt(check.maxGrossLb)} lb`
             : ""}
+        </p>
+      ) : null}
+      {check.enteredKg !== undefined ? (
+        <p
+          className={cn(
+            "flex flex-wrap items-center gap-2 font-mono font-tabular",
+            check.enteredRole === "contradicts"
+              ? "text-muted-foreground line-through decoration-muted-foreground/60"
+              : "text-foreground",
+          )}
+          data-testid="payload-check-entered"
+          data-role={check.enteredRole}
+        >
+          <PlayerTag />
+          <span>
+            Entered by you {formatInt(check.enteredKg)} kg
+            {enteredPayloadNote(check) ? ` · ${enteredPayloadNote(check)}` : ""}
+          </span>
+        </p>
+      ) : null}
+      {check.impliedKg !== undefined ? (
+        <p
+          className={cn(
+            "font-mono font-tabular",
+            check.crossCheck === "mismatch" ? "text-warning" : "text-muted-foreground",
+          )}
+          data-testid="payload-check-implied"
+          data-cross-check={check.crossCheck ?? "none"}
+        >
+          Total weight − empty − fuel {formatInt(check.impliedKg)} kg
+          {check.crossCheck === "match"
+            ? ` · matches the ${check.crossCheckWith === "entered" ? "entered payload" : "stations"}`
+            : check.crossCheck === "mismatch"
+              ? ` · mismatch with the ${check.crossCheckWith === "entered" ? "entered payload" : "stations"} (beyond ± ${formatInt(check.crossCheckToleranceKg)} kg)`
+              : " · nothing to compare with"}
         </p>
       ) : null}
       {advice ? (
