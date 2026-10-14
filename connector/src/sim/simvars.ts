@@ -4,8 +4,11 @@
 // definitions, the frame reader and the pure mapping functions all derive from
 // this table.
 //
-// `verified: false` marks entries the plan could not confirm from a primary
-// source (§14.12) or that differ between MSFS 2020 and 2024. If the simulator
+// Every name/unit here must also be in simvar-catalog.ts (the checked-in allow-list,
+// audited in docs/SIMVARS.md); a test enforces it.
+//
+// `verified: false` marks entries whose behaviour still needs the PC check (§14.12:
+// docs/SIMVARS.md lists what exactly) or that differ between MSFS 2020 and 2024. If the simulator
 // rejects a name, SimConnectSource drops that entry (it logs the SimConnect
 // exception) and the dependent domain is simply not reported. Nothing is filled
 // in with a guessed value.
@@ -87,7 +90,7 @@ export const SIMVARS: readonly SimVarSpec[] = [
     group: "slow",
     index: "engine",
     verified: false,
-    note: "legacy fuel-flow SimVar (§14.12); ESTIMATED FUEL FLOW is the alternative to try",
+    note: "documented in both SDKs (Pounds per hour); values on 2024 fuel-system aircraft need the PC check",
   },
   {
     key: "totalWeightLb",
@@ -121,7 +124,7 @@ export const SIMVARS: readonly SimVarSpec[] = [
     group: "slow",
     index: "station",
     verified: false,
-    note: "unit is community-verified only (§14.12)",
+    note: "documented unit Pounds; per-station values need the PC check",
   },
   {
     key: "stationName",
@@ -131,7 +134,7 @@ export const SIMVARS: readonly SimVarSpec[] = [
     group: "slow",
     index: "station",
     verified: false,
-    note: "string length on 2024 unverified (§14.12)",
+    note: "documented as a string; length not documented, read as STRING64",
   },
   {
     key: "engineCombustion",
@@ -157,7 +160,7 @@ export const SIMVARS: readonly SimVarSpec[] = [
     type: "f64",
     group: "slow",
     verified: false,
-    note: "name unverified from a primary source (§14.12)",
+    note: "documented (Number, read-only); behaviour on rate changes needs the PC check",
   },
   {
     key: "zuluTimeSec",
@@ -281,7 +284,7 @@ export const SIMVARS: readonly SimVarSpec[] = [
     type: "f64",
     group: "fast",
     verified: false,
-    note: "latched at the last touchdown; ×60 → fpm in mapping; sign convention unverified (§6.3)",
+    note: "latched at the last touchdown; ×60 → fpm in mapping; sign not documented, the analyser uses the magnitude",
   },
   {
     key: "touchdownBankDeg",
@@ -290,7 +293,7 @@ export const SIMVARS: readonly SimVarSpec[] = [
     type: "f64",
     group: "fast",
     verified: false,
-    note: "latched at the last touchdown; sign convention unverified",
+    note: "latched at the last touchdown; sign convention not documented",
   },
   {
     key: "touchdownPitchDeg",
@@ -299,16 +302,7 @@ export const SIMVARS: readonly SimVarSpec[] = [
     type: "f64",
     group: "fast",
     verified: false,
-    note: "latched at the last touchdown; MSFS pitch is typically negative nose-up (unverified)",
-  },
-  {
-    key: "isOnGround",
-    name: "IS ON GROUND",
-    unit: "bool",
-    type: "f64",
-    group: "fast",
-    verified: false,
-    note: "preferred per the 2024 docs; may not exist on MSFS 2020",
+    note: "latched at the last touchdown; sign convention not documented; reported as the sim gives it",
   },
   {
     key: "simOnGround",
@@ -317,7 +311,7 @@ export const SIMVARS: readonly SimVarSpec[] = [
     type: "f64",
     group: "fast",
     verified: true,
-    note: "fallback for onGround when IS ON GROUND is rejected",
+    note: "documented on-ground flag in both SDKs (docs/SIMVARS.md); IS ON GROUND is not in either SimVar table",
   },
 ];
 

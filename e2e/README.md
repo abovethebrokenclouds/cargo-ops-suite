@@ -30,7 +30,11 @@ Playwright specs, two projects:
   `fbo.replay.spec.ts` buys an FBO and flies the mission there. P6: `settings.replay.spec.ts`
   (backup created and listed through the page and `/api/backups`, token masked, SimBrief off by
   default without any request to simbrief.com, manifest/icons content types, `f` map follow);
-  `demo.spec.ts` covers `g`-chord navigation, the `?` dialog and units per browser.
+  `demo.spec.ts` covers `g`-chord navigation, the `?` dialog and units per browser. Weather:
+  `demo.spec.ts` checks the SAMPLE METARs on `/flight` (category chips, raw text toggle,
+  observation age, no external request), the job-detail weather toggle and the per-browser
+  Online weather switch; `replay.spec.ts` checks that a replay's connector serves SAMPLE reports,
+  never live ones. No spec reaches aviationweather.gov.
 
 Neither project talks to a simulator. A real SimConnect session is only checked on the owner's
 Windows PC (see `docs/VERIFICATION.md`).

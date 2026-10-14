@@ -5,10 +5,12 @@ to Microsoft Flight Simulator through SimConnect, keeps the latest simulator sta
 streams it to the browser over a WebSocket on `127.0.0.1:4311`, serves the static web
 build and owns the SQLite database.
 
-> **Status: the SimConnect path is untested.** Everything here was built and tested in
-> a Linux container without a simulator. `--sim fake` (fixture replay) is covered by
-> automated tests; the real SimConnect handshake, SimVar names/units and system
-> events must be checked on the Windows PC (see `docs/VERIFICATION.md`).
+> **Status: the SimConnect path is untested against MSFS.** Everything here was built and
+> tested without a simulator. `--sim fake` (fixture replay) is covered by automated tests,
+> and `SimConnectSource` runs against a test-only SimConnect protocol emulator (see
+> "Testing without the simulator" below); the real SimConnect handshake, SimVar
+> names/units and system events must still be checked on the Windows PC (see
+> `docs/VERIFICATION.md`).
 
 ## Requirements
 
@@ -44,6 +46,8 @@ for you; see `docs/SETUP_WINDOWS.md`.
 --data-dir <dir>        Config, databases, logs (default below)
 --reset-token           Generate a new access token
 --backup-keep <n>       Database backups kept in <data-dir>/backups (default 14; 0 = no daily backup)
+--weather online|sample|off
+                        METAR source (default online with simconnect, sample with fake)
 --open                  Open the browser when ready (start / open / xdg-open)
 --verbose               Debug logging
 --lan                   Not implemented; refuses to start
@@ -101,6 +105,7 @@ connector (`127.0.0.1:<port>` or `localhost:<port>`), which blocks DNS rebinding
 | `PUT /api/simbrief`                     | Bearer token                                                    | update `{ enabled?, username?, userId? }` (strict zod; `400 bad_request`)                                                                                                                                                                                          |
 | `POST /api/simbrief/import`             | Bearer token                                                    | fetch the latest OFP → `{ plan }`; `409 simbrief_disabled`/`simbrief_no_user`/`simbrief_busy`, `429 rate_limited` (30 s), `504 simbrief_timeout`, `502 simbrief_unreachable`/`simbrief_error`/`simbrief_invalid`                                                   |
 | `DELETE /api/simbrief/plan`             | Bearer token                                                    | forget the planned flight                                                                                                                                                                                                                                          |
+| `GET /api/weather/metar?ids=&online=`   | Bearer token                                                    | `{ mode, onlineAllowed, stations: [{ station, report, note }], attribution, endpoint }` for 1–8 ICAO ids (`400 bad_request` otherwise); `online=1` is the page's switch, without it nothing is fetched                                                             |
 | other `/api/*`                          | Bearer token                                                    | `404` JSON                                                                                                                                                                                                                                                         |
 | `GET /ws`                               | allowed `Origin` **and** token (`?token=` or the first `hello`) | protocol v1 (below)                                                                                                                                                                                                                                                |
 | `GET /*`                                | none                                                            | static SPA; extension-less paths → `_shell.html`                                                                                                                                                                                                                   |
@@ -287,6 +292,18 @@ no retries, and maps it with `packages/protocol/src/simbrief.ts` (tested against
 HAND-MADE `fixtures/simbrief-ofp.handmade.json`; unverified against a real OFP). The username
 is never logged.
 
+`src/core/weather.ts`: METARs for the origin and destination (plan §3, §8). Mode `online`
+(default with SimConnect) fetches `https://aviationweather.gov/api/data/metar?ids=…&format=json`
+(NOAA Aviation Weather Center, public US Government data, no key) only when the page sends
+`online=1` (its per-browser **Online weather** switch): all due stations in one request, a
+`CargoOps/<version> (private use)` User-Agent, 10 s timeout, no retries, a 10-minute cache in
+the `metar_cache` table, never more than one request per station per minute (also after a
+failure). Offline or on errors the last report is served marked stale (up to 3 h), otherwise a
+note. Decoding prefers the API's JSON fields and falls back to `packages/weather`'s parser on
+`rawOb`; tested against the RECORDED `fixtures/awc-metar.recorded-2026-10-14.json` (from the
+`metar-live` workflow; the cloud container cannot reach the host) and the HAND-MADE edge-case fixture `fixtures/awc-metar.handmade.json`. Mode `sample` (default with `--sim fake`) serves
+built-in SAMPLE reports and never touches the network; `off` serves nothing.
+
 Packaging: no single-file executable is built — that would bundle `node-simconnect`
 (LGPL-3.0-or-later); it stays an unmodified module in `node_modules`. The supported launcher
 is `scripts\start-cargo-ops.cmd`; `scripts\create-shortcut.ps1` adds Start-menu, desktop and
@@ -340,14 +357,37 @@ connector/
   (10 Hz below 1,000 ft AGL). If the sim rejects a SimVar, the exception is logged with
   its name, the entry is dropped and the definition rebuilt; dependent domains are then
   simply not reported.
-- Entries marked `verified: false`: `SIMULATION RATE`, `PAYLOAD STATION WEIGHT`/`NAME`
-  units, `ENG FUEL FLOW PPH`, `IS ON GROUND` (falls back to `SIM ON GROUND`),
-  `PLANE TOUCHDOWN NORMAL VELOCITY` (ft/s, ×60; sign taken as unknown, the analyser
-  uses its magnitude) and `PLANE TOUCHDOWN BANK/PITCH DEGREES` (fast definition).
+- Every requested SimVar, system event and system state is in the allow-list
+  `src/sim/simvar-catalog.ts` with its documented unit (audit: `docs/SIMVARS.md`);
+  `test/simvar-catalog.test.ts` fails on an unknown name, an incompatible unit, a wrong
+  datum type or a missing/extra `:index`.
+- Entries marked `verified: false` still need the PC check: `SIMULATION RATE`,
+  `PAYLOAD STATION WEIGHT`/`NAME`, `ENG FUEL FLOW PPH`, `PLANE TOUCHDOWN NORMAL VELOCITY`
+  (ft/s, ×60; sign not documented, the analyser uses its magnitude) and
+  `PLANE TOUCHDOWN BANK/PITCH DEGREES` (fast definition). On-ground comes from
+  `SIM ON GROUND` (`IS ON GROUND` is not in either SDK's SimVar tables).
+- `Pause_EX1`: any non-zero flag value (pause, active pause, esc-menu sim pause) is paused.
 - System events: `Pause`, `Pause_EX1`, `SimStart`, `SimStop`, `FlightLoaded`,
   `AircraftLoaded`, `Crashed`, `CrashReset`, `1sec`; `requestSystemState("Sim")` on connect.
 - The `sim` domain is only sent once a real `SIMULATION RATE` arrives (the schema needs
   it); until then the chip relies on `welcome.sim`.
+- AI traffic (`requestDataOnSimObjectType`, AIRCRAFT) skips the user aircraft's own object
+  id (taken from the user-aircraft frames) in case the request returns it.
+
+## Testing without the simulator
+
+`test/support/simconnect-emulator.ts` is a TEST-ONLY TCP server that speaks the SimConnect
+wire format (written from the MSFS SDK documentation; no node-simconnect code is copied):
+OPEN with `SunRise` (MSFS 2024) or `KittyHawk` (MSFS 2020) profiles, data definitions and
+requests (FLOAT32/64, INT32/64, fixed and variable strings), `RECV_EXCEPTION` for SimVars in
+a reject list, system events, system state, by-type AI requests, dropped connections and
+`RECV_QUIT`. `test/simconnect-emulator.test.ts` drives the real `SimConnectSource` and the
+real CLI against it. It proves the wire format and our handling of it, not what MSFS
+sends; results are recorded as "Emulated" evidence, never as PC checks.
+
+The CLI accepts two hidden options for it (also usable with a SimConnect IPv4 listener
+configured in `SimConnect.xml`): `--simconnect-host <host> --simconnect-port <port>`
+connect over TCP instead of the normal discovery. Without them nothing changes.
 
 ## Licensing
 

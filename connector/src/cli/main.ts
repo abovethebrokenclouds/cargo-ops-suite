@@ -67,6 +67,10 @@ async function main(): Promise<number> {
       ...(options.record ? { record: options.record } : {}),
       ...(web ? { web } : {}),
       ...(options.basemapDir ? { basemapDir: resolve(options.basemapDir) } : {}),
+      ...(options.weather ? { weather: options.weather } : {}),
+      ...(options.simconnectHost !== undefined && options.simconnectPort !== undefined
+        ? { simconnectRemote: { host: options.simconnectHost, port: options.simconnectPort } }
+        : {}),
     });
   } catch (err) {
     const error = err as NodeJS.ErrnoException;

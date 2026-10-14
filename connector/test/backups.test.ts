@@ -49,6 +49,24 @@ describe("backup names and rotation (pure)", () => {
     assert.deepEqual(planRotation("live", names, 0), [], "0 keeps everything");
     assert.deepEqual(planRotation("demo", names, 1), []);
   });
+
+  it("never rotates away the file just written, even when it sorts oldest", () => {
+    // Two manual backups earlier today, then a restart writes today's daily file, which sorts
+    // before them (00:00:00). With keep 2 it must survive; the oldest manual one goes.
+    const names = [
+      "cargo-ops-20261003-090000.db",
+      "cargo-ops-20261003-120000.db",
+      "cargo-ops-20261003.db",
+    ];
+    assert.deepEqual(planRotation("live", names, 2, "cargo-ops-20261003.db"), [
+      "cargo-ops-20261003-090000.db",
+    ]);
+    assert.deepEqual(planRotation("live", names, 1, "cargo-ops-20261003.db"), [
+      "cargo-ops-20261003-090000.db",
+      "cargo-ops-20261003-120000.db",
+    ]);
+    assert.deepEqual(planRotation("live", names, 2, "missing.db"), ["cargo-ops-20261003.db"]);
+  });
 });
 
 describe("BackupManager (VACUUM INTO on node:sqlite)", () => {

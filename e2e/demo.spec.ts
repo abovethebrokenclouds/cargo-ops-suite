@@ -108,6 +108,70 @@ test.describe("demo mode (no connector)", () => {
     expect(stored).toBe("on");
   });
 
+  test("/flight weather: SAMPLE METARs with category chips, raw text and age, no network", async ({
+    page,
+  }) => {
+    const external: string[] = [];
+    page.on("request", (req) => {
+      const host = new URL(req.url()).hostname;
+      if (host !== "127.0.0.1" && host !== "localhost") external.push(req.url());
+    });
+    await page.goto("/flight");
+    const weather = page.getByTestId("route-weather");
+    const origin = weather.locator('[data-testid="metar-station"][data-station="KMEM"]');
+    const dest = weather.locator('[data-testid="metar-station"][data-station="KATL"]');
+    await expect(origin).toHaveAttribute("data-origin", "sample");
+    await expect(dest).toHaveAttribute("data-origin", "sample");
+    await expect(origin.getByText("SAMPLE", { exact: true })).toBeVisible();
+    await expect(dest.getByText("SAMPLE", { exact: true })).toBeVisible();
+    await expect(origin.getByTestId("flight-category")).toHaveText("VFR");
+    await expect(dest.getByTestId("flight-category")).toHaveText("MVFR");
+    await expect(origin.getByTestId("metar-age")).toHaveText(/Observed (\d+ min ago|just now)/);
+    await expect(weather.getByTestId("weather-status")).toContainText("not real weather");
+    // Raw METAR toggle.
+    await expect(origin.getByTestId("metar-raw")).toHaveCount(0);
+    await origin.getByTestId("metar-raw-toggle").click();
+    await expect(origin.getByTestId("metar-raw")).toHaveText(/^KMEM \d{6}Z 20009KT 10SM/);
+    await origin.getByTestId("metar-raw-toggle").click();
+    await expect(origin.getByTestId("metar-raw")).toHaveCount(0);
+    // Sample weather is never presented as live.
+    await expect(weather.locator('[data-metar-origin="live"]')).toHaveCount(0);
+    expect(external).toEqual([]);
+  });
+
+  test("/jobs job detail shows SAMPLE origin/destination weather", async ({ page }) => {
+    await page.goto("/jobs");
+    const card = page.getByTestId("job-card").first();
+    await expect(card).toBeVisible({ timeout: 30_000 });
+    const destination = await card.getAttribute("data-destination");
+    await card.getByTestId("job-weather-toggle").click();
+    const weather = card.getByTestId("route-weather");
+    await expect(weather.getByTestId("metar-station")).toHaveCount(2);
+    await expect(weather.locator('[data-station="KMEM"]')).toHaveAttribute("data-origin", "sample");
+    await expect(weather.locator(`[data-station="${destination}"]`)).toHaveAttribute(
+      "data-origin",
+      "sample",
+    );
+    await expect(weather.getByTestId("flight-category")).toHaveCount(2);
+    for (const chip of await weather.getByTestId("flight-category").all()) {
+      await expect(chip).toHaveText(/^(VFR|MVFR|IFR|LIFR)$/);
+    }
+    await expect(weather.getByText("SAMPLE", { exact: true })).toHaveCount(2);
+  });
+
+  test("/settings online weather switch is stored per browser", async ({ page }) => {
+    await page.goto("/settings");
+    await expect(page.getByTestId("weather-mode")).toHaveText(/Sample METARs \(demo/);
+    const toggle = page.getByTestId("online-weather-switch");
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    const stored = await page.evaluate(() =>
+      window.localStorage.getItem("cargo-ops.weather.online"),
+    );
+    expect(stored).toBe("off");
+  });
+
   test("/jobs shows DEMO-tagged generated jobs with accept disabled", async ({ page }) => {
     await page.goto("/jobs");
     await expect(page.getByTestId("demo-board-note")).toBeVisible();

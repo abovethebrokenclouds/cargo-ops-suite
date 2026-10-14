@@ -72,6 +72,28 @@ describe("parseArgs", () => {
     assert.equal(parseArgs(["stray"]).ok, false);
     assert.equal(parseArgs(["--fixture", "x.jsonl"]).ok, false, "--fixture needs --sim fake");
   });
+
+  it("parses the hidden --simconnect-host/--simconnect-port pair", () => {
+    const r = parseArgs(["--simconnect-host", "127.0.0.1", "--simconnect-port=500"]);
+    assert.ok(r.ok, r.ok ? "" : r.error);
+    if (!r.ok) return;
+    assert.equal(r.options.simconnectHost, "127.0.0.1");
+    assert.equal(r.options.simconnectPort, 500);
+    const defaults = parseArgs([]);
+    assert.ok(defaults.ok && defaults.options.simconnectHost === undefined);
+    assert.equal(parseArgs(["--simconnect-host", "127.0.0.1"]).ok, false, "port missing");
+    assert.equal(parseArgs(["--simconnect-port", "500"]).ok, false, "host missing");
+    assert.equal(parseArgs(["--simconnect-host", "h", "--simconnect-port", "0"]).ok, false);
+    assert.equal(
+      parseArgs(["--sim", "fake", "--simconnect-host", "h", "--simconnect-port", "500"]).ok,
+      false,
+    );
+    assert.doesNotMatch(
+      spawnSync(process.execPath, [MAIN, "--help"], { encoding: "utf8" }).stdout,
+      /simconnect-host/,
+      "hidden from --help",
+    );
+  });
 });
 
 describe("data dir and token", () => {
