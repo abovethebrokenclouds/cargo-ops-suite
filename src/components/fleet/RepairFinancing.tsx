@@ -56,18 +56,28 @@ export function RepairFinancing({
 
   const open = view.open;
   const hired = a.status === "hired";
+  const flying = a.status === "in_flight";
   const termOk = term >= view.minTermMonths && term <= view.maxTermMonths;
-  const amountOk = choice !== null && amount >= view.minAmount && amount <= choice.bill;
-  const terms = amountOk && termOk ? repairLoanTerms(amount, term) : null;
+  // Amounts are compared in cents, as the connector books them.
+  const cents = (n: number) => Math.round(n * 100);
+  const amountOk =
+    choice !== null &&
+    cents(amount) >= cents(view.minAmount) &&
+    cents(amount) <= cents(choice.bill);
+  const terms = amountOk && termOk ? repairLoanTerms(cents(amount) / 100, term) : null;
+  // The bill is already net of the incident claim: the rest comes from cash.
+  const cashNeeded = choice ? Math.max(0, cents(choice.bill) - cents(amount)) / 100 : null;
   const blocked = !ins.insured
     ? "Insure the aircraft first: repair loans need an active hull policy"
     : hired
       ? "Assigned to a hired pilot (simulated route): unassign the pilot first"
-      : open
-        ? "One open repair loan per aircraft: pay it off first"
-        : choices.length === 0
-          ? "Nothing to repair right now"
-          : null;
+      : flying
+        ? "The aircraft is flying: finance its repair once it has landed"
+        : open
+          ? "One open repair loan per aircraft: pay it off first"
+          : choices.length === 0
+            ? "Nothing to repair right now"
+            : null;
   const canSubmit = enabled && !busy && blocked === null && terms !== null;
 
   return (
@@ -157,6 +167,15 @@ export function RepairFinancing({
                 ? `Term ${view.minTermMonths}–${view.maxTermMonths} months`
                 : `Amount ${formatUsd(view.minAmount)}–${formatUsdCents(choice?.bill ?? 0)}`}
           </p>
+          {amountOk && cashNeeded !== null ? (
+            <p
+              className="font-mono text-xs text-muted-foreground"
+              data-testid="repair-loan-cash-needed"
+              title="The bill after the incident claim, minus the amount the insurer lends"
+            >
+              Cash needed {formatUsdCents(cashNeeded)}
+            </p>
+          ) : null}
           <button
             type="button"
             className={primaryButton}
@@ -170,7 +189,7 @@ export function RepairFinancing({
                     {
                       aircraftId: a.id,
                       repair: choice.value,
-                      principal: amount,
+                      principal: cents(amount) / 100,
                       termMonths: term,
                     },
                     `${a.registration}: repair ordered, financed by the insurer`,

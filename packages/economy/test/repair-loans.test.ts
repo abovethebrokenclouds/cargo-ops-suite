@@ -62,6 +62,9 @@ describe("repair loan eligibility: rule matrix", () => {
     ["term above 24 months", { termMonths: 25 }, "bad_term"],
     ["fractional term", { termMonths: 12.5 }, "bad_term"],
     ["below the minimum amount", { principal: 499.99, bill: 499.99 }, "bad_principal"],
+    // Amounts are judged in cents, like the book rounds them: 499.996 is $500.00.
+    ["499.996 rounds to the $500 minimum", { principal: 499.996 }, null],
+    ["499.994 rounds below the minimum", { principal: 499.994 }, "bad_principal"],
     ["more than the bill", { principal: 10_000.01 }, "exceeds_bill"],
     // Precedence: the first failing rule wins, in the order of the table above.
     [
@@ -326,9 +329,15 @@ describe("repair loans in the company book", () => {
     expect(r.book.company.defaultUntilGameMs).toBeNull();
     expect(r.book.defaulted()).toBe(false);
     expect(r.notices.map((n) => n.name)).toEqual(
-      expect.arrayContaining(["loan.missed", "insurance.cancelled"]),
+      expect.arrayContaining(["loan.missed", "insurance.cancelled", "loan.called"]),
     );
     expect(r.notices.map((n) => n.name)).not.toContain("aircraft.repossessed");
+    expect(r.notices.find((n) => n.name === "loan.called")?.data).toMatchObject({
+      loanId: id,
+      kind: "repair",
+      reason: "missed_payments",
+      balanceMovedToCash: 151_505.01,
+    });
     expect(r.book.debt()).toBe(0);
     // No further debits after the call.
     const before = r.ledger.length;
@@ -384,12 +393,54 @@ describe("repair loans in the company book", () => {
     expect(res.data).toMatchObject({ bill: 5_488, claim: 13_952 });
     expect(res.data.loan.payment).toBe(467.3);
     r.drain();
+    // Financed: the insurer's claim and loan both land before the shop bill, so the running
+    // balance never dips below what the company pays itself (bill − principal).
     expect(rows(r.ledger.slice(-3))).toEqual([
       ["repair_loan_disbursement", 5_488],
-      ["repair", -19_440],
       ["insurance_claim", 13_952],
+      ["repair", -19_440],
     ]);
     r.balanced();
+  });
+
+  it("cash needed = cost − claim − principal: an incident repair financed in full needs $0", () => {
+    const setup = (cash: number) => {
+      const r = rig(1_000_000);
+      const a = r.book.ensureStarter()!;
+      r.book.buyInsurance(a.id);
+      r.book.updateAircraft(a.id, { defects: [gearDefect] });
+      r.book.post("adjustment", cash - r.book.company.cash, null, null, "test: set cash");
+      r.drain();
+      return { r, id: a.id };
+    };
+    const args = (id: string, principal: number) => ({
+      aircraftId: id,
+      repair: "defect" as const,
+      defectId: gearDefect.id,
+      principal,
+      termMonths: 12,
+    });
+    // $10,000 cash, $19,440 gear repair, $13,952 claim, $5,488 loan: net cash effect $0.
+    const ten = setup(10_000);
+    const ok = ten.r.book.repairLoan(args(ten.id, 5_488));
+    if (!ok.ok) throw new Error(ok.message);
+    ten.r.drain();
+    expect(ten.r.book.company.cash).toBe(10_000);
+    for (const e of ten.r.ledger) expect(e.balance).toBeGreaterThanOrEqual(0);
+    ten.r.balanced();
+    // Even with $0 cash the fully financed incident repair goes through.
+    const zero = setup(0);
+    expect(zero.r.book.repairLoan(args(zero.id, 5_488)).ok).toBe(true);
+    zero.r.balanced();
+    // A partial loan needs the rest: $3,000 of the $5,488 bill leaves $2,488 to pay.
+    const short = setup(2_487.99);
+    expect(short.r.book.repairLoan(args(short.id, 3_000))).toMatchObject({
+      ok: false,
+      code: "insufficient_cash",
+    });
+    const enough = setup(2_488);
+    expect(enough.r.book.repairLoan(args(enough.id, 3_000)).ok).toBe(true);
+    enough.r.balanced();
   });
 
   it("refusals in the book: uninsured, hired, a second loan, unknown aircraft, cash short", () => {
@@ -613,6 +664,21 @@ describe("repair loans in the company book", () => {
     expect(repair.status).toBe("called");
     expect(repair.balance).toBe(0);
     expect(r.notices.map((n) => n.name)).toContain("aircraft.repossessed");
+    // The call is announced with the amount moved to cash, like the third-miss call.
+    const callRow = r.ledger.find(
+      (e) => e.refId === rl.data.loan.id && e.memo?.includes("repossessed"),
+    );
+    expect(callRow?.category).toBe("repair_loan_payment");
+    expect(callRow!.amount).toBeLessThan(0);
+    const called = r.notices.find((n) => n.name === "loan.called");
+    expect(called?.data).toMatchObject({
+      loanId: rl.data.loan.id,
+      kind: "repair",
+      reason: "aircraft_repossessed",
+      balanceMovedToCash: -callRow!.amount,
+    });
+    // The policy is not cancelled by a repossession (the hull simply left the fleet).
+    expect(r.notices.map((n) => n.name)).not.toContain("insurance.cancelled");
     r.balanced();
   });
 

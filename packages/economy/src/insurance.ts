@@ -102,7 +102,8 @@ export function repairLoanCheck(i: RepairLoanCheckInput): RepairLoanCheck {
       `The insurer lends for ${REPAIR_LOAN.minTermMonths}–${REPAIR_LOAN.maxTermMonths} months`,
     );
   }
-  if (!(i.principal >= REPAIR_LOAN.minAmount)) {
+  // Judged in cents, as the book books it (499.996 → $500.00).
+  if (!(Math.round(i.principal * 100) >= Math.round(REPAIR_LOAN.minAmount * 100))) {
     return no("bad_principal", `The insurer finances at least $${REPAIR_LOAN.minAmount}`);
   }
   if (Math.round(i.principal * 100) > Math.round(i.bill * 100)) {

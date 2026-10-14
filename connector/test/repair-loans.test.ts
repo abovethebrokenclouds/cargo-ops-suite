@@ -210,6 +210,16 @@ describe("insurer repair loans through the connector", () => {
       r.wait(3 * GAME_MONTH_MS + 60_000);
       assert.equal(r.events("loan.missed").length, 3);
       assert.equal(r.events("insurance.cancelled").length, 1);
+      const called = r.events("loan.called");
+      assert.equal(called.length, 1);
+      const calledData = called[0]?.type === "event" ? called[0].data : null;
+      assert.deepEqual(
+        {
+          reason: (calledData as { reason?: string } | null)?.reason,
+          moved: (calledData as { balanceMovedToCash?: number } | null)?.balanceMovedToCash,
+        },
+        { reason: "missed_payments", moved: 151_505.01 },
+      );
       assert.equal(r.events("aircraft.repossessed").length, 0);
       const rows = loanRows(r, res.loan.id);
       assert.deepEqual(

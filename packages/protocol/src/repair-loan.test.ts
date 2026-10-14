@@ -37,6 +37,7 @@ describe("insurer repair loans: protocol", () => {
   it("command, event, ledger categories and the called status are known", () => {
     expect(KNOWN_COMMANDS).toContain("insurance.repairLoan");
     expect(EVENT_NAMES).toContain("insurance.cancelled");
+    expect(EVENT_NAMES).toContain("loan.called");
     expect(LEDGER_CATEGORIES).toEqual(
       expect.arrayContaining(["repair_loan_disbursement", "repair_loan_payment"]),
     );

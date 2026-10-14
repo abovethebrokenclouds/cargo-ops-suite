@@ -1108,6 +1108,16 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
           : `Balance of the ${reg} repair loan due after the write-off`;
     if (balance > 0) this.post("repair_loan_payment", -balance, "loan", loan.id, memo);
     this.touchLoan({ ...loan, balance: 0, status: "called" });
+    // Every call is announced with the amount moved to cash (third miss, repossession,
+    // write-off remainder).
+    this.notice("loan.called", {
+      loanId: loan.id,
+      kind: "repair",
+      aircraftId: loan.collateral.id,
+      registration: reg,
+      reason,
+      balanceMovedToCash: balance,
+    });
     // A repossessed or written-off hull has left the fleet (no more premiums); only the
     // missed-payment path cancels a policy on an aircraft the company keeps.
     if (reason === "missed_payments" && a?.insurance) {
@@ -1424,24 +1434,33 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
 
   /** Cash must cover the gross cost (less what the insurer lends); the claim comes after. */
   private repairCashCheck(t: RepairTarget, financed: number): BookResult<null> {
-    const needed = round2(t.cost - financed);
+    // Financed by the insurer: its claim and its loan are booked before the shop bill in the
+    // same call, so only the rest of the bill (cost − claim − principal) needs cash. A cash
+    // repair needs the gross cost (the claim comes after, as in P5 part 2).
+    const needed = financed > 0 ? round2(t.cost - t.claim - financed) : t.cost;
     if (this.company.cash < needed) {
       const what = t.kind === "all" ? "The repairs cost" : "The repair costs";
       return fail(
         "insufficient_cash",
         financed > 0
-          ? `${what} $${t.cost.toLocaleString("en-US")}: needs $${needed.toLocaleString("en-US")} in cash besides the repair loan`
+          ? `${what} $${t.cost.toLocaleString("en-US")}: needs $${needed.toLocaleString("en-US")} in cash besides the incident claim and the repair loan`
           : `${what} $${t.cost.toLocaleString("en-US")}`,
       );
     }
     return { ok: true, data: null };
   }
 
-  /** Book the repair (and its incident claim) and open the maintenance order. */
-  private placeRepair(t: RepairTarget): MaintenanceOrder {
+  /**
+   * Book the repair (and its incident claim) and open the maintenance order. `claimFirst`
+   * (insurer-financed): the claim is booked before the shop bill so the running balance
+   * never dips below the cash the company pays itself.
+   */
+  private placeRepair(t: RepairTarget, claimFirst = false): MaintenanceOrder {
     const a = t.a;
+    const claim = t.kind !== "overhaul";
+    if (claim && claimFirst) this.claimRepair(a.id, t.defects, t.shop);
     this.post("repair", -t.cost, "aircraft", a.id, t.memo);
-    if (t.kind !== "overhaul") this.claimRepair(a.id, t.defects, t.shop);
+    if (claim && !claimFirst) this.claimRepair(a.id, t.defects, t.shop);
     return this.openOrder(this.fleet.get(a.id) ?? a, {
       kind: t.kind === "overhaul" ? "overhaul" : "defect",
       defectIds: t.defects.map((d) => d.id),
@@ -1501,7 +1520,7 @@ export class CompanyBook<C extends CompanyCore = CompanyCore> {
       id,
       `${REPAIR_LOAN.lenderName} repair loan for ${a0.registration}`,
     );
-    const order = this.placeRepair(t.data);
+    const order = this.placeRepair(t.data, true);
     const loan: BookLoan = {
       id,
       lenderId: REPAIR_LOAN.lenderId,

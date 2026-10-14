@@ -53,6 +53,9 @@ export const EVENT_NAMES = [
   "insurance.claim",
   // Insurer repair loans: the insurer cancelled a policy (three missed repair-loan payments).
   "insurance.cancelled",
+  // Insurer repair loans: a loan was called (balance moved to cash): third miss, a
+  // repossession of the aircraft, or a write-off remainder.
+  "loan.called",
   // Transit cargo (additive).
   "job.in_transit",
   "job.abandoned",

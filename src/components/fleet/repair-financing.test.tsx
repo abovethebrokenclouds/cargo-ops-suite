@@ -92,6 +92,52 @@ describe("RepairFinancing (Finance with insurer)", () => {
     );
   });
 
+  it("shows the cash needed besides the loan (bill after the claim − amount)", () => {
+    render(
+      <RepairFinancing aircraft={aircraft()} enabled demo={false} busy={false} run={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByLabelText("Repair to finance"), { target: { value: "all" } });
+    // Financed in full: the incident claim and the loan pay the shop, $0 from cash.
+    expect(screen.getByTestId("repair-loan-cash-needed").textContent).toContain("$0.00");
+    fireEvent.change(screen.getByLabelText("Repair loan amount"), { target: { value: "3000" } });
+    expect(screen.getByTestId("repair-loan-cash-needed").textContent).toContain("$2,488.00");
+  });
+
+  it("compares the amount with the bill in cents, as the connector does", () => {
+    render(
+      <RepairFinancing
+        aircraft={aircraft({}, { repairLoan: { ...repairLoan, overhaulBill: 1_900.8 } })}
+        enabled
+        demo={false}
+        busy={false}
+        run={vi.fn()}
+      />,
+    );
+    // 1,900.804 rounds to the $1,900.80 bill: accepted. 1,900.806 is $1,900.81: refused.
+    fireEvent.change(screen.getByLabelText("Repair loan amount"), {
+      target: { value: "1900.804" },
+    });
+    expect(button().disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText("Repair loan amount"), {
+      target: { value: "1900.806" },
+    });
+    expect(button().disabled).toBe(true);
+  });
+
+  it("explains why it is blocked: flying", () => {
+    render(
+      <RepairFinancing
+        aircraft={aircraft({ status: "in_flight" })}
+        enabled
+        demo={false}
+        busy={false}
+        run={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("repair-financing-blocked").textContent).toContain("flying");
+    expect(button().disabled).toBe(true);
+  });
+
   it("explains why it is blocked: uninsured, hired, an open loan", () => {
     const { rerender } = render(
       <RepairFinancing
