@@ -466,7 +466,7 @@ describe("P5 part 2 storage: migration 6 from schema 5, career v4", () => {
       db.prepare(
         "INSERT INTO ledger (at, category, amount, ref_type, ref_id, memo, balance, game_at) VALUES (?, 'adjustment', 650000, NULL, NULL, 'p5', 900000, 0)",
       ).run(T0);
-      assert.deepEqual(migrate(db), [6, 7, 8, 9]);
+      assert.deepEqual(migrate(db), [6, 7, 8, 9, 10]);
       assert.deepEqual(migrate(db), []);
       // Idempotent SQL: re-running migration 6 by hand changes nothing and does not fail.
       const six = MIGRATIONS.find((m) => m.version === 6);
@@ -494,7 +494,7 @@ describe("P5 part 2 storage: migration 6 from schema 5, career v4", () => {
       db.close();
 
       const r = rig(tmp.dir);
-      assert.equal(r.storage.schemaVersion(), 9);
+      assert.equal(r.storage.schemaVersion(), 10);
       assert.equal(r.company().cash, 900_000);
       assert.equal(r.fleet().aircraft[0]?.insurance?.insured, false);
       assert.equal(r.company().milestones?.length, 8);

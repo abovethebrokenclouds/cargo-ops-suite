@@ -99,6 +99,8 @@ import {
   type MissionWeather,
   type PayoutBreakdown,
   type WeatherCheck,
+  type FacilitiesState,
+  type MsfsAirport,
 } from "../../protocol";
 import {
   ARRIVAL_RADIUS_NM,
@@ -118,7 +120,6 @@ import {
   BOARD_REFRESH_SIM_MIN,
   REPUTATION,
   STARTING_CASH,
-  airportLookup,
   boardSeed,
   checkAtOrigin,
   checkPayload,
@@ -155,6 +156,7 @@ import {
   type EconomyAirport,
 } from "../../economy";
 import { AiArrivalDetector, type AiObjectSample } from "../../sim/ai-traffic";
+import { OverlayAirportLookup, type FacilityOverlay } from "../facilities";
 import type { LogFn } from "../../sim/source";
 import type { CompanyRecord, EconomyRepo } from "../../storage/economy";
 import type { FlightHooks } from "../flight-core";
@@ -181,7 +183,17 @@ export interface EconomyOptions {
   maintenance?: MaintenanceCapability;
   /** The METAR the connector already holds for a station (no request); weather bonus. */
   weather?: WeatherLookup | null;
+  /**
+   * MSFS facilities override (plan §6.1): sim airport data merged over the bundled airports
+   * and asked for on demand (job board, chosen destination, mission). Live connector only.
+   */
+  facilities?: FacilityOverlay | null;
 }
+
+/** Nearby destination candidates asked from the sim per board airport (nearest first). */
+export const FACILITY_CANDIDATES = 24;
+/** Airports in the `facilities` domain at most. */
+const FACILITY_DOMAIN_MAX = 200;
 
 /** Synchronous lookup of the connector's current METAR for a station (null = none). */
 export type WeatherLookup = (station: string) => WeatherReportInput | null;
@@ -200,7 +212,8 @@ const fail = (code: string, message: string, reasons?: Reason[]): Fail => ({
 export class EconomyEngine {
   private readonly store: StateStore;
   private readonly repo: EconomyRepo | null;
-  private readonly airports: AirportLookup | null;
+  private readonly airports: OverlayAirportLookup | null;
+  private readonly facilities: FacilityOverlay | null;
   private readonly log: LogFn;
   private readonly now: () => number;
   private readonly newId: () => string;
@@ -246,7 +259,10 @@ export class EconomyEngine {
     this.weatherLookup = options.weather ?? null;
     this.store = options.store;
     this.repo = options.repo ?? null;
-    this.airports = options.airports ? airportLookup(options.airports) : null;
+    this.facilities = options.facilities ?? null;
+    this.airports = options.airports
+      ? new OverlayAirportLookup(options.airports, this.facilities)
+      : null;
     this.log = options.log ?? (() => {});
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? (() => `M-${randomUUID().slice(0, 8).toUpperCase()}`);
@@ -260,6 +276,14 @@ export class EconomyEngine {
     this.mission = this.persistRead(() => this.repo?.openMission() ?? null);
     this.recoverAfterRestart();
     if (!this.airports) this.log("warn", "No airport data: job boards are disabled");
+    // New sim airport data changes no existing board; it is used by the next one generated
+    // and shown at once (facilities domain).
+    this.facilities?.onChange(() => this.publishFacilities());
+  }
+
+  /** The airport lookup in use (bundled airports with MSFS data merged over them). */
+  get airportLookup(): AirportLookup | null {
+    return this.airports;
   }
 
   /**
@@ -581,6 +605,7 @@ export class EconomyEngine {
     demand: DemandState;
     pilots: PilotsState;
     mission?: Mission;
+    facilities?: FacilitiesState;
   } {
     return {
       company: this.companyDomain(),
@@ -593,7 +618,75 @@ export class EconomyEngine {
       demand: this.demandDomain(),
       pilots: this.pilotsDomain(),
       ...(this.mission ? { mission: this.mission } : {}),
+      ...(this.facilities ? { facilities: this.facilitiesDomain() } : {}),
     };
+  }
+
+  /**
+   * `facilities` domain: the MSFS data of the airports the boards, the open jobs, the mission
+   * and the base refer to (only airports the sim returned data for).
+   */
+  facilitiesDomain(): FacilitiesState {
+    const airports: Record<string, MsfsAirport> = {};
+    if (!this.facilities || !this.airports) return { source: "sim", airports };
+    const idents = new Set<string>([this.company.base]);
+    for (const b of this.company.boards) idents.add(b.origin);
+    for (const j of this.jobs.values()) {
+      idents.add(j.origin);
+      idents.add(j.destination);
+    }
+    if (this.mission) {
+      idents.add(this.mission.origin);
+      idents.add(this.mission.destination);
+    }
+    for (const ident of [...idents].sort()) {
+      if (Object.keys(airports).length >= FACILITY_DOMAIN_MAX) break;
+      const f = this.facilities.get(ident);
+      if (f) airports[ident.toUpperCase()] = f;
+    }
+    return { source: "sim", airports };
+  }
+
+  private publishFacilities(): void {
+    if (this.facilities) this.store.apply({ facilities: this.facilitiesDomain() });
+  }
+
+  /**
+   * Ask the sim (when connected) for the airports a board at `origin` would use: the origin,
+   * the focus and the nearest bundled destination candidates within the job range of the
+   * active aircraft type. Answers arrive later and are used by the next board.
+   */
+  prefetchFacilities(
+    origin: string | null,
+    extra: Array<string | null | undefined>,
+    reason: string,
+  ): void {
+    const overlay = this.facilities;
+    if (!overlay || !overlay.available() || !this.airports) return;
+    const wanted: string[] = [];
+    for (const e of [origin, ...extra]) if (e) wanted.push(e.toUpperCase());
+    const from = origin ? this.airports.get(origin) : null;
+    if (from) {
+      const maxNm = maxJobDistanceNm(this.activeType().type);
+      const near = this.airports.bundled
+        .filter((a) => a.ident !== from.ident && Math.abs(a.lat - from.lat) <= maxNm / 60 + 0.1)
+        .map((a) => ({ ident: a.ident, nm: greatCircleNm(from, a) }))
+        .filter((c) => c.nm <= maxNm)
+        .sort((a, b) => a.nm - b.nm || (a.ident < b.ident ? -1 : 1))
+        .slice(0, FACILITY_CANDIDATES);
+      for (const c of near) wanted.push(c.ident);
+    }
+    overlay.prefetch(wanted, reason);
+  }
+
+  /** The sim connected: ask for the board, mission and base airports. */
+  onSimConnected(): void {
+    const m = this.mission;
+    this.prefetchFacilities(
+      this.company.boards[0]?.origin ?? this.company.base,
+      [this.company.base, m?.origin, m?.destination],
+      "simulator connected",
+    );
   }
 
   publish(): void {
@@ -615,6 +708,7 @@ export class EconomyEngine {
       demand: this.demandDomain(),
       pilots: this.pilotsDomain(),
       ...(this.mission ? { mission: this.mission } : {}),
+      ...(this.facilities ? { facilities: this.facilitiesDomain() } : {}),
     });
   }
 
@@ -1471,22 +1565,38 @@ export class EconomyEngine {
     return { type: "result", v: PROTOCOL_VERSION, id: cmd.id, ok: true, data: r.data };
   }
 
+  /** Unknown ident: say whether the sim was asked about it (an add-on airport may follow). */
+  private unknownAirport(ident: string): Fail {
+    const asked = this.facilities?.available() === true;
+    return fail(
+      "unknown_airport",
+      asked
+        ? `Unknown airport ${ident}; asked the simulator for it, try again in a moment`
+        : `Unknown airport ${ident}`,
+    );
+  }
+
   private run(cmd: Command): Ok<unknown> | Fail {
     const args = cmd.args ?? {};
     switch (cmd.name) {
       case "jobs.list":
         if (this.expire(true)) this.publish();
+        // The player opened the job board: ask the sim about the board airports.
+        for (const b of this.company.boards.slice(0, 2)) {
+          this.prefetchFacilities(b.origin, [b.focus], "job board opened");
+        }
         return { ok: true, data: this.jobsDomain() };
       case "jobs.refresh": {
         const p = jobsRefreshArgsSchema.safeParse(args);
         if (!p.success) return fail("bad_args", p.error.issues[0]?.message ?? "invalid arguments");
         if (!this.airports) return fail("no_airport_data", "Airport data is not available");
         const airport = (p.data.airport ?? this.currentAirport()).toUpperCase();
-        if (!this.airports.get(airport))
-          return fail("unknown_airport", `Unknown airport ${airport}`);
         const focus = p.data.destination?.toUpperCase();
-        if (focus && !this.airports.get(focus))
-          return fail("unknown_airport", `Unknown airport ${focus}`);
+        // Ask the sim about the board (and the chosen destination) for the next board; an
+        // airport only the sim knows (add-on scenery) can be used once its answer arrived.
+        this.prefetchFacilities(airport, [focus], "job board refreshed");
+        if (!this.airports.get(airport)) return this.unknownAirport(airport);
+        if (focus && !this.airports.get(focus)) return this.unknownAirport(focus);
         const jobs = this.generateBoard(airport, focus);
         this.publish();
         return { ok: true, data: { board: this.company.boards[0], jobs: jobs.length } };
@@ -1530,7 +1640,13 @@ export class EconomyEngine {
       case "mission.load": {
         const p = missionLoadArgsSchema.safeParse(args);
         if (!p.success) return fail("bad_args", "jobIds is required");
-        return this.load(p.data.jobIds, p.data.destination?.toUpperCase(), p.data.enteredPayloadKg);
+        const r = this.load(
+          p.data.jobIds,
+          p.data.destination?.toUpperCase(),
+          p.data.enteredPayloadKg,
+        );
+        if (r.ok) this.prefetchFacilities(r.data.origin, [r.data.destination], "mission loaded");
+        return r;
       }
       case "mission.payload": {
         // docs/ECONOMY.md "Payload entered by you": before departure only (frozen after).

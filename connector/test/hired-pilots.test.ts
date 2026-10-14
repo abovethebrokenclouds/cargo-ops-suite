@@ -425,7 +425,7 @@ describe("hired pilots storage: migration 9, career export", () => {
         db.exec(m.sql);
         db.prepare("INSERT INTO schema_migrations VALUES (?, 0)").run(m.version);
       }
-      assert.deepEqual(migrate(db), [9]);
+      assert.deepEqual(migrate(db), [9, 10]);
       assert.deepEqual(migrate(db), []);
       // Re-running migration 9 by hand is safe (IF NOT EXISTS / OR REPLACE).
       const nine = MIGRATIONS.find((m) => m.version === 9);
@@ -442,7 +442,7 @@ describe("hired pilots storage: migration 9, career export", () => {
         MIGRATIONS.map((_, i) => i + 1),
       );
       const r = rig(tmp.dir);
-      assert.equal(r.storage.schemaVersion(), 9);
+      assert.equal(r.storage.schemaVersion(), 10);
       r.ok("pilot.hire", { rating: "turboprop" });
       assert.equal(r.repo.listPilots().length, 1);
       r.close();

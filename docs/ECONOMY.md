@@ -29,25 +29,55 @@ Seeded with mulberry32 (written in-house). Board seed =
 FNV-1a(company seed, board airport, aircraft type key, board counter). A new demo/
 replay company uses seed 20261013; a new live company a random seed.
 
-| Rule               | Value                                                                                                                                        |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Destinations       | bundled OurAirports large + medium airports ≠ origin, runway known, longest runway ≥ type minimum, surface allowed, 20 nm ≤ d ≤ 0.8 × range  |
-| Payload limit      | max payload − leg fuel, leg fuel = burn × (nm / cruise + 45 min)                                                                             |
-| Short / long       | 75 % from the short band (≤ max(60 nm, 35 % of max distance)), 25 % from the long band                                                       |
-| Destination weight | large 3, medium 2 (small 1 if ever added)                                                                                                    |
-| Kinds (weight)     | cargo 40, express 15, fragile 12, medical 10, hazmat 8, bush 40 (bush only to unpaved or < 4,000 ft strips with a type that accepts unpaved) |
-| Units              | cargo 1–6, fragile 1–3, express 1–2, medical 1–2, hazmat 1–4, bush 1–4                                                                       |
-| Weight             | payload limit × uniform share (express/medical 10–45 %, fragile 20–70 %, hazmat 20–80 %, others 25–100 %), rounded to 5 kg, ≥ 50 kg          |
-| Time limit         | express: nm / cruise + 45 min; medical: × 1.25 + 60 min; others: × 2 + 240 min; rounded up to 5 min                                          |
-| Board              | 24 jobs per board, wall-clock expiry 24 h, at most 4 airports' boards on offer                                                               |
-| Refresh            | on demand (`jobs.refresh {airport?, destination?}`), when the active type changes, and every 6 h of simulator time observed by the connector |
-| Focus              | `destination` puts the first 3 jobs on that airport when the type can serve it                                                               |
+| Rule               | Value                                                                                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Destinations       | bundled OurAirports large + medium airports (MSFS data merged over them, below) ≠ origin, runway known, longest runway ≥ type minimum, surface allowed, 20 nm ≤ d ≤ 0.8 × range |
+| Payload limit      | max payload − leg fuel, leg fuel = burn × (nm / cruise + 45 min)                                                                                                                |
+| Short / long       | 75 % from the short band (≤ max(60 nm, 35 % of max distance)), 25 % from the long band                                                                                          |
+| Destination weight | large 3, medium 2 (small 1 if ever added)                                                                                                                                       |
+| Kinds (weight)     | cargo 40, express 15, fragile 12, medical 10, hazmat 8, bush 40 (bush only to unpaved or < 4,000 ft strips with a type that accepts unpaved)                                    |
+| Units              | cargo 1–6, fragile 1–3, express 1–2, medical 1–2, hazmat 1–4, bush 1–4                                                                                                          |
+| Weight             | payload limit × uniform share (express/medical 10–45 %, fragile 20–70 %, hazmat 20–80 %, others 25–100 %), rounded to 5 kg, ≥ 50 kg                                             |
+| Time limit         | express: nm / cruise + 45 min; medical: × 1.25 + 60 min; others: × 2 + 240 min; rounded up to 5 min                                                                             |
+| Board              | 24 jobs per board, wall-clock expiry 24 h, at most 4 airports' boards on offer                                                                                                  |
+| Refresh            | on demand (`jobs.refresh {airport?, destination?}`), when the active type changes, and every 6 h of simulator time observed by the connector                                    |
+| Focus              | `destination` puts the first 3 jobs on that airport when the type can serve it                                                                                                  |
 
 The deadline clock starts at block-out and runs on simulator time (pauses
 excluded, the tracker's clock): the connector cannot observe in-game time between
 accepting and departing. A pause is the effective pause of `docs/SIMVARS.md` ("Effective
 pause"): a Pause / Pause_EX1 report or the sim not running (SimStop, back to the main menu),
 with a conservative rule for a pause flag that never clears.
+
+### MSFS airport data
+
+With a live connector and the sim running, the generator uses the airport data the player's
+simulator returns (MSFS facilities, plan §6.1/§8; add-on sceneries included) merged over the
+bundled OurAirports records (`packages/economy/src/facilities.ts`, connector
+`src/core/facilities.ts`). Field by field:
+
+| Field                   | From MSFS when                                                                                                     | Otherwise   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------- |
+| Position, elevation     | the sim returned the airport                                                                                       | OurAirports |
+| Longest runway (length) | the sim returned at least one runway (longest; ties: the first)                                                    | OurAirports |
+| Surface                 | that runway's SURFACE value is in the table (docs/SIMVARS.md "Facility definition")                                | OurAirports |
+| Name, type              | never for a bundled airport; an airport only the sim knows is added as **small** with the sim's name (or its ICAO) | OurAirports |
+
+Nothing the sim did not return is filled in, and every field keeps its source ("MSFS" or
+"OurAirports", shown on Jobs). The connector asks the sim per ICAO, never for bulk lists: the
+board airport, the chosen destination and the 24 nearest bundled airports within the job range
+when the board is opened (`jobs.list`) or refreshed, the mission airports on `mission.load`, and
+the board, base and mission airports when the sim connects. Answers are cached in SQLite
+(`msfs_airports`, source `msfs`, fetched-at time) and asked again after 7 days; a miss, a
+timeout or a refused definition stores nothing and falls back to OurAirports (logged once).
+
+**Determinism.** The merged list is sorted by ident and depends only on the bundled list and the
+cached records, so the same seed and the same cache give the same board. New sim data never
+changes a board already on offer; it is used by the next board. **MSFS data can change what jobs
+an airport offers**: a runway the sim reports longer or shorter than OurAirports (or with another
+surface) adds or removes that airport as a destination for a type, and an add-on airport becomes
+a destination (and a board airport) once the sim has answered for it. A replay and the demo never
+use MSFS data.
 
 ## Payout
 

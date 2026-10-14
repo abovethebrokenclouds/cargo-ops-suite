@@ -24,7 +24,9 @@ import {
   reputationTier,
   runwaySuitability,
   type AirportLookup,
+  type EconomyAirport,
 } from "@cargo-ops/economy";
+import { isFacilityLookup, sourceSuffix } from "@/lib/economy/facilities";
 import { loadAirports } from "@/lib/map/airports";
 import type { ClientSimState } from "@/lib/sim-state";
 
@@ -182,6 +184,19 @@ export interface SuitabilityBadge {
   detail: string;
 }
 
+/** "11,120 ft (MSFS) paved (OurAirports)": each runway field with its source when known. */
+function runwayDetail(dest: EconomyAirport, surface: string, lookup: AirportLookup | null): string {
+  const sources = isFacilityLookup(lookup) ? lookup.sourcesOf(dest.ident) : null;
+  const length = dest.longestRwyFt
+    ? `${dest.longestRwyFt.toLocaleString("en-US")} ft`
+    : "unknown length";
+  if (!sources) return `${length} ${surface}`;
+  if (sources.runway && sources.runway === sources.surface) {
+    return `${length} ${surface}${sourceSuffix(sources.runway)}`;
+  }
+  return `${length}${sourceSuffix(sources.runway)} ${surface}${sourceSuffix(sources.surface)}`;
+}
+
 /** Runway/range/payload checks of a job against an aircraft type (null = unknown). */
 export function jobSuitability(
   job: Job,
@@ -200,7 +215,7 @@ export function jobSuitability(
       ok: rwy ? rwy.ok : null,
       label: "Runway",
       detail: dest
-        ? `${dest.longestRwyFt ? `${dest.longestRwyFt.toLocaleString("en-US")} ft` : "unknown length"} ${rwy?.surface ?? ""} · needs ${type.minRunwayFt.toLocaleString("en-US")} ft`
+        ? `${runwayDetail(dest, rwy?.surface ?? "", lookup)} · needs ${type.minRunwayFt.toLocaleString("en-US")} ft`
         : "Airport data loading",
     },
     longHaul

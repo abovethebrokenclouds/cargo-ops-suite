@@ -13,6 +13,7 @@ import {
 import { airportLookup, type EconomyAirport } from "../economy";
 import type { LogFn, SimSource } from "../sim/source";
 import { EconomyEngine, type EconomyOptions } from "./economy/engine";
+import type { FacilitiesService } from "./facilities";
 import { FlightCore, type FlightCoreOptions } from "./flight-core";
 import { PlanResolver } from "./plan";
 import { StateStore } from "./store";
@@ -47,6 +48,8 @@ export type SessionOptions = Omit<FlightCoreOptions, "store" | "log" | "hooks"> 
   economy?: Omit<EconomyOptions, "store" | "log">;
   /** Airports for manual/mission destinations. Default: the economy's airports. */
   airports?: readonly EconomyAirport[] | null;
+  /** MSFS facilities override (live connector): sim airport data asked for on demand. */
+  facilities?: FacilitiesService | null;
 };
 
 export class ConnectorSession {
@@ -56,6 +59,7 @@ export class ConnectorSession {
   readonly economy: EconomyEngine | null;
   /** Owns the `plan` domain: GPS plan, else manual destination, else mission. */
   readonly plan: PlanResolver;
+  readonly facilities: FacilitiesService | null;
   private readonly receiveClock: () => number;
   private readonly linkListeners = new Set<LinkListener>();
   private unsubscribe: (() => void) | null = null;
@@ -68,19 +72,31 @@ export class ConnectorSession {
     this.store = new StateStore(source.frameSource, (domain, reason) =>
       log("debug", `Ignored ${domain} update: ${reason}`),
     );
-    const { receiveClock, economy, airports, ...core } = options;
+    const { receiveClock, economy, airports, facilities, ...core } = options;
     this.receiveClock = receiveClock ?? Date.now;
-    this.economy = economy ? new EconomyEngine({ ...economy, store: this.store, log }) : null;
+    this.facilities = facilities ?? null;
+    this.economy = economy
+      ? new EconomyEngine({
+          ...economy,
+          ...(this.facilities ? { facilities: this.facilities } : {}),
+          store: this.store,
+          log,
+        })
+      : null;
     this.flight = new FlightCore({
       ...core,
       store: this.store,
       log,
       ...(this.economy ? { hooks: this.economy.hooks() } : {}),
     });
-    const planAirports = airports ?? economy?.airports ?? null;
+    // Without its own list the plan resolver shares the economy's lookup (MSFS data merged in).
+    const planAirports = airports ?? null;
     this.plan = new PlanResolver({
       store: this.store,
-      airports: planAirports ? airportLookup(planAirports) : null,
+      airports: planAirports
+        ? airportLookup(planAirports)
+        : (this.economy?.airportLookup ??
+          (economy?.airports ? airportLookup(economy.airports) : null)),
       log,
       startOffline: source.mode === "live" && !source.link().connected,
     });
@@ -98,6 +114,8 @@ export class ConnectorSession {
         case "connected":
           this.plan.onConnect();
           this.flight.onConnect();
+          this.facilities?.setConnected(true);
+          this.economy?.onSimConnected();
           this.notifyLink();
           break;
         case "disconnected": {
@@ -106,6 +124,7 @@ export class ConnectorSession {
           this.store.apply(clear);
           this.plan.onDisconnect();
           this.flight.onDisconnect();
+          this.facilities?.setConnected(false);
           this.notifyLink();
           break;
         }

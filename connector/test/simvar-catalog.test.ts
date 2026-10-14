@@ -24,7 +24,7 @@ const SRC = join(__dirname, "..", "..", "..", "src");
 
 /** A SimConnect request whose name (always the second argument) is a string literal. */
 const literalCall =
-  /\b(addToDataDefinition|subscribeToSystemEvent|requestSystemState)\s*\(\s*[^,()]+,\s*["'`]/;
+  /\b(addToDataDefinition|addToFacilityDefinition|subscribeToSystemEvent|requestSystemState)\s*\(\s*[^,()]+,\s*["'`]/;
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
