@@ -11,12 +11,15 @@
 //   terminal); late minutes at the final delivery use the normal late penalty;
 // - bonuses and damage carry over: a leg flown above 1× or departed underloaded removes the
 //   bonuses of the final payout; a fragile touchdown above 1.5 G on any leg damages it;
+// - weather bonus: every leg records the METAR checks it froze (its origin at departure, its
+//   destination at arrival); the final delivery uses the FIRST leg's departure check and the
+//   final leg's arrival check, and the bonus is lost with the others when any leg lost them;
 // - progress: a transit leg must end strictly closer (great circle) to the job's final
 //   destination than where the cargo is now;
 // - a failed or crashed leg fails every job on board (no partial credit); an aborted leg puts
 //   transit cargo back where it was stored.
 
-import type { Job, JobTransit, TransitStorage } from "../../protocol/src/economy";
+import type { Job, JobTransit, MissionWeather, TransitStorage } from "../../protocol/src/economy";
 import type { LandingGrade } from "../../protocol/src/landing";
 import { REPUTATION } from "./constants";
 import { computePayout } from "./payout";
@@ -114,6 +117,29 @@ export interface FlownLeg {
   peakG: number | null;
   noBonus: boolean;
   payloadMismatch: boolean;
+  /** METAR checks frozen on this leg (departure at its origin, arrival at its destination). */
+  weather?: MissionWeather;
+}
+
+/** A leg's own departure/arrival checks, without any applied bonus (undefined = none). */
+function legWeather(leg: FlownLeg): MissionWeather | undefined {
+  const departure = leg.weather?.departure;
+  const arrival = leg.weather?.arrival;
+  if (!departure && !arrival) return undefined;
+  return { ...(departure ? { departure } : {}), ...(arrival ? { arrival } : {}) };
+}
+
+/**
+ * Weather of a whole chain at its final delivery (docs/ECONOMY.md "Weather bonus on transit
+ * cargo"): the departure check of the FIRST leg's origin and the arrival check of the final
+ * leg's destination. A first leg flown before the weather bonus existed has no departure
+ * check: only the arrival end can count then.
+ */
+export function chainWeather(job: Pick<Job, "transit">, leg: FlownLeg): MissionWeather {
+  const first = job.transit?.legs[0];
+  const departure = first ? first.weather?.departure : leg.weather?.departure;
+  const arrival = leg.weather?.arrival;
+  return { ...(departure ? { departure } : {}), ...(arrival ? { arrival } : {}) };
 }
 
 /** Ground minutes counted before `leg` for a job (0 for a job on its first leg). */
@@ -136,6 +162,7 @@ export function arriveInTransit(
   },
 ): Job {
   const groundMin = groundBefore(job, leg);
+  const weather = legWeather(leg);
   const elapsedMin = round1((job.transit?.elapsedMin ?? 0) + groundMin + leg.blockMin);
   const transit: JobTransit = {
     location: leg.destination,
@@ -164,6 +191,7 @@ export function arriveInTransit(
         ...(leg.peakG !== null && Number.isFinite(leg.peakG) ? { peakG: leg.peakG } : {}),
         ...(leg.noBonus ? { noBonus: true } : {}),
         ...(leg.payloadMismatch ? { payloadMismatch: true } : {}),
+        ...(weather ? { weather } : {}),
         arrivedAt: at.arrivedAt,
       },
     ],
@@ -186,6 +214,7 @@ export function finalDeliveryTerms(
   noBonus: boolean;
   payloadMismatch: boolean;
   legs: number;
+  weather: MissionWeather;
 } {
   const prior = job.transit?.legs ?? [];
   const chainMin = round1((job.transit?.elapsedMin ?? 0) + groundBefore(job, leg) + leg.blockMin);
@@ -199,6 +228,7 @@ export function finalDeliveryTerms(
     noBonus: leg.noBonus || prior.some((l) => l.noBonus === true),
     payloadMismatch: leg.payloadMismatch || prior.some((l) => l.payloadMismatch === true),
     legs: prior.length + 1,
+    weather: chainWeather(job, leg),
   };
 }
 

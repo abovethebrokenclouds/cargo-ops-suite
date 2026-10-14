@@ -221,6 +221,14 @@ test("accept → load → fly (replay) → deliver: payout in the API and the lo
   await expect(pill).toHaveAttribute("data-status", fixtureCheck.status);
   await expect(pill).toHaveAttribute("data-source", "replay");
   await expect(pill.getByText("REPLAY")).toBeVisible();
+  // Weather frozen at departure/arrival from the replay's SAMPLE METARs: never a bonus.
+  const wx = row.getByTestId("weather-bonus-pill");
+  await expect(wx).toContainText("VFR → MVFR");
+  await expect(wx).toHaveAttribute("data-bonus", "0");
+  await row.click();
+  const wxLine = page.getByTestId("weather-bonus");
+  await expect(wxLine.getByText("SAMPLE", { exact: true })).toHaveCount(2);
+  await expect(page.getByTestId("weather-bonus-result")).toContainText("No weather bonus");
   await expect(page.getByTestId("export-csv")).toBeEnabled();
   const csv = await request.get("/api/export/csv", { headers: auth });
   expect(csv.status()).toBe(200);

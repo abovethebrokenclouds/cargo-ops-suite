@@ -3,7 +3,12 @@
 // route finder. Worked examples are the ones in the doc.
 
 import { describe, expect, it } from "vitest";
-import { aircraftTypeByKey, type AircraftType, type Job } from "@cargo-ops/protocol";
+import {
+  aircraftTypeByKey,
+  type AircraftType,
+  type Job,
+  type WeatherCheck,
+} from "@cargo-ops/protocol";
 import {
   CARGO_TERMINAL,
   LONG_HAUL_JOBS_PER_BOARD,
@@ -11,6 +16,8 @@ import {
   airportLookup,
   arriveInTransit,
   chainElapsedMin,
+  chainWeather,
+  checkWeather,
   checkTransitProgress,
   computePayout,
   countedGroundMin,
@@ -170,6 +177,8 @@ describe("chain clock and deadline", () => {
       noBonus: false,
       payloadMismatch: false,
       legs: 2,
+      // No leg recorded weather (they predate it): no weather end, no bonus.
+      weather: {},
     });
     // base 0.015 × 500 × 549.2 × 1.9420812 = $7,999.43; × 1.04 × B 1.00 = $8,319.41 → $8,319,
     // exactly the board estimate (on time, landing B).
@@ -482,5 +491,118 @@ describe("leg terms while transit cargo waits (deadline and expected payout)", (
       timeLimitMin: 630,
       expectedPayout: job.payoutEstimate,
     });
+  });
+});
+
+describe("weather bonus on transit cargo", () => {
+  const NOW = Date.UTC(2026, 9, 13, 12, 0, 0);
+  /** A live, current check under sim telemetry (hand-made, not fetched weather). */
+  const wx = (
+    stage: WeatherCheck["stage"],
+    station: string,
+    category: WeatherCheck["category"],
+  ): WeatherCheck =>
+    checkWeather({
+      stage,
+      station,
+      source: "sim",
+      nowMs: NOW,
+      report: {
+        origin: "live",
+        category,
+        rawText: `${station} TEST`,
+        observedAt: new Date(NOW - 9 * MIN).toISOString(),
+        fetchedAt: new Date(NOW - 4 * MIN).toISOString(),
+        stale: false,
+      },
+    });
+  const legA: FlownLeg = {
+    ...leg1,
+    weather: { departure: wx("departure", "KMEM", "IFR"), arrival: wx("arrival", "KATL", "LIFR") },
+  };
+  const legB = (over: Partial<FlownLeg> = {}): FlownLeg => ({
+    ...leg1,
+    missionId: "M-2",
+    flightId: "F-2",
+    origin: "KATL",
+    destination: "KRDU",
+    startedGameMs: T0 + 60 * MIN,
+    blockMin: 125,
+    weather: { departure: wx("departure", "KATL", "LIFR"), arrival: wx("arrival", "KRDU", "VFR") },
+    ...over,
+  });
+  const store = (leg: FlownLeg) =>
+    arriveInTransit(
+      krduJob("cargo", 500),
+      leg,
+      stop(transitStorage({ fbo: false, terminalLevel: 0 })),
+    );
+  const pay = (job: Job, terms: ReturnType<typeof finalDeliveryTerms>) =>
+    computePayout({
+      kind: job.kind,
+      weightKg: job.weightKg,
+      distanceNm: job.distanceNm,
+      units: 1,
+      reputation: 50,
+      estimate: false,
+      landingGrade: "B",
+      lateMin: terms.lateMin,
+      peakG: terms.peakG,
+      noBonus: terms.noBonus,
+      payloadMismatch: terms.payloadMismatch,
+      weather: terms.weather,
+    });
+
+  it("each leg records its own checks; the chain uses the first departure and the final arrival", () => {
+    const stored = store(legA);
+    expect(stored.transit?.legs[0]?.weather?.departure?.station).toBe("KMEM");
+    expect(stored.transit?.legs[0]?.weather?.arrival?.station).toBe("KATL");
+    expect(stored.transit?.legs[0]?.weather?.bonus).toBeUndefined();
+    const terms = finalDeliveryTerms(stored, legB());
+    expect(terms.weather.departure?.station).toBe("KMEM");
+    expect(terms.weather.arrival?.station).toBe("KRDU");
+    expect(chainWeather(stored, legB())).toEqual(terms.weather);
+    // KMEM IFR sets +5 %; KATL's LIFR (an intermediate stop) never counts.
+    const paid = pay(stored, terms);
+    expect(paid.weatherBonus).toBe(0.05);
+    expect(paid.factors.find((f) => f.key === "conditions")?.value).toBe(1.05);
+  });
+
+  it("a direct (single-leg) delivery keeps the leg's own two ends", () => {
+    const direct = krduJob("cargo", 500);
+    const { startedGameMs: _s, ...leg } = legB({ origin: "KMEM" });
+    expect(chainWeather(direct, leg).departure?.station).toBe("KATL"); // the leg's own check
+    expect(finalDeliveryTerms(direct, leg).weather).toEqual(leg.weather);
+  });
+
+  it("a leg that lost its bonuses withholds the weather bonus at the final delivery", () => {
+    const fast = store({ ...legA, noBonus: true });
+    const t1 = finalDeliveryTerms(fast, legB());
+    expect(t1.noBonus).toBe(true);
+    expect(pay(fast, t1).weatherBonus).toBeUndefined();
+    expect(pay(fast, t1).factors.find((f) => f.key === "conditions")?.note).toMatch(
+      /weather bonus \+5 % withheld/,
+    );
+    const light = store(legA);
+    const t2 = finalDeliveryTerms(light, legB({ payloadMismatch: true }));
+    expect(t2.payloadMismatch).toBe(true);
+    expect(pay(light, t2).weatherBonus).toBeUndefined();
+  });
+
+  it("a first leg flown before the weather bonus existed: only the final arrival can count", () => {
+    const old = store(leg1); // no weather on the leg
+    expect(old.transit?.legs[0]?.weather).toBeUndefined();
+    const lifr = legB({
+      weather: {
+        departure: wx("departure", "KATL", "LIFR"),
+        arrival: wx("arrival", "KRDU", "LIFR"),
+      },
+    });
+    const terms = finalDeliveryTerms(old, lifr);
+    expect(terms.weather.departure).toBeUndefined();
+    expect(pay(old, terms).weatherBonus).toBe(0.1);
+    // ... and an LIFR departure from the stop alone pays nothing.
+    const t2 = finalDeliveryTerms(old, legB());
+    expect(pay(old, t2).weatherBonus).toBeUndefined();
   });
 });

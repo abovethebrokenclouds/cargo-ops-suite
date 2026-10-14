@@ -13,6 +13,9 @@
 //   stations the sim reports (minus a crew allowance) as a live preview; at the start
 //   the check is frozen on the mission. An underloaded departure removes the payout
 //   bonuses (like noBonus); no stations reported → unknown, never a penalty.
+// - weather: the METAR flight category the connector already holds is frozen for the
+//   origin at the start and for the destination at arrival; a live, current IFR/LIFR
+//   report under sim telemetry adds the weather bonus (sample/unknown → none).
 // - deliver: when the flight completes (Arrived: parked, engines off, brake set) the
 //   leg is verified (distance ≥ 90 % of the great circle, parked within 3 nm of the
 //   destination, no teleport, not invalidated) and every job is paid with a full
@@ -85,6 +88,9 @@ import {
   type FuelState,
   type PayloadCheck,
   type PayloadState,
+  type MissionWeather,
+  type PayoutBreakdown,
+  type WeatherCheck,
 } from "../../protocol";
 import {
   ARRIVAL_RADIUS_NM,
@@ -108,6 +114,10 @@ import {
   boardSeed,
   checkAtOrigin,
   checkPayload,
+  checkWeather,
+  type WeatherReportInput,
+  weatherBonus,
+  weatherOutcome,
   clampReputation,
   computePayout,
   deliveryReputationDelta,
@@ -161,7 +171,12 @@ export interface EconomyOptions {
   replay?: boolean;
   /** P5: where maintenance is available (default: large airports; the FBO lane extends it). */
   maintenance?: MaintenanceCapability;
+  /** The METAR the connector already holds for a station (no request); weather bonus. */
+  weather?: WeatherLookup | null;
 }
+
+/** Synchronous lookup of the connector's current METAR for a station (null = none). */
+export type WeatherLookup = (station: string) => WeatherReportInput | null;
 
 type Reason = { code: string; message: string };
 type Fail = { ok: false; code: string; message: string; reasons?: Reason[] };
@@ -217,8 +232,10 @@ export class EconomyEngine {
   private tanksDry = false;
   /** P5 part 2: AI arrivals observed in the connected simulator near own FBO airports. */
   private readonly aiDetector = new AiArrivalDetector();
+  private weatherLookup: WeatherLookup | null;
 
   constructor(options: EconomyOptions) {
+    this.weatherLookup = options.weather ?? null;
     this.store = options.store;
     this.repo = options.repo ?? null;
     this.airports = options.airports ? airportLookup(options.airports) : null;
@@ -264,6 +281,8 @@ export class EconomyEngine {
         elapsedMin: _e,
         payloadCheck: _p,
         startBlocked: _b,
+        // The departure METAR was frozen for the lost flight; the next departure freezes anew.
+        weather: _w,
         ...rest
       } = m;
       this.mission = {
@@ -749,6 +768,67 @@ export class EconomyEngine {
     return check;
   }
 
+  /** Where the weather comes from (set once the connector's weather service exists). */
+  setWeatherLookup(lookup: WeatherLookup | null): void {
+    this.weatherLookup = lookup;
+  }
+
+  /**
+   * The weather a delivered leg records (docs/ECONOMY.md "Weather bonus"): the bonus actually
+   * paid, taken from the payout itself so the logbook cannot disagree; the outcome and the end
+   * that set it; and, on the final leg of a transit chain, the chain ends the payout counted
+   * (they are not this leg's own ends). With jobs from different chains, the job paying the
+   * largest bonus (then the largest one earned) is described. A leg that delivered nothing
+   * (transit cargo only) has no bonus yet: it is decided at the final delivery.
+   */
+  private deliveredWeather(
+    weather: MissionWeather,
+    terms: ReturnType<typeof finalDeliveryTerms>[],
+    breakdowns: PayoutBreakdown[],
+  ): MissionWeather {
+    if (terms.length === 0) return { ...weather, outcome: "in_transit" };
+    const paid = breakdowns.map((b) => b.weatherBonus ?? 0);
+    const earned = terms.map((t) => weatherBonus(t.weather).bonus);
+    let i = 0;
+    for (let k = 1; k < terms.length; k++) {
+      if (
+        (paid[k] ?? 0) > (paid[i] ?? 0) ||
+        ((paid[k] ?? 0) === (paid[i] ?? 0) && (earned[k] ?? 0) > (earned[i] ?? 0))
+      ) {
+        i = k;
+      }
+    }
+    const t = terms[i];
+    if (!t) return weather;
+    const o = weatherOutcome(t.weather, t);
+    return {
+      ...weather,
+      bonus: Math.max(0, ...paid),
+      outcome: o.outcome,
+      ...(o.bonusFrom ? { bonusFrom: o.bonusFrom } : {}),
+      ...(t.legs > 1 ? { chain: { legs: t.legs, ...t.weather } } : {}),
+    };
+  }
+
+  /** Freeze the METAR flight category at one end of a mission (docs/ECONOMY.md). */
+  private weatherCheckNow(station: string, stage: WeatherCheck["stage"]): WeatherCheck {
+    let report: WeatherReportInput | null = null;
+    try {
+      report = this.weatherLookup?.(station) ?? null;
+    } catch (err) {
+      this.log("debug", `Weather lookup failed: ${err instanceof Error ? err.message : err}`);
+    }
+    const check = checkWeather({
+      stage,
+      station,
+      report,
+      source: this.store.source,
+      nowMs: this.now(),
+    });
+    this.log("info", `Weather (${check.source}) ${check.message}`);
+    return check;
+  }
+
   /**
    * A loaded mission carrying transit cargo: its deadline and expected payout follow the
    * company clock until block-out (docs/ECONOMY.md "Transit cargo"). True when they changed.
@@ -884,6 +964,8 @@ export class EconomyEngine {
     const { startBlocked: _drop, ...rest } = m;
     // The payload check is frozen at departure with what the sim reports right now.
     const payloadCheck = this.payloadCheckNow(m, "departure");
+    // So is the origin's METAR flight category (weather bonus).
+    const departureWeather = this.weatherCheckNow(m.origin, "departure");
     this.mission = {
       ...rest,
       status: "in_progress",
@@ -896,6 +978,7 @@ export class EconomyEngine {
       flownNm: record.distanceNm,
       elapsedMin: record.blockMin,
       payloadCheck,
+      weather: { departure: departureWeather },
     };
     if (m.aircraftId) this.book.setFlying(m.aircraftId, true);
     const type = aircraftTypeByKey(m.aircraftKey);
@@ -1074,6 +1157,12 @@ export class EconomyEngine {
     const reputation = this.company.reputation;
     // Transit cargo: jobs whose final destination is this leg's destination are delivered
     // and paid over their whole chain; the others are unloaded here in transit (no pay yet).
+    // The destination's METAR flight category, frozen at arrival (weather bonus); this leg's
+    // two checks are recorded on the mission and on every transit leg it flew.
+    const weather: MissionWeather = {
+      ...m.weather,
+      arrival: this.weatherCheckNow(m.destination, "arrival"),
+    };
     const leg: FlownLeg = {
       missionId: m.id,
       flightId: record.id,
@@ -1086,6 +1175,7 @@ export class EconomyEngine {
       noBonus: record.flags.noBonus,
       // An underloaded departure (sim payload clearly below the cargo) removes bonuses.
       payloadMismatch: payloadMismatch(m.payloadCheck),
+      weather,
     };
     const finals = m.jobs.filter((j) => j.destination === m.destination);
     const onward = m.jobs.filter((j) => j.destination !== m.destination);
@@ -1105,6 +1195,9 @@ export class EconomyEngine {
         peakG: t.peakG,
         noBonus: t.noBonus,
         payloadMismatch: t.payloadMismatch,
+        // IFR/LIFR at the chain's ends (first departure, final arrival; live METAR only);
+        // removed with the other bonuses when any leg lost them.
+        weather: t.weather,
         // P5 part 2: the demand factor promised on the board.
         ...(job.demandFactor !== undefined ? { demand: job.demandFactor } : {}),
         ...(t.legs > 1 ? { chain: { legs: t.legs, chainMin: t.chainMin } } : {}),
@@ -1153,9 +1246,11 @@ export class EconomyEngine {
       settled.costs.map((c) => c.amount),
     );
     const payout = { total, jobs: breakdowns, costs: settled.costs, net };
+    const appliedWeather = this.deliveredWeather(weather, terms, breakdowns);
     this.mission = {
       ...base,
       status: "delivered",
+      weather: appliedWeather,
       payout,
       reputationDelta: delta,
       ...(grade ? { landingGrade: grade } : {}),

@@ -24,6 +24,7 @@ import {
   type JobStatus,
   type LedgerCategory,
   type Mission,
+  type MissionWeather,
   type PayloadCheck,
   type PnlMonth,
   type Touchdown,
@@ -345,6 +346,8 @@ export interface LogbookEntry {
     failure: { code: string; message: string } | null;
     /** Cargo vs sim payload, frozen at departure (absent on older missions). */
     payloadCheck: PayloadCheck | null;
+    /** METAR flight category at departure/arrival and the applied weather bonus. */
+    weather: MissionWeather | null;
   } | null;
 }
 
@@ -956,6 +959,7 @@ export class EconomyRepo {
               jobs: mission.jobs.map((j) => ({ id: j.id, kind: j.kind, weightKg: j.weightKg })),
               failure: mission.failure ?? null,
               payloadCheck: mission.payloadCheck ?? null,
+              weather: mission.weather ?? null,
             }
           : null,
       };

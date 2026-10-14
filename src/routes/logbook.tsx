@@ -9,6 +9,7 @@ import { PayoutBreakdown } from "@/components/cargo/PayoutBreakdown";
 import { MetricTile } from "@/components/dashboard/MetricTile";
 import { Panel } from "@/components/dashboard/Panel";
 import { PayloadCheckLine, PayloadCheckPill } from "@/components/cargo/PayloadCheck";
+import { WeatherBonusLine, WeatherBonusPill } from "@/components/cargo/WeatherBonus";
 import { SourceTag } from "@/components/status/SourceTag";
 import { TrackMap } from "@/components/logbook/TrackMap";
 import { useLogbook, useTrack, type LogbookEntry } from "@/lib/economy/logbook";
@@ -46,6 +47,7 @@ const columns = [
   "Landing",
   "Payout",
   "Payload check",
+  "Weather",
   "Status",
 ];
 
@@ -198,7 +200,7 @@ function Logbook() {
             </p>
           ) : null}
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[54rem] text-left text-sm" data-testid="logbook-table">
+            <table className="w-full min-w-[60rem] text-left text-sm" data-testid="logbook-table">
               <thead>
                 <tr className="border-b border-border">
                   {columns.map((c) => (
@@ -245,6 +247,9 @@ function Logbook() {
                     </td>
                     <td className="px-5 py-3 md:px-6" data-testid="logbook-payload-check">
                       {e.mission ? <PayloadCheckPill check={e.mission.payloadCheck} /> : EMPTY}
+                    </td>
+                    <td className="px-5 py-3 md:px-6" data-testid="logbook-weather">
+                      {e.mission ? <WeatherBonusPill weather={e.mission.weather} /> : EMPTY}
                     </td>
                     <td className={cn("px-5 py-3 text-xs md:px-6", statusTone(e))}>
                       {e.mission ? `${e.mission.status} · ${e.status}` : e.status}
@@ -323,6 +328,7 @@ function Logbook() {
                   ))}
                 </dl>
                 <PayloadCheckLine check={selected.mission?.payloadCheck} className="mt-4" />
+                <WeatherBonusLine weather={selected.mission?.weather} className="mt-4" />
               </div>
               <div className="flex flex-col gap-3">
                 {mission?.payout ? (

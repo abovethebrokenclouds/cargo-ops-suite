@@ -2,9 +2,9 @@
 // Small hand-written writers: no dependency.
 
 import { z } from "zod";
-import { jobSchema, missionSchema } from "../protocol";
+import { jobSchema, missionSchema, type Job } from "../protocol";
 import type { DatabaseKind } from "./db";
-import { STARTING_CASH } from "../economy";
+import { STARTING_CASH, trustedWeather } from "../economy";
 import { ledgerCategorySchema } from "../protocol";
 import {
   companyRecordSchema,
@@ -188,7 +188,12 @@ export const CAREER_FORMAT = "cargo-ops-career";
  * Version 5 (transit cargo) may carry jobs with status `in_transit` and a `transit` record
  * (their stop, chain clock and flown legs), long-haul jobs and missions with
  * `transitJobIds`; nothing else changed, so versions 1–4 import unchanged (they have no
- * transit cargo). An older connector refuses a version 5 file instead of misreading it.
+ * transit cargo). Version 5 files may also carry the optional weather bonus fields (no
+ * format bump: they are optional and older connectors' schemas strip them): a mission's
+ * `weather` (METAR checks at departure/arrival, the bonus paid, its outcome, the end that
+ * set it and the transit chain's ends) and each transit leg's `weather`. On import a
+ * weather check claiming eligibility without sim telemetry and a live METAR is not trusted
+ * (`eligible` is cleared, see `trustedWeather`). An older connector refuses a version 5 file instead of misreading it.
  * Version 4 (P5 part 2) adds FBOs, FBO transactions and demand events (the company carries
  * demand activity, counters and milestones; fleet rows carry insurance and incidents);
  * version 3 (P5) adds the used market's listings (and fleet rows carry systems, defects,
@@ -309,6 +314,20 @@ export type ImportResult =
     }
   | { ok: false; status: number; code: string; message: string };
 
+/** An imported job's transit legs with their weather checks re-checked (trustedWeather). */
+function trustedJobWeather(job: Job): Job {
+  if (!job.transit?.legs.some((l) => l.weather)) return job;
+  return {
+    ...job,
+    transit: {
+      ...job.transit,
+      legs: job.transit.legs.map((l) =>
+        l.weather ? { ...l, weather: trustedWeather(l.weather) } : l,
+      ),
+    },
+  };
+}
+
 /**
  * Replace the career tables of this database with an export. Flights are upserted
  * (their telemetry is kept); flights missing from the export are deleted. The live
@@ -348,8 +367,11 @@ export function importCareer(
       // imported row count and an empty P&L is rebuilt from the ledger below.
       repo.saveCompany({ ...data.company, ledgerCount: data.ledger.length });
     }
-    for (const job of data.jobs) repo.saveJob(job);
-    for (const m of data.missions) repo.saveMission(m);
+    // Weather checks are never trusted to pay on the file's word alone (weather bonus).
+    for (const job of data.jobs) repo.saveJob(trustedJobWeather(job));
+    for (const m of data.missions) {
+      repo.saveMission(m.weather ? { ...m, weather: trustedWeather(m.weather) } : m);
+    }
     // Running balance: kept when the export has it, else recomputed from the starting cash.
     let running = Math.round((data.company?.startingCash ?? STARTING_CASH) * 100);
     for (const e of data.ledger) {

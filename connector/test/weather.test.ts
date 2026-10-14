@@ -307,3 +307,40 @@ describe("--weather and GET /api/weather/metar", () => {
     }
   });
 });
+
+describe("WeatherService.peek (weather bonus, no requests)", () => {
+  it("online: the cached live report, stale after the TTL or a failed refresh; never fetches", async () => {
+    let up = true;
+    const { svc, calls, advance } = service({}, () => {
+      if (!up) throw new TypeError("fetch failed");
+      return jsonResponse(FIXTURE.response);
+    });
+    assert.equal(svc.peek("KMEM"), null, "nothing cached yet");
+    assert.equal(calls.length, 0, "peek never fetches");
+    await svc.metar(["KMEM"], true);
+    const fresh = svc.peek("KMEM");
+    assert.equal(fresh?.origin, "live");
+    assert.equal(fresh?.stale, false);
+    assert.equal(calls.length, 1);
+    advance(WEATHER_TTL_MS + 1000);
+    assert.equal(svc.peek("KMEM")?.stale, true, "past the TTL");
+    up = false;
+    await svc.metar(["KMEM"], true);
+    assert.equal(svc.peek("KMEM")?.stale, true, "refresh failed");
+    advance(WEATHER_STALE_MAX_MS);
+    assert.equal(svc.peek("KMEM"), null, "too old");
+  });
+
+  it("sample mode: a SAMPLE report; off mode: none", () => {
+    const sample = new WeatherService({
+      mode: "sample",
+      version: "0",
+      log: () => {},
+      now: () => T0,
+    });
+    assert.equal(sample.peek("KSEA")?.origin, "sample");
+    assert.equal(sample.peek("KSEA")?.category, "LIFR");
+    const off = new WeatherService({ mode: "off", version: "0", log: () => {}, now: () => T0 });
+    assert.equal(off.peek("KSEA"), null);
+  });
+});

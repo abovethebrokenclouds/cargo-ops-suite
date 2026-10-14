@@ -7,6 +7,7 @@ export * from "./constants";
 export * from "./payout";
 export * from "./rules";
 export * from "./payload-check";
+export * from "./weather-bonus";
 export * from "./generator";
 export * from "./route-finder";
 // P4 company, fleet, costs and finance.

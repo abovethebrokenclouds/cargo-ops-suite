@@ -44,6 +44,8 @@ export const payoutBreakdownSchema = z.object({
   noBonus: z.boolean(),
   /** The departure payload check found the sim payload clearly below the cargo (no bonuses). */
   payloadMismatch: z.boolean().optional(),
+  /** Weather bonus included in the conditions line (0.05 IFR, 0.10 LIFR); absent = none. */
+  weatherBonus: finite().nonnegative().optional(),
 });
 export type PayoutBreakdown = z.infer<typeof payoutBreakdownSchema>;
 
@@ -59,6 +61,77 @@ export const JOB_STATUSES = [
 ] as const;
 export const jobStatusSchema = z.enum(JOB_STATUSES);
 export type JobStatus = z.infer<typeof jobStatusSchema>;
+
+export const WEATHER_FLIGHT_CATEGORIES = ["VFR", "MVFR", "IFR", "LIFR"] as const;
+
+/**
+ * METAR flight category at one end of a mission, frozen when it happened: the origin at
+ * departure, the destination at arrival (docs/ECONOMY.md, "Weather bonus"). Only a live,
+ * current report under simulator telemetry is `eligible`; sample reports, replay/demo
+ * telemetry, stale or missing reports never earn a bonus (and never cost anything).
+ */
+export const weatherCheckSchema = z.object({
+  stage: z.enum(["departure", "arrival"]),
+  station: icao(),
+  /** FAA flight category of the report; null = unknown (no report or not decodable). */
+  category: z.enum(WEATHER_FLIGHT_CATEGORIES).nullable(),
+  /** live = aviationweather.gov; sample = built-in example (never real weather); null = none. */
+  metarOrigin: z.enum(["live", "sample"]).nullable(),
+  /** Telemetry source when the check was frozen (live simulator, replay or demo). */
+  source: z.enum(["sim", "replay", "demo"]),
+  /** Raw METAR text, observation time and fetch time of the report used (null = none). */
+  rawText: z.string().nullable(),
+  observedAt: z.string().nullable(),
+  fetchedAt: z.string().nullable(),
+  /** The report was stale when frozen (past its TTL or a refresh failed); absent on older checks. */
+  stale: z.boolean().optional(),
+  /** This end may count toward the weather bonus. */
+  eligible: z.boolean(),
+  message: z.string(),
+  /** Wall clock of the check, ISO 8601. */
+  checkedAt: z.string(),
+});
+export type WeatherCheck = z.infer<typeof weatherCheckSchema>;
+
+/**
+ * What happened to the weather bonus at a delivered arrival (docs/ECONOMY.md "Weather
+ * bonus"): applied; earned but withheld (sim rate above 1× or the payload check on any leg);
+ * no IFR/LIFR at the counted live ends; nothing live and current to count; or the leg only
+ * carried transit cargo (decided at the final delivery).
+ */
+export const WEATHER_BONUS_OUTCOMES = [
+  "applied",
+  "withheld_rate",
+  "withheld_payload",
+  "no_ifr",
+  "not_live",
+  "in_transit",
+] as const;
+export const weatherBonusOutcomeSchema = z.enum(WEATHER_BONUS_OUTCOMES);
+export type WeatherBonusOutcome = z.infer<typeof weatherBonusOutcomeSchema>;
+
+export const missionWeatherSchema = z.object({
+  departure: weatherCheckSchema.optional(),
+  arrival: weatherCheckSchema.optional(),
+  /** Bonus fraction actually applied to the payout at delivery (0 when bonuses were removed). */
+  bonus: finite().nonnegative().optional(),
+  /** Set by the connector at a delivered arrival; absent on older saves and before arrival. */
+  outcome: weatherBonusOutcomeSchema.optional(),
+  /** The counted end that set the bonus (applied or withheld); absent = none. */
+  bonusFrom: z.enum(["departure", "arrival"]).optional(),
+  /**
+   * The ends the payout counted when they are not this mission's own: on the final leg of a
+   * transit chain, the FIRST leg's departure and this arrival. Absent = the own ends counted.
+   */
+  chain: z
+    .object({
+      legs: z.number().int().min(2),
+      departure: weatherCheckSchema.optional(),
+      arrival: weatherCheckSchema.optional(),
+    })
+    .optional(),
+});
+export type MissionWeather = z.infer<typeof missionWeatherSchema>;
 
 /** One flown leg of a transit job (docs/ECONOMY.md "Transit cargo"). */
 export const jobTransitLegSchema = z.object({
@@ -77,6 +150,13 @@ export const jobTransitLegSchema = z.object({
   noBonus: z.boolean().optional(),
   /** The leg departed underloaded (payload check): the final payout has no bonuses. */
   payloadMismatch: z.boolean().optional(),
+  /**
+   * METAR checks frozen on this leg (its origin at departure, its destination at arrival).
+   * The final delivery's weather bonus uses the FIRST leg's departure check and the final
+   * leg's arrival check (docs/ECONOMY.md "Weather bonus on transit cargo"); absent on legs
+   * flown before the weather bonus existed.
+   */
+  weather: missionWeatherSchema.optional(),
   /** Wall clock of the arrival, ISO 8601. */
   arrivedAt: z.string(),
 });
@@ -293,6 +373,8 @@ export const missionSchema = z.object({
   wear: finite().nonnegative().optional(),
   /** Cargo vs sim payload: live preview while loaded, frozen at departure. */
   payloadCheck: payloadCheckSchema.optional(),
+  /** METAR flight category at departure (origin) and arrival (destination); weather bonus. */
+  weather: missionWeatherSchema.optional(),
   /**
    * Jobs whose final destination lies beyond this leg: unloaded in transit at the mission
    * destination and paid only on their final delivery.

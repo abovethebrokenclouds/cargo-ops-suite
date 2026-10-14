@@ -59,7 +59,7 @@ total  = max(0, round(gross − late penalty − damage))
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | kind       | cargo 1.0, fragile 1.3, express 1.5, medical 1.8, hazmat 1.6, **bush 1.4** (the plan lists five values for six kinds; bush sits between fragile and the critical kinds) |
 | load       | n^-0.3 for n handling units (bulk discount; 1 for single-unit jobs)                                                                                                     |
-| conditions | 1 + 0.15 IFR + 0.15 night + 0.20 weather — **1.00 in P3**: IFR/weather need METAR (P5) and night needs the sim's zulu time, which the protocol does not carry yet       |
+| conditions | 1 + **weather bonus** (+0.05 IFR, +0.10 LIFR from the live METAR at departure/arrival, see "Weather bonus"); night is not observed yet (needs the sim's zulu time)      |
 | reputation | tier = floor(reputation / 20) → 0–5                                                                                                                                     |
 | landing    | A+ 1.10, A 1.05, B 1.00, C 1.00, D 0.85, E 0.60, F 0.60 (the plan's five values over seven grades); no touchdown recorded → 1.00                                        |
 | late       | 10 % of gross per late hour, pro rata, capped at 100 %; late = flight block minutes − job time limit                                                                    |
@@ -92,6 +92,111 @@ is general cargo, 840 kg, 1 unit, 287.7 nm. Replaying `demo-kmem-katl.jsonl`
 (landing B at −142 fpm / 1.18 G, block ≈ 119 min, on time) pays
 0.015 × 840 × 287.7 × 1.8896377 = 6,849.98 × 1.04 = 7,123.98 → **$7,124**, cash
 250,000 → 257,124, reputation 50 → 52 (`connector/test/economy.test.ts`).
+
+## Weather bonus
+
+Flying into or out of real IFR weather pays a little more. Code:
+`packages/economy/src/weather-bonus.ts` (pure, shared by the connector and the browser),
+applied on the payout's **conditions** line; the connector's engine freezes the weather.
+
+- **What is recorded.** The METAR flight category (FAA VFR / MVFR / IFR / LIFR, from
+  `packages/weather`) of the **origin when the mission departs** and of the **destination
+  when it arrives** (Arrived: parked, engines off, brake set). Each end is frozen on the
+  mission (`mission.weather.departure` / `.arrival`) with the station, the category, the
+  report's origin (`live` or `sample`), the raw text, observation and fetch times, the
+  telemetry `source` (`sim`, `replay`, `demo`), whether it may count, and a message. It is
+  logged as `Weather (<source>) …`.
+- **Where the report comes from.** The METAR the connector **already holds** for the station
+  (`WeatherService.peek`): no extra request is made. Live reports exist only when the
+  connector runs online and a page showing the route weather (Live Flight, the job board)
+  has fetched them with **Online weather** on; otherwise the end is unknown.
+- **Which reports count (all must hold).** A **live** aviationweather.gov report (never a
+  SAMPLE one); **simulator** telemetry (replays and the demo never earn it); not stale (no
+  failed refresh since), fetched at most **15 min** and observed at most **90 min** before
+  the moment it is frozen, and neither time more than **5 min after** it (a report from the
+  future is not current; small clock skew is tolerated); a known category. Anything else is
+  **unknown: no bonus and no penalty**.
+- **The payout re-checks every end.** An end only counts when its recorded `eligible` flag is
+  true **and** it was recorded under `sim` telemetry with a `live` METAR and a known category;
+  the flag alone is never trusted. A career import also clears `eligible` on any check
+  (mission or transit leg) that claims it without sim telemetry and a live METAR.
+
+| Category at an end | Bonus |
+| ------------------ | ----- |
+| VFR, MVFR          | 0     |
+| IFR                | +5 %  |
+| LIFR               | +10 % |
+
+```
+weather bonus = min(10 %, max(bonus at departure, bonus at arrival))
+conditions    = 1 + weather bonus            (1.00 when bonuses are removed)
+```
+
+- The larger end counts; both ends never add up (LIFR at both ends is still +10 %).
+- **Bonus-eligible flights only.** noBonus (sim rate above 1×) and an underloaded departure
+  (payloadMismatch) set conditions to 1.00 like every bonus; the note says the weather bonus
+  was withheld. Lateness and damage still apply to the larger gross.
+- Board estimates never include it (the weather is not known in advance).
+- The breakdown carries `weatherBonus` (0.05 / 0.10) when it was paid; the mission keeps
+  `weather.bonus`, the fraction actually applied (0 when withheld or none). At a delivered
+  arrival the connector also records `weather.outcome` (`applied`, `withheld_rate`,
+  `withheld_payload`, `no_ifr`, `not_live`, or `in_transit` for a leg that delivered
+  nothing), `weather.bonusFrom` (the counted end that set or would have set the bonus) and,
+  on the final leg of a transit chain, `weather.chain` (the chain's counted ends and its leg
+  count). The logbook shows the category at both ends and the bonus, and explains it from
+  these fields only; older saves without them get no stated reason.
+
+Worked examples (`packages/economy/test/weather-bonus.test.ts`), worked example 1 (500 kg,
+100 nm, general cargo, tier 2, landing B, base $1,266.06) with weather:
+
+1. Live IFR at departure, VFR at arrival: × 1.05 → 1,266.06 × 1.05 × 1.04 = 1,382.54 →
+   **$1,383**.
+2. Live IFR out, LIFR in: the larger end, × 1.10 → 1,448.38 → **$1,448**.
+3. Live LIFR at both ends: still × 1.10 (cap) → **$1,448**.
+4. Live LIFR with sim rate above 1× (noBonus): conditions and reputation 1.00 → **$1,266**.
+5. SAMPLE LIFR at both ends, or no weather: exactly example 1 → **$1,317**.
+6. Live IFR with an underloaded departure: bonus withheld → **$1,266**.
+
+Connector (`connector/test/weather-bonus.test.ts`): the acceptance replay with the
+connector's default SAMPLE weather records KMEM VFR / KATL MVFR (origin `sample`, source
+`replay`) and pays $7,124 as before; a SAMPLE LIFR, a live LIFR under replay telemetry, a
+stale report or no weather all pay $7,124; live IFR at KMEM and LIFR at KATL under sim
+telemetry pay 6,849.98 × 1.10 × 1.04 = 7,836.38 → **$7,836**.
+
+### Weather bonus on transit cargo
+
+A job flown over several legs (see "Transit cargo") is paid once, at its final delivery, so
+its weather bonus is decided there too. Rule (the simplest fair one; the plan is silent):
+
+- **Recorded on the legs that actually fly.** Every leg freezes its own two ends exactly as a
+  direct mission does: its origin at departure, its destination at arrival
+  (`mission.weather`). A leg that only unloads cargo in transit records both checks but
+  decides no bonus (`mission.weather.bonus` stays absent). Each stored job keeps the checks of
+  every leg it flew (`job.transit.legs[i].weather`, no bonus field).
+- **The chain's two ends count.** At the final delivery the bonus uses the **departure check
+  of the first leg's origin** (from the job's first recorded leg) and the **arrival check of
+  the final leg's destination**; the same eligibility rules, `max` of the two ends and the
+  10 % cap apply. Intermediate stops (the transit airport's arrival on one leg and departure
+  on the next) are recorded but never set the bonus, so a chain earns no more than the same
+  job flown direct.
+- **Only if no leg lost bonuses.** A leg flown above 1× (noBonus) or departed underloaded
+  (payloadMismatch) removes every bonus of the final payout, the weather bonus included (the
+  note says it was withheld), as for any transit bonus.
+- **Older legs.** A first leg flown before the weather bonus existed has no recorded
+  departure check: only the final arrival can count (nothing is inferred).
+- Code: `chainWeather` / `finalDeliveryTerms` in `packages/economy/src/transit.ts`. With jobs
+  from different chains on one leg, each job's breakdown carries its own `weatherBonus` and
+  the mission's `weather.bonus` shows the largest one paid.
+
+Examples (`packages/economy/test/transit.test.ts` "weather bonus on transit cargo",
+`connector/test/weather-transit.test.ts` on the synthetic KMEM → KATL → KRDU legs with
+sim-stamped test frames and hand-made live reports):
+
+1. KMEM IFR at the first departure, KATL LIFR at the stop, KRDU VFR at the final arrival:
+   **+5 %** from KMEM; the KATL LIFR is recorded on both legs and never counts.
+2. KMEM VFR, KATL VFR, KRDU LIFR: **+10 %** from the final arrival.
+3. KMEM VFR, KATL LIFR, KRDU MVFR: **no bonus** (only the stop was IFR/LIFR).
+4. KMEM IFR with leg 1 flown above 1×: bonus **withheld** at the final delivery.
 
 ## Mission lifecycle and verification (plan §6.4)
 
@@ -129,11 +234,14 @@ is general cargo, 840 kg, 1 unit, 287.7 nm. Replaying `demo-kmem-katl.jsonl`
   it parked, lease hours) and wear are booked on the aborted mission (`mission.costs`) and
   the aircraft is released where it parked. No payout, no reputation change (a crash on
   that flight is settled as a crash, without the −20: no cargo was being flown for pay).
+  An aborted mission keeps only its departure weather check: no arrival is frozen and no
+  weather bonus is decided.
 - **connector restart**: a fresh connector has no running flight and the tracker's
   in-memory leg (distance, fuel, landings) is gone, so a lost flight is never resumed or
   billed. At startup every aircraft left `in_flight` (mission, ferry or an aborted flight)
   is available again, and a mission left `in_progress` goes back to `loaded` (its start,
-  flown distance and departure payload check cleared). The first sample decides: on the
+  flown distance, departure payload check and departure weather check cleared; the next
+  departure freezes a fresh METAR check). The first sample decides: on the
   ground within **3 nm** of the origin → it stays loaded and flies normally from the next
   departure; otherwise (airborne or elsewhere) → `aborted` (failure code
   `flight_lost`), jobs back to accepted / transit cargo back at its stop, no penalty.
@@ -241,6 +349,7 @@ rest of the economy:
 | Payout          | **full payout on the final delivery only** (job origin → destination great circle, kind, units, board demand factor, current reputation, landing grade of the final leg); intermediate legs pay nothing; never partial credit                                                                                                                                                                                              |
 | Deadline        | the job's time limit covers the **whole chain**: Σ block minutes of every leg + ground time between legs on the company clock − free storage minutes; late minutes at the final delivery use the normal late penalty                                                                                                                                                                                                       |
 | Bonuses, damage | a leg flown above 1× (noBonus) or departed underloaded removes the bonuses of the final payout; a fragile touchdown above 1.5 G on **any** leg damages it                                                                                                                                                                                                                                                                  |
+| Weather bonus   | every leg records its own departure/arrival METAR checks; the final delivery uses the **first leg's departure** and the **final leg's arrival** (see "Weather bonus on transit cargo")                                                                                                                                                                                                                                     |
 | Reputation      | a leg with at least one final delivery: the normal rule over those jobs; a leg that only carried transit cargo: 0, except a hard landing (D/E/F) −5                                                                                                                                                                                                                                                                        |
 | Failure         | a crash or a failed verification fails every job on board (no partial credit). Cargo already stored on an earlier leg and lost by a failed **non-crash** verification (wrong airport, short distance, teleport, > 8×) counts as abandoned: **−3** reputation each and `job.abandoned`, exactly like `job.release` (a crash already costs −20). Abort / unload puts transit cargo back at its stop with its clock unchanged |
 | Abandon         | `job.release` of an in-transit job: failed, no payout, reputation **−3** (`job.abandoned`)                                                                                                                                                                                                                                                                                                                                 |
@@ -280,7 +389,8 @@ confirmation dialog. The mission strip shows a leg already late as "… late alr
 deadlineGameMs}` when cargo is stored; `job.completed` only on final delivery;
 `job.abandoned`. The jobs domain gains `inTransit` (each job carries `transit`: location,
 arrival time and company clock, chain minutes so far, storage, free minutes, deadline and
-every flown leg with its block and ground minutes, grade, peak G and bonus flags).
+every flown leg with its block and ground minutes, grade, peak G, bonus flags and the weather
+checks frozen on it).
 
 ### Worked examples (`packages/economy/test/transit.test.ts`)
 
@@ -325,7 +435,10 @@ origin) and an index on `(location, status)`; settings `economy.phase = 8`. The 
 record lives in the job row's JSON. Career export **version 5** may contain `in_transit`
 jobs, long-haul jobs and missions with `transitJobIds`; versions 1–4 import unchanged (they
 have no transit cargo), and an older connector refuses a version 5 file rather than misread
-it.
+it. The weather checks (`mission.weather`, `job.transit.legs[i].weather`) and the
+breakdown's `weatherBonus` are optional fields of the same mission and job JSON: a version 5
+export carries them and imports them unchanged (no format bump; tested in
+`connector/test/weather-transit.test.ts`), and v5 files without them import as before.
 
 ## Storage and exports
 
@@ -594,8 +707,8 @@ tagged DEMO with all actions disabled.
 ## Deferred
 
 - Done in P5 part 2 (below): FBOs, insurance, dynamic demand and fuel prices, milestones.
-  Still open: IFR/night/weather condition bonuses, small/GA airports. Transit cargo is done
-  (see "Transit cargo").
+  Still open: the night condition bonus, small/GA airports. The IFR/LIFR weather bonus and
+  transit cargo are done (see "Weather bonus" and "Transit cargo").
 - Leases are never cancelled for non-payment: their monthly fee is booked even when it
   drives cash negative (only loans have a missed-payment path).
 
