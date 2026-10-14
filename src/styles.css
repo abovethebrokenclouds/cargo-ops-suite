@@ -49,6 +49,16 @@
   --color-mvfr: var(--mvfr);
   --color-ifr: var(--ifr);
   --color-lifr: var(--lifr);
+  --color-console: var(--console);
+  --color-console-foreground: var(--console-foreground);
+  --color-console-panel: var(--console-panel);
+  --color-console-bezel: var(--console-bezel);
+  --color-phosphor-green: var(--phosphor-green);
+  --color-phosphor-amber: var(--phosphor-amber);
+  --color-phosphor-cyan: var(--phosphor-cyan);
+  --color-phosphor-red: var(--phosphor-red);
+  --color-lamp-off: var(--lamp-off);
+  --color-lamp-off-foreground: var(--lamp-off-foreground);
 }
 
 /* Design tokens — docs/CARGO_OPS_PLAN.md §4.1. Components use token classes only. */
@@ -93,6 +103,20 @@
   --mvfr: oklch(0.7 0.17 250);
   --ifr: oklch(0.66 0.22 25);
   --lifr: oklch(0.68 0.24 330);
+
+  /* Flight operations room (Ops dashboard): near-black consoles with phosphor readouts.
+     Green = GO / nominal, amber = hold / call-sign strips, cyan = information, red = NO-GO.
+     src/lib/a11y/contrast.test.ts checks every pair on the console surfaces. */
+  --console: oklch(0.1 0.012 250);
+  --console-foreground: oklch(0.93 0.02 200);
+  --console-panel: oklch(0.135 0.014 248);
+  --console-bezel: oklch(0.34 0.02 245);
+  --phosphor-green: oklch(0.86 0.19 150);
+  --phosphor-amber: oklch(0.84 0.15 78);
+  --phosphor-cyan: oklch(0.86 0.12 205);
+  --phosphor-red: oklch(0.72 0.19 25);
+  --lamp-off: oklch(0.2 0.01 250);
+  --lamp-off-foreground: oklch(0.8 0.01 250);
 
   --gradient-text: linear-gradient(100deg, var(--primary), var(--accent) 45%, var(--tertiary));
   --gradient-glow:
@@ -460,6 +484,159 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* ---- Flight operations room (Ops dashboard) ---- */
+/* Room backdrop: near-black with a faint phosphor bloom, CRT scanlines (static) and one slow
+   scan band. The band (and any flicker) is off under prefers-reduced-motion. Needs
+   `relative isolate`. */
+@keyframes crt-scan {
+  from {
+    transform: translateY(-30%);
+  }
+  to {
+    transform: translateY(130%);
+  }
+}
+@utility console-room {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background:
+    radial-gradient(
+      70% 50% at 50% 0%,
+      color-mix(in oklab, var(--phosphor-cyan) 7%, transparent),
+      transparent 70%
+    ),
+    var(--console);
+  border: 1px solid color-mix(in oklab, var(--console-bezel) 70%, transparent);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    inset 0 0 0 1px oklch(0 0 0 / 60%),
+    inset 0 0 80px 0 oklch(0 0 0 / 55%),
+    var(--shadow-panel);
+  color: var(--console-foreground);
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 30;
+    pointer-events: none;
+    background: repeating-linear-gradient(0deg, transparent 0 2px, oklch(0 0 0 / 16%) 2px 3px);
+    mix-blend-mode: multiply;
+  }
+  &::before {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: 0;
+    height: 35%;
+    z-index: 30;
+    pointer-events: none;
+    background: linear-gradient(
+      180deg,
+      transparent,
+      color-mix(in oklab, var(--phosphor-cyan) 4%, transparent) 50%,
+      transparent
+    );
+    animation: crt-scan 9s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    &::before {
+      animation: none;
+      display: none;
+    }
+  }
+}
+
+/* Console station: bevelled bezel around a dark screen. */
+@utility console-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  background: linear-gradient(180deg, oklch(1 0 0 / 2.5%), transparent 30%), var(--console-panel);
+  border: 1px solid var(--console-bezel);
+  border-radius: var(--radius-sm);
+  box-shadow:
+    inset 0 1px 0 0 oklch(1 0 0 / 7%),
+    inset 0 -1px 0 0 oklch(0 0 0 / 60%),
+    0 0 0 3px color-mix(in oklab, var(--console) 85%, transparent),
+    0 0 0 4px color-mix(in oklab, var(--console-bezel) 45%, transparent);
+}
+
+/* Call-sign header strip of a console. */
+@utility console-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--console-bezel);
+  background: color-mix(in oklab, var(--console-bezel) 22%, var(--console-panel));
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--phosphor-amber);
+}
+
+/* Thin rule between rows on a console screen. */
+@utility console-rule {
+  border-color: color-mix(in oklab, var(--console-bezel) 55%, transparent);
+}
+
+/* Phosphor readout: mono tabular digits with a soft glow. Colour via text-phosphor-*. */
+@utility readout {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 10px color-mix(in oklab, currentColor 45%, transparent);
+  &[data-empty] {
+    color: var(--muted-foreground);
+    text-shadow: none;
+    font-weight: 400;
+  }
+}
+@utility readout-label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+/* Status-board lamp. `data-state` go | hold | nogo | info lights it; nodata stays dark grey. */
+@utility lamp {
+  border: 1px solid var(--console-bezel);
+  border-radius: var(--radius-sm);
+  background: var(--lamp-off);
+  color: var(--lamp-off-foreground);
+  box-shadow: inset 0 2px 8px 0 oklch(0 0 0 / 55%);
+  &[data-state="go"] {
+    color: var(--phosphor-green);
+  }
+  &[data-state="hold"] {
+    color: var(--phosphor-amber);
+  }
+  &[data-state="nogo"] {
+    color: var(--phosphor-red);
+  }
+  &[data-state="info"] {
+    color: var(--phosphor-cyan);
+  }
+  &:is([data-state="go"], [data-state="hold"], [data-state="nogo"], [data-state="info"]) {
+    border-color: color-mix(in oklab, currentColor 50%, var(--console-bezel));
+    background: color-mix(in oklab, currentColor 12%, var(--console));
+    box-shadow:
+      inset 0 0 16px 0 color-mix(in oklab, currentColor 20%, transparent),
+      0 0 14px -4px color-mix(in oklab, currentColor 55%, transparent);
+    text-shadow: 0 0 8px color-mix(in oklab, currentColor 55%, transparent);
   }
 }
 
