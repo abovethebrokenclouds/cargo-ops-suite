@@ -79,17 +79,6 @@ test("accept → load → fly (replay) → deliver: payout in the API and the lo
   expect(job).toBeDefined();
   if (!job) return;
 
-  // Load while the replay is airborne. At 20× a pass lasts about 18 s and block-out (which
-  // starts the mission and freezes the payload check at `departure`) comes about 1 s into
-  // each pass; loading at an arbitrary moment let the next block-out land before the strip
-  // rendered its `preview`, a race a slower runner lost. From Climb/Cruise the next
-  // block-out is several seconds away.
-  const flightPage = await page.context().newPage();
-  await flightPage.goto("/flight");
-  await expect(flightPage.getByTestId("phase-label")).toHaveText(/^(Climb|Cruise)$/, {
-    timeout: 30_000,
-  });
-  await flightPage.close();
   await page.getByLabel(`Select ${jobId}`).check();
   await page.getByTestId("load-mission").click();
   await expect(page.getByTestId("command-message")).toContainText("Mission loaded");
