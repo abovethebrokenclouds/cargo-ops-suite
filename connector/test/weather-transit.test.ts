@@ -20,6 +20,7 @@ import {
   type JobsState,
   type Mission,
   type Result,
+  type WeatherCheck,
 } from "../src/protocol";
 import {
   airportLookup,
@@ -191,6 +192,7 @@ describe("weather bonus on a two-leg transit delivery (KMEM → KATL → KRDU)",
       assert.equal(leg1.weather?.arrival?.station, "KATL");
       assert.equal(leg1.weather?.arrival?.category, "LIFR");
       assert.equal(leg1.weather?.bonus, undefined);
+      assert.equal(leg1.weather?.outcome, "in_transit");
       // The stored job carries the checks of the leg it flew.
       const l1 = stored.transit?.legs[0]?.weather;
       assert.equal(l1?.departure?.category, "IFR");
@@ -210,6 +212,13 @@ describe("weather bonus on a two-leg transit delivery (KMEM → KATL → KRDU)",
       assert.equal(leg2.payout?.jobs[0]?.weatherBonus, 0.05);
       assert.equal(leg2.weather?.bonus, 0.05);
       assert.equal(leg2.payout?.total, expectedTotal(job, leg2, rep, stored));
+      // The mission records the ends that counted (the chain's) and which one set the bonus.
+      assert.equal(leg2.weather?.outcome, "applied");
+      assert.equal(leg2.weather?.bonusFrom, "departure");
+      assert.equal(leg2.weather?.chain?.legs, 2);
+      assert.equal(leg2.weather?.chain?.departure?.station, "KMEM");
+      assert.equal(leg2.weather?.chain?.departure?.category, "IFR");
+      assert.equal(leg2.weather?.chain?.arrival?.station, "KRDU");
 
       // Weather lives in the job and mission JSON: the v5 career export carries it and an
       // import into a fresh database round-trips it unchanged (no format bump needed).
@@ -274,10 +283,72 @@ describe("weather bonus on a two-leg transit delivery (KMEM → KATL → KRDU)",
       assert.equal(leg2.weather?.departure?.category, "LIFR"); // recorded on the leg
       assert.equal(leg2.payout?.jobs[0]?.weatherBonus, undefined);
       assert.equal(leg2.weather?.bonus, 0);
+      // Not "withheld": the chain's ends (KMEM VFR, KRDU MVFR) had no IFR/LIFR.
+      assert.equal(leg2.weather?.outcome, "no_ifr");
+      assert.equal(leg2.weather?.bonusFrom, undefined);
+      assert.equal(leg2.weather?.chain?.departure?.station, "KMEM");
+      assert.equal(leg2.weather?.chain?.departure?.category, "VFR");
       const cond = leg2.payout?.jobs[0]?.factors.find((f) => f.key === "conditions");
       assert.equal(cond?.value, 1);
       assert.equal(leg2.payout?.total, expectedTotal(job, leg2, rep, stored));
       r.close();
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it("career import distrusts weather checks claiming eligibility without sim + live", () => {
+    const tmp = tempDir();
+    const { frames, leg2Start } = twoLegs();
+    try {
+      const r = rig(tmp.dir, frames, (s) => live("VFR", s));
+      r.ok("jobs.refresh", { airport: "KMEM", destination: "KRDU" });
+      const job = r.jobs().available.find((j) => j.destination === "KRDU");
+      assert.ok(job);
+      r.ok("job.accept", { jobId: job.id });
+      r.ok("mission.load", { jobIds: [job.id], destination: "KATL" });
+      r.fake.playRange(0, leg2Start);
+      assert.equal(r.mission().status, "delivered");
+      const exported = exportCareer(r.repo, "demo", NOW);
+      r.close();
+
+      // Forge the in-transit job's first-leg checks and the mission's departure: demo
+      // telemetry and a SAMPLE LIFR report (or a SAMPLE report alone), but eligible: true.
+      const forged = JSON.parse(JSON.stringify(exported)) as typeof exported;
+      const forge = (c: WeatherCheck): WeatherCheck => ({
+        ...c,
+        category: "LIFR",
+        metarOrigin: "sample",
+        source: "demo",
+        eligible: true,
+      });
+      const fj = forged.jobs.find((j) => j.id === job.id);
+      assert.equal(fj?.status, "in_transit");
+      const legW = fj?.transit?.legs[0]?.weather;
+      assert.ok(legW?.departure && legW.arrival);
+      legW.departure = forge(legW.departure);
+      legW.arrival = { ...legW.arrival, category: "IFR", metarOrigin: "sample", eligible: true };
+      const fm = forged.missions.find((m) => m.weather?.departure);
+      assert.ok(fm?.weather?.departure);
+      fm.weather.departure = forge(fm.weather.departure);
+
+      const tmp2 = tempDir();
+      try {
+        const s2 = openStorage(tmp2.dir, "demo");
+        const repo2 = new EconomyRepo(s2);
+        const res = importCareer(repo2, "demo", forged);
+        assert.ok(res.ok, JSON.stringify(res));
+        const back = exportCareer(repo2, "demo", NOW);
+        const w = back.jobs.find((j) => j.id === job.id)?.transit?.legs[0]?.weather;
+        assert.equal(w?.departure?.category, "LIFR"); // kept as recorded ...
+        assert.equal(w?.departure?.eligible, false); // ... but never trusted to pay
+        assert.equal(w?.arrival?.eligible, false);
+        const bm = back.missions.find((m) => m.id === fm.id);
+        assert.equal(bm?.weather?.departure?.eligible, false);
+        s2.close();
+      } finally {
+        tmp2.cleanup();
+      }
     } finally {
       tmp.cleanup();
     }

@@ -88,6 +88,7 @@ import {
   type PayloadCheck,
   type PayloadState,
   type MissionWeather,
+  type PayoutBreakdown,
   type WeatherCheck,
 } from "../../protocol";
 import {
@@ -114,6 +115,8 @@ import {
   checkPayload,
   checkWeather,
   type WeatherReportInput,
+  weatherBonus,
+  weatherOutcome,
   clampReputation,
   computePayout,
   deliveryReputationDelta,
@@ -669,6 +672,43 @@ export class EconomyEngine {
     this.weatherLookup = lookup;
   }
 
+  /**
+   * The weather a delivered leg records (docs/ECONOMY.md "Weather bonus"): the bonus actually
+   * paid, taken from the payout itself so the logbook cannot disagree; the outcome and the end
+   * that set it; and, on the final leg of a transit chain, the chain ends the payout counted
+   * (they are not this leg's own ends). With jobs from different chains, the job paying the
+   * largest bonus (then the largest one earned) is described. A leg that delivered nothing
+   * (transit cargo only) has no bonus yet: it is decided at the final delivery.
+   */
+  private deliveredWeather(
+    weather: MissionWeather,
+    terms: ReturnType<typeof finalDeliveryTerms>[],
+    breakdowns: PayoutBreakdown[],
+  ): MissionWeather {
+    if (terms.length === 0) return { ...weather, outcome: "in_transit" };
+    const paid = breakdowns.map((b) => b.weatherBonus ?? 0);
+    const earned = terms.map((t) => weatherBonus(t.weather).bonus);
+    let i = 0;
+    for (let k = 1; k < terms.length; k++) {
+      if (
+        (paid[k] ?? 0) > (paid[i] ?? 0) ||
+        ((paid[k] ?? 0) === (paid[i] ?? 0) && (earned[k] ?? 0) > (earned[i] ?? 0))
+      ) {
+        i = k;
+      }
+    }
+    const t = terms[i];
+    if (!t) return weather;
+    const o = weatherOutcome(t.weather, t);
+    return {
+      ...weather,
+      bonus: Math.max(0, ...paid),
+      outcome: o.outcome,
+      ...(o.bonusFrom ? { bonusFrom: o.bonusFrom } : {}),
+      ...(t.legs > 1 ? { chain: { legs: t.legs, ...t.weather } } : {}),
+    };
+  }
+
   /** Freeze the METAR flight category at one end of a mission (docs/ECONOMY.md). */
   private weatherCheckNow(station: string, stage: WeatherCheck["stage"]): WeatherCheck {
     let report: WeatherReportInput | null = null;
@@ -1100,13 +1140,7 @@ export class EconomyEngine {
       costs: settled.costs,
       net: round2(total - costTotal),
     };
-    // The bonus actually paid, taken from the payout itself so the logbook cannot disagree.
-    // A leg that delivered nothing (transit cargo only) has no bonus to show yet; with jobs
-    // from different chains the largest one paid is shown.
-    const appliedWeather: MissionWeather =
-      finals.length > 0
-        ? { ...weather, bonus: Math.max(0, ...breakdowns.map((b) => b.weatherBonus ?? 0)) }
-        : weather;
+    const appliedWeather = this.deliveredWeather(weather, terms, breakdowns);
     this.mission = {
       ...base,
       status: "delivered",

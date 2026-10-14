@@ -140,6 +140,7 @@ describe("weather bonus on the replayed KMEM → KATL mission", () => {
       );
       assert.match(dep?.message ?? "", /sample METAR, never a bonus/);
       assert.equal(mission.weather?.bonus, 0);
+      assert.equal(mission.weather?.outcome, "not_live");
       assert.equal(conditions(mission)?.value, 1);
       assert.equal(mission.payout?.total, EXPECTED_PAYOUT);
       assert.equal(mission.payout?.jobs[0]?.weatherBonus, undefined);
@@ -212,6 +213,10 @@ describe("weather bonus on the replayed KMEM → KATL mission", () => {
       assert.equal(mission.weather?.departure?.source, "sim");
       assert.equal(mission.weather?.arrival?.category, "LIFR");
       assert.equal(mission.weather?.bonus, 0.1);
+      // The mission records what happened and which end set it (the UI reads this).
+      assert.equal(mission.weather?.outcome, "applied");
+      assert.equal(mission.weather?.bonusFrom, "arrival");
+      assert.equal(mission.weather?.chain, undefined);
       assert.equal(conditions(mission)?.value, 1.1);
       assert.match(conditions(mission)?.note ?? "", /LIFR at KATL arrival \(live METAR\) \+10 %/);
       // 6,849.98 × 1.10 (conditions) × 1.04 (tier 2) = 7,836.38 → $7,836.
