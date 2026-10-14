@@ -51,7 +51,7 @@ jobs:
 
       - name: W-01 SPA on 127.0.0.1:4311, WebSocket welcome (replay)
         timeout-minutes: 30
-        run: node scripts/ci/check-launcher.mjs --port 4311 --timeout-ms 1500000 --pid $env:LAUNCHER_PID --log (Join-Path $env:CARGO_OPS_CI_LOGS "launcher.out.log")
+        run: node scripts/ci/check-launcher.mjs --port 4311 --timeout-ms 1500000 --pid $env:LAUNCHER_PID --log (Join-Path $env:CARGO_OPS_CI_LOGS "launcher.out.log") --err-log (Join-Path $env:CARGO_OPS_CI_LOGS "launcher.err.log")
 
       - name: W-40 install Playwright Chromium (CI runner only)
         timeout-minutes: 10
@@ -76,6 +76,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:CARGO_OPS_CI_LOGS | Out-Null
           $logs = Join-Path $env:LOCALAPPDATA "CargoOps\logs"
           if (Test-Path $logs) { Copy-Item -Recurse $logs (Join-Path $env:CARGO_OPS_CI_LOGS "CargoOps-logs") }
+          # Also into the job log: the artifact is not always reachable for whoever reads the run.
+          Get-ChildItem $env:CARGO_OPS_CI_LOGS -Recurse -Filter *.log -File | ForEach-Object {
+            Write-Host "----- $($_.Name)"
+            Get-Content $_.FullName -Tail 200 | Write-Host
+          }
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -160,6 +165,10 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:CARGO_OPS_CI_LOGS | Out-Null
           $logs = Join-Path $env:LOCALAPPDATA "CargoOps\logs"
           if (Test-Path $logs) { Copy-Item -Recurse $logs (Join-Path $env:CARGO_OPS_CI_LOGS "CargoOps-logs") }
+          Get-ChildItem $env:CARGO_OPS_CI_LOGS -Recurse -Filter *.log -File | ForEach-Object {
+            Write-Host "----- $($_.Name)"
+            Get-Content $_.FullName -Tail 200 | Write-Host
+          }
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

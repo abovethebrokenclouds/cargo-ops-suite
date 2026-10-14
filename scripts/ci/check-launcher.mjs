@@ -7,7 +7,9 @@
 //
 //   node scripts/ci/check-launcher.mjs [--port 4311] [--timeout-ms 900000]
 //                                      [--pid <launcher pid>] [--log <launcher output file>]
-// --pid / --log make the wait fail fast when the launcher exits or reports a failure.
+//                                      [--err-log <launcher error file>]
+// --pid / --log make the wait fail fast when the launcher exits or reports a failure; the
+// tail of both logs is then part of the error so the job log shows why.
 
 import { existsSync, readFileSync } from "node:fs";
 import { assert, assertEqual, log, run, sessionToken, waitFor, wsSession } from "./lib.mjs";
@@ -24,6 +26,12 @@ function alive(pid) {
   }
 }
 
+function tail(file, lines = 40) {
+  if (!file || !existsSync(file)) return `${file ?? "(no file)"}: missing`;
+  const text = readFileSync(file, "utf8").trimEnd();
+  return `--- ${file} (last ${lines} lines)\n${text.split(/\r?\n/).slice(-lines).join("\n") || "(empty)"}`;
+}
+
 function arg(name, fallback) {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : fallback;
@@ -37,12 +45,22 @@ run("check-launcher", async () => {
   log(`waiting up to ${timeoutMs / 1000} s for ${base}/api/health`);
   const pid = arg("--pid", undefined);
   const logFile = arg("--log", undefined);
+  const errFile = arg("--err-log", undefined);
+  const logs = () =>
+    [logFile, errFile]
+      .filter(Boolean)
+      .map((f) => tail(f))
+      .join("\n");
   await waitFor(
     async () => {
-      if (pid && !alive(Number(pid))) throw new Error(`launcher (pid ${pid}) exited early`);
+      if (pid && !alive(Number(pid))) {
+        throw new Error(`launcher (pid ${pid}) exited early\n${logs()}`);
+      }
       if (logFile && existsSync(logFile)) {
         const failure = FAILURE.exec(readFileSync(logFile, "utf8"));
-        if (failure) throw new Error(`launcher exited early: output says "${failure[0]}"`);
+        if (failure) {
+          throw new Error(`launcher exited early: output says "${failure[0]}"\n${logs()}`);
+        }
       }
       return (await fetch(`${base}/api/health`).catch(() => null))?.ok === true;
     },
