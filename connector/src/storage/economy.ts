@@ -10,6 +10,7 @@ import {
   LEDGER_CATEGORIES,
   LOAN_STATUSES,
   OWNERSHIPS,
+  PILOT_RATINGS,
   SYSTEM_KEYS,
   collateralSchema,
   defectSchema,
@@ -17,6 +18,8 @@ import {
   maintenanceOrderSchema,
   jobSchema,
   missionSchema,
+  pilotLegSchema,
+  pilotPnlMonthSchema,
   pnlMonthSchema,
   touchdownSchema,
   type Job,
@@ -40,6 +43,7 @@ import {
   type DemandEventRecord,
   type FboRecord,
   type FboTransactionRecord,
+  type HiredPilotRecord,
   type ListingRecord,
   type MilestoneRecord,
 } from "../economy";
@@ -104,6 +108,8 @@ export const companyRecordSchema = z.object({
       }),
     )
     .default([]),
+  // ---- hired pilots (absent in older records) ----
+  pilotCounter: z.number().int().nonnegative().default(0),
 });
 export type CompanyRecord = z.infer<typeof companyRecordSchema>;
 
@@ -298,6 +304,42 @@ export const demandEventRecordSchema: z.ZodType<DemandEventRecord, z.ZodTypeDef,
     startGameMs: z.number().finite().nonnegative(),
     endGameMs: z.number().finite().nonnegative(),
   });
+
+/** A hired pilot as stored (simulated operations; migration 9). */
+export const hiredPilotRecordSchema: z.ZodType<HiredPilotRecord, z.ZodTypeDef, unknown> = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  rating: z.enum(PILOT_RATINGS),
+  wageMonthly: z.number().finite().nonnegative(),
+  status: z.enum(["hired", "fired"]),
+  hiredGameMs: z.number().finite().nonnegative(),
+  hiredAt: z.number().finite(),
+  firedGameMs: z.number().finite().nonnegative().nullable(),
+  assignment: z
+    .object({
+      aircraftId: z.string().min(1),
+      origin: z.string().min(2).max(8),
+      destination: z.string().min(2).max(8),
+      sinceGameMs: z.number().finite().nonnegative(),
+      legs: z.number().int().nonnegative(),
+      nextDepartureGameMs: z.number().finite().nonnegative(),
+      leg: z
+        .object({
+          from: z.string().min(2).max(8),
+          to: z.string().min(2).max(8),
+          departGameMs: z.number().finite().nonnegative(),
+          arriveGameMs: z.number().finite().nonnegative(),
+        })
+        .nullable(),
+    })
+    .nullable(),
+  stopped: z
+    .object({ code: z.string(), message: z.string(), gameMs: z.number().finite().nonnegative() })
+    .nullable(),
+  legsFlown: z.number().int().nonnegative(),
+  pnl: z.array(pilotPnlMonthSchema),
+  recent: z.array(pilotLegSchema),
+});
 
 export const loanRecordSchema: z.ZodType<BookLoan, z.ZodTypeDef, unknown> = z.object({
   id: z.string().min(1),
@@ -831,6 +873,32 @@ export class EconomyRepo {
       );
   }
 
+  // ---- hired pilots (simulated operations) ----
+
+  savePilot(p: HiredPilotRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO hired_pilots (id, status, aircraft_id, json) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status,
+           aircraft_id = excluded.aircraft_id, json = excluded.json`,
+      )
+      .run(p.id, p.status, p.assignment?.aircraftId ?? null, JSON.stringify(p));
+  }
+
+  listPilots(): HiredPilotRecord[] {
+    const rows = this.db.prepare("SELECT json FROM hired_pilots").all() as Array<{
+      json: string;
+    }>;
+    return rows
+      .flatMap((r) => {
+        const p = parse(hiredPilotRecordSchema, r.json);
+        return p ? [p] : [];
+      })
+      .sort(
+        (a, b) => (Number(a.id.split("-").at(-1)) || 0) - (Number(b.id.split("-").at(-1)) || 0),
+      );
+  }
+
   saveMilestone(m: MilestoneRecord): void {
     this.db
       .prepare("INSERT OR IGNORE INTO milestones (id, game_at, at) VALUES (?, ?, ?)")
@@ -885,6 +953,7 @@ export class EconomyRepo {
       for (const e of changes.demandEvents) this.saveDemandEvent(e);
       if (changes.activity) this.saveDemandActivity(company.activity);
       for (const m of changes.milestones) this.saveMilestone(m);
+      for (const p of changes.pilots) this.savePilot(p);
     });
   }
 

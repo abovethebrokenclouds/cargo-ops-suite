@@ -11,6 +11,7 @@
 //   GET  /api/fbos?fbo&limit       → fbos domain + recent FBO transactions (own | modelled | sim_ai)
 //   GET  /api/fbos/quote?icao=XXXX → buy/build quote for an airport
 //   GET  /api/demand               → demand domain (indices ≠ 1 and active events)
+//   GET  /api/pilots               → hired pilots domain (simulated operations, never telemetry)
 //   GET  /api/logbook              → { flights } joined with their mission and payout
 //   GET  /api/export/csv           → logbook CSV (text/csv)
 //   GET  /api/export/gpx?flight=ID → one flight's track (application/gpx+xml)
@@ -110,6 +111,10 @@ export function economyApi(options: EconomyApiOptions) {
             events: repo.listAircraftEvents().slice(-200),
           },
         };
+      case "/api/pilots":
+        if (method !== "GET") return methodNotAllowed;
+        if (!session.economy) return { status: 404, body: { error: "not_found" } };
+        return { status: 200, body: session.economy.pilotsDomain() };
       case "/api/market":
         if (method !== "GET") return methodNotAllowed;
         if (!session.economy) return { status: 404, body: { error: "not_found" } };

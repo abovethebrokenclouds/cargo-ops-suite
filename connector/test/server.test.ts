@@ -174,6 +174,57 @@ describe("connector server (FakeSource over a real WebSocket)", () => {
     client.ws.close();
   });
 
+  it("pilot.* commands: only after an authenticated hello; the pilots delta is simulated", async () => {
+    // A command before the hello is never answered (socket closed), as for every command.
+    const early = await connectClient(wsUrl, origin);
+    early.send({
+      type: "command",
+      v: PROTOCOL_VERSION,
+      id: "early-hire",
+      name: "pilot.hire",
+      args: { rating: "turboprop" },
+    });
+    assert.equal((await early.closed).code, 4401);
+    assert.equal(early.messages.length, 0);
+    assert.equal(await upgradeStatus(wsUrl, "http://evil.example"), 403);
+    assert.equal(await upgradeStatus(`${wsUrl}?token=nope`, origin), 401);
+
+    const client = await connectClient(wsUrl, origin);
+    client.send(hello(connector.token));
+    await client.next((m) => m.type === "welcome");
+    client.send({
+      type: "command",
+      v: PROTOCOL_VERSION,
+      id: "hire",
+      name: "pilot.hire",
+      args: { rating: "turboprop" },
+    });
+    const delta = await client.next(
+      (m) =>
+        m.type === "delta" &&
+        ((m.patch.pilots as { pilots?: unknown[] } | null | undefined)?.pilots?.length ?? 0) > 0,
+    );
+    assert.equal(delta.type === "delta" && delta.source, "replay");
+    // Deltas carry changed fields only: each pilot entry is itself marked simulated.
+    const pilots =
+      (delta.type === "delta" &&
+        (delta.patch.pilots as { pilots: Array<{ simulated: boolean; name: string }> }).pilots) ||
+      [];
+    assert.equal(pilots[0]?.simulated, true);
+    const result = await client.next((m) => m.type === "result" && m.id === "hire");
+    assert.ok(result.type === "result" && result.ok, JSON.stringify(result));
+    client.send({
+      type: "command",
+      v: PROTOCOL_VERSION,
+      id: "bad",
+      name: "pilot.assign",
+      args: { pilotId: "HP-1" },
+    });
+    const bad = await client.next((m) => m.type === "result" && m.id === "bad");
+    assert.ok(bad.type === "result" && !bad.ok && bad.error.code === "bad_args");
+    client.ws.close();
+  });
+
   it("rejects WebSocket upgrades from a foreign or missing Origin", async () => {
     assert.equal(await upgradeStatus(wsUrl, "http://evil.example"), 403);
     assert.equal(await upgradeStatus(wsUrl, "http://127.0.0.1:5999"), 403);

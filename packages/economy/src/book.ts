@@ -3901,7 +3901,7 @@ export function ledgerState(e: BookLedgerEntry): LedgerEntryState {
 /** Fresh company core fields (merged into a new company record). */
 export function newCompanyCore(
   startingCash: number,
-): Omit<CompanyCore, "name" | "base" | "seed" | "cash" | "reputation"> {
+): Omit<CompanyCore, "name" | "base" | "seed" | "cash" | "reputation"> & { pilotCounter: number } {
   return {
     startingCash,
     gameMs: 0,
