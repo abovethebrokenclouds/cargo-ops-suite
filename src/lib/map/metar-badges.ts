@@ -1,7 +1,10 @@
 // METAR flight-category badges for the ops map: which airports get one (flight/mission origin
 // and destination, then accepted jobs' airports), and the GeoJSON the badge layer draws.
-// Only stations with a report get a badge; the reports come from the one batched METAR
-// request the map already makes (useMetar), never from extra requests.
+// Only stations with a report get a badge. The reports come from useMetar and its shared
+// page cache: with a connector, /map makes one GET /api/weather/metar for these stations
+// (at most 8) every 5 minutes while the badge layer is on (none while it is off), and the
+// connector asks aviationweather.gov for stations not in its 10-minute cache only when
+// Online weather is on. The demo uses SAMPLE reports without any request.
 
 import type { FeatureCollection, Point } from "geojson";
 import {

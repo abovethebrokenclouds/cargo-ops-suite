@@ -5,7 +5,7 @@ import type { MetarResponse, TafResponse } from "@cargo-ops/weather";
 import { initialSimState, simReducer, type ClientSimState } from "@/lib/sim-state";
 import { setOnlineWeatherEnabled } from "@/lib/settings/weather-settings";
 import { SimConnectionContext, type TransportKind } from "@/lib/transport/useSimConnection";
-import { sampleResponse, sampleTafResponse } from "@/lib/weather/use-metar";
+import { resetWeatherStores, sampleResponse, sampleTafResponse } from "@/lib/weather/use-metar";
 
 import { RouteWeather } from "./RouteWeather";
 
@@ -38,6 +38,7 @@ describe("RouteWeather", () => {
   beforeEach(() => {
     window.localStorage.clear();
     connectorJson.mockReset();
+    resetWeatherStores();
   });
   afterEach(() => vi.useRealTimers());
 
@@ -115,6 +116,47 @@ describe("RouteWeather", () => {
     fireEvent.click(within(taf).getByTestId("taf-raw-toggle"));
     expect(within(taf).getByTestId("taf-raw")).toHaveTextContent(/^TAF KATL \d{6}Z \d{4}\/\d{4} /);
     expect(connectorJson).not.toHaveBeenCalled();
+  });
+
+  it("panels on one page share the cache: one request for the union, none for repeats", async () => {
+    connectorJson.mockImplementation(async (path: string) => {
+      const ids = /ids=([^&]+)/.exec(path)?.[1]?.split(",") ?? [];
+      return path.startsWith("/api/weather/taf") ? sampleTafResponse(ids) : sampleResponse(ids);
+    });
+    const page = (pairs: Array<[string, string]>) => (
+      <SimConnectionContext.Provider
+        value={{ state: replayState(), send: () => {}, transportKind: "live" }}
+      >
+        {pairs.map(([o, d]) => (
+          <RouteWeather key={`${o}-${d}`} origin={o} destination={d} />
+        ))}
+      </SimConnectionContext.Provider>
+    );
+    const { rerender } = render(
+      page([
+        ["KMEM", "KATL"],
+        ["KATL", "KLIT"],
+      ]),
+    );
+    await waitFor(() => expect(screen.getAllByTestId("taf-period").length).toBeGreaterThan(0));
+    expect(connectorJson.mock.calls.map((c) => c[0]).sort()).toEqual([
+      "/api/weather/metar?ids=KMEM,KATL,KLIT&online=1",
+      "/api/weather/taf?ids=KATL,KLIT&online=1",
+    ]);
+    // A third panel for stations already loaded asks for nothing.
+    rerender(
+      page([
+        ["KMEM", "KATL"],
+        ["KATL", "KLIT"],
+        ["KLIT", "KMEM"],
+      ]),
+    );
+    await waitFor(() => expect(screen.getAllByTestId("taf-timeline")).toHaveLength(3));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(connectorJson).toHaveBeenCalledTimes(3);
+    expect(connectorJson).toHaveBeenLastCalledWith("/api/weather/taf?ids=KMEM&online=1");
   });
 
   it("forecast={false} shows no TAF and asks for none", async () => {

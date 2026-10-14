@@ -63,8 +63,9 @@ Values are tagged `SIM`, `REPLAY` or `DEMO`; a dash means "no data", never a mad
    airports, your FBOs and demand events. Small coloured **METAR badges** (VFR green, MVFR blue,
    IFR red, LIFR magenta) sit up and to the right of the origin, the destination and the airports
    of your accepted jobs; hover or tap one (or use the **METAR** list at the bottom left) for the
-   raw report and its age. The cloud button in the map controls hides them. They use the same
-   METAR request as the rest of the page, nothing extra.
+   raw report and its age. The cloud button in the map controls hides them. While they are shown the map
+   asks the connector for those airports' METARs every 5 minutes (switched off: no weather
+   request at all); airports another panel has already loaded are not asked for again.
 3. Land, taxi in, **park with engines off and the brake set**. The leg is verified (≥ 90 % of
    the distance flown, arrival within 3 nm, no teleport/slew, sim rate ≤ 8×) and the payout is
    booked with its breakdown: landing grade multiplier, lateness, fuel at the landing airport's

@@ -4,8 +4,9 @@
 //    per-browser "online weather" switch so the connector only goes online when it is on.
 // Browser-only (effects). METARs refresh every 5 minutes while mounted (the connector caches
 // live reports for 10 minutes), TAFs every 15 minutes (cached 30 minutes), so most refreshes
-// cost no request upstream. Components asking for the same stations share nothing: each
-// hook call is one request to the local connector, which batches and caches upstream.
+// cost no request upstream. All components on the page share one cache per product
+// (weather-store.ts): a station another component already loaded is not asked for again, and
+// stations requested in the same tick go to the connector in one request.
 
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -26,8 +27,9 @@ import {
 } from "@cargo-ops/weather";
 
 import { useOnlineWeatherSetting } from "@/lib/settings/weather-settings";
-import { connectorJson } from "@/lib/transport/connector-api";
 import { useSimConnection } from "@/lib/transport/useSimConnection";
+
+import { StationStore } from "./weather-store";
 
 export const METAR_REFRESH_MS = 5 * 60_000;
 export const TAF_REFRESH_MS = 15 * 60_000;
@@ -76,7 +78,7 @@ export function sampleTafResponse(
 }
 
 interface Product<R> {
-  path: string;
+  store: StationStore<R>;
   refreshMs: number;
   sample: (stations: readonly string[]) => WeatherResponse<R>;
 }
@@ -92,7 +94,7 @@ function useStationWeather<R>(
   const connected = state.connection === "live" || state.connection === "replay";
   const demo = transportKind === "demo";
   const [result, setResult] = useState<WeatherState<WeatherResponse<R>>>({ status: "idle" });
-  const { path, refreshMs, sample } = product;
+  const { store, refreshMs, sample } = product;
 
   useEffect(() => {
     if (stations.length === 0) {
@@ -116,9 +118,8 @@ function useStationWeather<R>(
     if (online === null) return;
     let alive = true;
     const load = () =>
-      connectorJson<WeatherResponse<R>>(
-        `${path}?ids=${stations.join(",")}&online=${online ? 1 : 0}`,
-      )
+      store
+        .load(stations, online)
         .then((data) => alive && setResult({ status: "ready", data }))
         .catch(
           (err: unknown) =>
@@ -135,19 +136,32 @@ function useStationWeather<R>(
       alive = false;
       globalThis.clearInterval(timer);
     };
-  }, [stations, transportKind, demo, connected, online, path, refreshMs, sample]);
+  }, [stations, transportKind, demo, connected, online, store, refreshMs, sample]);
 
   return result;
 }
 
+/** Shared per page; a result counts as current until shortly before the next poll is due. */
+export const metarStore = new StationStore<MetarReport>(
+  "/api/weather/metar",
+  METAR_REFRESH_MS - 15_000,
+);
+export const tafStore = new StationStore<TafReport>("/api/weather/taf", TAF_REFRESH_MS - 15_000);
+
+/** Clear both shared caches (tests). */
+export function resetWeatherStores(): void {
+  metarStore.reset();
+  tafStore.reset();
+}
+
 const METAR_PRODUCT: Product<MetarReport> = {
-  path: "/api/weather/metar",
+  store: metarStore,
   refreshMs: METAR_REFRESH_MS,
   sample: (stations) => sampleResponse(stations),
 };
 
 const TAF_PRODUCT: Product<TafReport> = {
-  path: "/api/weather/taf",
+  store: tafStore,
   refreshMs: TAF_REFRESH_MS,
   sample: (stations) => sampleTafResponse(stations),
 };

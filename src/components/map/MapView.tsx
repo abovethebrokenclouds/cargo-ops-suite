@@ -194,8 +194,12 @@ export function MapView() {
 
   const view = routeView(state);
 
-  // METAR badges: route ends, the mission's airports and accepted jobs' airports, all in the
-  // one batched METAR request (SAMPLE reports in the demo, no network there).
+  // METAR badges: route ends, the mission's airports and accepted jobs' airports (at most 8),
+  // loaded through the page's shared METAR cache (lib/weather/weather-store.ts). With a
+  // connector that is one GET /api/weather/metar for these stations, repeated every 5 minutes
+  // while the map is open and the layer is on; the connector fetches the stations it has not
+  // cached (10 min) from aviationweather.gov only when Online weather is on. Nothing is
+  // requested while the layer is off. Demo: SAMPLE reports, no network.
   const mission = sessionUp ? (state.sim.mission ?? null) : null;
   const accepted = sessionUp ? (state.sim.jobs?.accepted ?? null) : null;
   const weatherStations = useMemo(
@@ -217,7 +221,7 @@ export function MapView() {
       accepted,
     ],
   );
-  const metar = useMetar(weatherStations.map((s) => s.ident));
+  const metar = useMetar(layers.weather ? weatherStations.map((s) => s.ident) : []);
   const metarData = metar.status === "ready" ? metar.data : null;
   const badges = useMemo(
     () => metarBadges(weatherStations, metarData, airports),
