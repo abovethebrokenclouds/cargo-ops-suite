@@ -355,7 +355,7 @@ Start requires on-ground + brake + within 3 nm of origin. Distance integrated by
 
 - **Dynamic demand**: per-airport demand index drifts with the player's activity and random events (storm, festival, strike), raising job payouts and fuel prices locally for a few days.
 - **Insurance**: optional hull policy per aircraft (monthly premium ∝ value) that covers a share of crash write-offs and repossession-free repair loans.
-- **Hired pilots (P6, optional)**: AI pilots fly owned aircraft on fixed routes in in-game time for a wage, generating modest income and wear while the player flies something else.
+- **Hired pilots (P6, optional)**: AI pilots fly owned aircraft on fixed routes in in-game time for a wage, generating modest income and wear while the player flies something else. Implemented as a simulated economy model (never telemetry, logbook or the player's own hours): docs/ECONOMY.md "P6 — Hired pilots".
 - **Milestones and achievements**: first delivery, 100 hours, first FBO, debt-free, perfect landing streak; shown on the Company page.
 
 ## 8. Maps and aviation data

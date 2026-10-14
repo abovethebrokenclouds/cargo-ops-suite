@@ -1,4 +1,4 @@
-# Cargo Ops — Economy (P3 + P4 + P5)
+# Cargo Ops — Economy (P3 + P4 + P5 + P6 hired pilots)
 
 Every formula, constant and rule of the cargo operations lane, as implemented. The
 code is `packages/economy/src` (pure, deterministic, shared by the connector and the
@@ -1258,3 +1258,154 @@ day 57 (fuel farm and ramp included), adds a hangar, upgrades the ramp to level 
 fuel at 104 % / handling at $85 on day 60, flies three legs through KLIT (own-arrival savings)
 and records deliveries for demand activity; milestones carry the in-game date they were
 reached. Everything is tagged DEMO with every action disabled.
+
+---
+
+# P6 — Hired pilots (optional, simulated)
+
+Code: `packages/economy/src/hired-pilots.ts` (constants and pure rules) and the "Hired pilots"
+section of `book.ts` (scheduling and booking), the connector's `core/economy/engine.ts`
+(commands, served airports, the `mission.load` refusal) and protocol
+`packages/protocol/src/pilots.ts`. Worked examples are unit tests in
+`packages/economy/test/hired-pilots.test.ts` and `connector/test/hired-pilots.test.ts`.
+
+A hired pilot flies **one owned aircraft** back and forth on a **fixed route** (origin →
+destination → origin …) in in-game time, for a monthly wage, while you fly something else.
+
+**Honesty.** This is a simulated economy model, not telemetry. A hired leg never produces a
+flight frame, never touches the `flight`/`position`/`motion`/… domains, never writes a logbook
+flight, never grades a landing, never changes reputation, deliveries, the landing streak,
+demand activity or the 100-hour count (`company.flightHours`), so it can reach no milestone
+about your own flying. Every pilot object carries `simulated: true`; the UI labels it **Hired
+pilot (simulated)**. Domains still ride in frames tagged with the session's `source`
+(`sim`/`replay`/`demo`) like every economy domain; that tag says which connector session
+computed them, not that a simulator flew them.
+
+## Clock and schedule
+
+Legs run on the **company clock** (see "Company clock"): real time while the connector runs,
+at most 60 s across a stop or a sleeping PC, so nothing accrues while the connector is off.
+`CompanyBook.advance` processes every pilot's next departure and arrival in time order with
+the loans, repairs and FBO hours.
+
+```
+airborne   = round(distance / cruise kt × 60 + 10) min
+block      = airborne + 20 min                       (taxi out + in)
+departure  = first time ≥ the previous arrival + 120 min turnaround inside 06:00–20:00
+             (company-clock hour of day; outside the window the pilot waits for 06:00)
+first leg  = the first duty-window time at or after the assignment
+```
+
+## Ratings and wages
+
+| Rating    | Covers                                 | Wage / in-game month |
+| --------- | -------------------------------------- | -------------------- |
+| Turboprop | single-, twin- and regional-turboprops | $7,500               |
+| Jet       | narrowbody and widebody jets           | $14,000              |
+
+The first month's wage is paid **at hiring**, then every pilot on the payroll is billed at each
+month boundary for the coming month (`pilot_wage`, cash may go negative like lease fees).
+Letting a pilot go refunds nothing and stops the wages. At most **10** pilots.
+
+## Assignment
+
+`pilot.assign {pilotId, aircraftId, origin?, destination}` needs: a hired, unassigned pilot;
+an **owned** aircraft (`not_owned` for leases) that is **available** (not in maintenance, not
+flying, not on a loaded or flying mission, not with another pilot), holds no ferry permit,
+matches the rating (`rating_mismatch`) and passes the **dispatch gate** (hidden defects surface
+first, `aircraft_unairworthy` with every reason). The route starts where the aircraft is parked
+(`aircraft_not_at_origin` otherwise). The destination must be an airport the company **serves**:
+the base, fleet locations, own FBO airports, airports with recent demand activity (your
+deliveries and departures), the job board airports and their jobs' destinations, and the ends of
+existing pilot routes (`airport_not_served`). The route must suit the type both ways: 20 nm to
+80 % of range (`route_too_short`, `out_of_range`), runway length and surface at both ends
+(`runway_unsuitable`) and a payload limit of at least 50 kg (`payload_too_low`).
+
+While assigned the aircraft's fleet status is **`hired`**: `mission.load` on it is refused
+with **`aircraft_with_hired_pilot`** ("… is flown by hired pilot NAME on A–B (simulated):
+unassign the pilot on the Fleet page to fly it yourself"), and selling, returning, repairs,
+annual inspections, deferrals and ferry permits are refused with `aircraft_busy`.
+`pilot.unassign` makes it available where it is; a leg in progress is **cancelled** (the
+aircraft stays at the leg's departure airport and nothing is booked for that leg).
+
+## Money per leg (booked when the leg arrives)
+
+```
+load      = round(share × floor(payload limit × (1 − major-defect payload penalty)))   kg
+share     = uniform 0.50–0.90, mulberry32(FNV-1a(company seed, "pilot-leg", pilot id, leg n))
+board     = computePayout(cargo, load kg, distance, 1 unit, reputation, estimate).total
+income    = 50 % × board                                   (hired_income, cents)
+fuel      = round(cruise burn kg/h × block h) × (1 + defect fuel penalty) × the destination's
+            fuel price (demand events included)           (fuel, refType "pilot")
+fee       = landing fee at the destination                 (landing_fee, refType "pilot")
+wear      = 0.5 × airborne h   (no G or overspeed: there is no touchdown to measure)
+```
+
+The 50 % share keeps hired flying **below** what you earn flying the same job yourself (you get
+100 % plus landing and weather bonuses). Wear is spread over the systems and rolls for new
+defects exactly like your own flights (thresholds 75/50/30 %, seeded per aircraft, cycle and
+pilot); hours and cycles count on the airframe. The aircraft event is `pilot_leg` (never
+`flight`). Hired legs pay the normal fuel price and landing fee also at your own FBO (FBO
+benefits are for your own arrivals) and add no demand activity. The demand payout factor is
+not applied to hired income.
+
+**Grounding.** At every departure the gate runs again (hidden defects surface); after every
+leg, a defect that makes the aircraft unairworthy (a grounding defect, an undeferred minor, a
+system under 20 %, an overdue annual) **stops the route at once**: the aircraft becomes
+`available` where it landed, the pilot stays hired with `stopped {code, message}`, and the
+event `pilot.route_stopped` (`simulated: true`) is sent with `aircraft.grounded` for the defect.
+Repair it (or defer the minor) and assign again.
+
+## Worked examples (`packages/economy/test/hired-pilots.test.ts`)
+
+C208B **KMEM → KATL**, 287.7 nm: airborne 287.7 / 170 × 60 + 10 = **112 min**, block
+**132 min**, fuel 170 × 2.2 = **374 kg**; payload limit 944 kg. At the average share 0.7: **661
+kg**, board **$5,606**, hired income **$2,803** (the route preview).
+
+Seed 4242, starter at KMEM, assigned at 00:00 on day 0: departures 06:00, 10:12, 14:24 and
+18:36, arrivals 08:12, 12:24, 16:36, 20:48.
+
+| Leg       | Load   | Income    | Fuel                      | Fee  |
+| --------- | ------ | --------- | ------------------------- | ---- |
+| KMEM→KATL | 839 kg | $3,557.50 | 374 kg × $1.915 = $716.21 | $300 |
+| KATL→KMEM | 751 kg | $3,184.50 | 374 kg × $1.948 = $728.55 | $300 |
+| KMEM→KATL | 485 kg | $2,056.50 | $716.21                   | $300 |
+| KATL→KMEM | 710 kg | $3,010.50 | $728.55                   | $300 |
+
+Day 1 P&L (month 1 row): income **$11,809**, wage $7,500 (paid at hiring), fuel **$2,889.52**,
+fees **$1,200**, net **$219.48**; cash 250,000 → **$250,219.48**; wear 4 × 0.93 = **3.72**
+points (repair value 8 % × $2.7M × 3.72 % = **$8,035.20**, not cash: repairs are ordered as
+usual). Airframe +7.48 h, 4 cycles; `company.flightHours` stays **0**.
+
+Read honestly: a C208B leg nets about $1,900 in cash before wear and about breaks even once its
+wear is repaired, so a hired pilot is modest income that slowly converts airframe condition into
+cash, not a money machine; wear and its defect rolls end the route within weeks of in-game time
+(a 40-day run in the tests stops on its own).
+
+## Ledger and P&L
+
+Categories `pilot_wage` and `hired_income` (operating, in the monthly company P&L); fuel and
+landing fees use the existing `fuel` and `landing_fee` categories with `refType "pilot"` and
+`refId` the pilot id. Every amount goes through `CompanyBook.post`, so **Σ ledger = cash −
+starting cash** to the cent (tests after a day, a month rollover and a 40-day run). Each pilot
+keeps a monthly P&L (last 12 months): income, wages, fuel, fees, `net = income − wages − fuel −
+fees` summed in integer cents, legs, wear points and their repair value (not cash), plus the
+last 10 legs.
+
+## Storage, export, API
+
+Migration **9** (idempotent): `hired_pilots(id, status CHECK hired|fired, aircraft_id, json)`;
+the company row gains `pilotCounter` (JSON, default 0) and fleet rows may carry the status
+`hired` (no column change). Career export: `pilots` is an **optional** field of version 5 (no
+format bump; files without it import with no pilots). An older connector does not know the
+fleet status `hired` and refuses such a file as invalid instead of misreading it; an aircraft
+marked `hired` without a hired pilot assigned to it loads as `available`. API:
+`GET /api/pilots` (the `pilots` domain). Commands: `pilot.hire {rating}`,
+`pilot.fire {pilotId}`, `pilot.assign {pilotId, aircraftId, origin?, destination}`,
+`pilot.unassign {pilotId}` (zod, strict; same token and Origin rules as every command).
+
+## Demo
+
+`buildDemoCompany` hires a turboprop pilot on day **74** and assigns the starter C208B to
+**KMEM ⇄ KBNA** (173.6 nm); by day 77.6 it has flown 14 legs. Shown on /fleet → Hired pilots,
+tagged DEMO and "Hired pilot (simulated)", with every action disabled.
