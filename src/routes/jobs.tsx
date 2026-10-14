@@ -86,6 +86,68 @@ function Field({
   );
 }
 
+/**
+ * Payload check crew allowance (docs/ECONOMY.md "Payload check"): kg subtracted from the
+ * sim's payload stations before they are compared with the cargo. Empty = automatic
+ * (the first Pilot/Co-pilot/Captain seat plus Crew seats, else 0 kg).
+ */
+function CrewAllowance({
+  valueKg,
+  busy,
+  onSave,
+  className,
+}: {
+  valueKg: number | null;
+  busy: boolean;
+  onSave: (kg: number | null) => void;
+  className?: string;
+}) {
+  const [text, setText] = useState(valueKg === null ? "" : String(valueKg));
+  const [shown, setShown] = useState(valueKg);
+  if (shown !== valueKg) {
+    setShown(valueKg);
+    setText(valueKg === null ? "" : String(valueKg));
+  }
+  const trimmed = text.trim();
+  const parsed = trimmed === "" ? null : Number(trimmed);
+  const invalid = parsed !== null && (!Number.isFinite(parsed) || parsed < 0 || parsed > 2000);
+  return (
+    <form
+      className={cn(
+        "panel-inset flex flex-wrap items-end gap-3 px-5 py-4 text-sm text-muted-foreground",
+        className,
+      )}
+      data-testid="crew-allowance"
+      onSubmit={(ev) => {
+        ev.preventDefault();
+        if (!invalid) onSave(parsed);
+      }}
+    >
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="crew-allowance" className="label-eyebrow">
+          Payload check crew allowance (kg)
+        </label>
+        <input
+          id="crew-allowance"
+          inputMode="decimal"
+          className={cn(inputClass, "w-32")}
+          placeholder="auto"
+          value={text}
+          aria-invalid={invalid || undefined}
+          onChange={(ev) => setText(ev.target.value)}
+        />
+      </div>
+      <button type="submit" className={secondaryButton} disabled={busy || invalid}>
+        Save
+      </button>
+      <p className="min-w-[16rem] flex-1 text-xs">
+        Subtracted from the sim&apos;s payload stations before they are compared with the cargo.
+        Empty = automatic: the first pilot seat plus any Crew seats, otherwise nothing.
+      </p>
+    </form>
+  );
+}
+
 function Jobs() {
   const { state } = useSimConnection();
   const command = useCommand();
@@ -269,6 +331,20 @@ function Jobs() {
 
         {mission && !demo ? (
           <MissionStrip mission={mission} source={source} className="col-span-12" />
+        ) : null}
+        {connector && !demo && company ? (
+          <CrewAllowance
+            className="col-span-12"
+            valueKg={company.crewAllowanceKg ?? null}
+            busy={busy}
+            onSave={(kg) =>
+              void run(
+                "settings.update",
+                { crewAllowanceKg: kg },
+                kg === null ? "Crew allowance: automatic" : `Crew allowance ${kg} kg`,
+              )
+            }
+          />
         ) : null}
         {mission && !demo && mission.status !== "delivered" ? (
           <RouteWeatherPanel

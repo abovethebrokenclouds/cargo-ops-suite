@@ -13,7 +13,18 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, afterEach, describe, it } from "node:test";
 import { configPath } from "../src/core/config";
-import type { ServerMessage, SimStatePatch } from "../src/protocol";
+import { loadAirportsData } from "../src/core/economy/airports-data";
+import { ConnectorSession } from "../src/core/session";
+import {
+  PROTOCOL_VERSION,
+  type Command,
+  type Frame,
+  type JobsState,
+  type Mission,
+  type Result,
+  type ServerMessage,
+  type SimStatePatch,
+} from "../src/protocol";
 import { SimConnectSource } from "../src/sim/simconnect-source";
 import { SIMVARS, buildDatums } from "../src/sim/simvars";
 import type { LogLevel, SimUpdate } from "../src/sim/source";
@@ -715,6 +726,146 @@ describe("SimConnect emulator: AI traffic by type (PC-38 logic)", () => {
       "an empty batch",
     );
     assert.deepEqual(batch.samples, []);
+  });
+});
+
+describe("SimConnect emulator: payload check against the sim (PC-49 logic)", () => {
+  // The real SimConnectSource feeding a ConnectorSession with the economy engine: the
+  // mission's cargo is compared with PAYLOAD STATION WEIGHT:n as decoded off the wire.
+  interface PayloadRig {
+    emu: SimConnectEmulator;
+    session: ConnectorSession;
+    source: SimConnectSource;
+    frames: Frame[];
+    cmd(name: string, args?: unknown): Result;
+    mission(): Mission | null;
+  }
+  const rigs: PayloadRig[] = [];
+  afterEach(async () => {
+    for (const r of rigs.splice(0)) {
+      await r.source.stop();
+      await r.emu.close();
+    }
+  });
+
+  async function payloadRig(values: Record<string, SimValue>): Promise<PayloadRig> {
+    const emu = await SimConnectEmulator.start({ secondMs: 100, simFrameMs: 40, values });
+    const source = new SimConnectSource({
+      log: () => {},
+      remote: { host: "127.0.0.1", port: emu.port },
+      retryMinMs: 100,
+      retryMaxMs: 400,
+    });
+    let n = 0;
+    const session = new ConnectorSession(source, () => {}, {
+      economy: { airports: loadAirportsData().airports, seed: 4242, newId: () => `M-${++n}` },
+    });
+    const frames: Frame[] = [];
+    session.store.subscribe((f) => frames.push(f));
+    session.start();
+    const r: PayloadRig = {
+      emu,
+      session,
+      source,
+      frames,
+      cmd: (name, args = {}) =>
+        session.command({
+          type: "command",
+          v: PROTOCOL_VERSION,
+          id: `c${++n}`,
+          name,
+          args,
+        } as Command),
+      mission: () => (session.store.getDomain("mission") ?? null) as Mission | null,
+    };
+    rigs.push(r);
+    source.start();
+    return r;
+  }
+
+  function ok<T>(r: PayloadRig, name: string, args: unknown = {}): T {
+    const res = r.cmd(name, args);
+    if (!res.ok) assert.fail(`${name}: ${res.error.code} ${res.error.message}`);
+    return res.data as T;
+  }
+
+  async function loadKatlMission(r: PayloadRig): Promise<Mission> {
+    // The aircraft title must have reached the engine so the fleet C208B is selected.
+    await waitFor(() => r.session.store.getDomain("payload"), "payload stations from the sim");
+    // …and a few fast frames after it, so the flight core's last sample has the brake set
+    // (unchanged values produce no store delta, so wait on the clock: 5 Hz → ≥ 2 samples).
+    await waitFor(() => r.session.store.getDomain("controls"), "controls from the sim");
+    await new Promise((res) => setTimeout(res, 500));
+    ok(r, "jobs.refresh", { airport: "KMEM", destination: "KATL" });
+    const jobs = r.session.store.getDomain("jobs") as JobsState;
+    const job = jobs.available.find((j) => j.destination === "KATL");
+    assert.ok(job, "a KATL job on the focused board");
+    ok(r, "job.accept", { jobId: job.id });
+    return ok<Mission>(r, "mission.load", { jobIds: [job.id] });
+  }
+
+  it("preview follows the stations live (source 'sim'), MTOW refuses, departure freezes it", async () => {
+    // Pilot 170 lb + 400 lb cargo: 258.5 kg − 77.1 kg = 181.4 kg on board.
+    const r = await payloadRig(CARAVAN);
+    const m = await loadKatlMission(r);
+    const cargo = m.payloadKg;
+    assert.ok(cargo > 181.4 + Math.max(25, cargo * 0.1), `cargo ${cargo} kg`);
+    const preview = await waitFor(
+      () => (r.mission()?.payloadCheck?.status === "underloaded" ? r.mission() : null),
+      "an underloaded preview",
+    );
+    assert.equal(preview.payloadCheck?.stage, "preview");
+    assert.equal(preview.payloadCheck?.source, "sim");
+    assert.equal(preview.payloadCheck?.simPayloadKg, 258.5);
+    assert.equal(preview.payloadCheck?.crewBasis, "stations");
+    assert.equal(preview.payloadCheck?.loadedKg, 181.4);
+
+    // The pilot loads the cargo in the sim: the preview turns ok on the next SECOND frame.
+    const cargoLb = Math.ceil(cargo / 0.45359237);
+    // (TOTAL WEIGHT stays under the 8,807 lb MAX GROSS WEIGHT: less fuel on board.)
+    r.emu.set({ "PAYLOAD STATION WEIGHT:2": cargoLb, "TOTAL WEIGHT": 8600 });
+    await waitFor(() => r.mission()?.payloadCheck?.status === "ok", "an ok preview");
+
+    // Over MAX GROSS WEIGHT: the preview warns and an explicit start is refused.
+    r.emu.set({ "TOTAL WEIGHT": 9000 });
+    await waitFor(() => r.mission()?.payloadCheck?.status === "overloaded", "overloaded");
+    const refused = r.cmd("flight.start");
+    assert.equal(!refused.ok && refused.error.code, "over_mtow");
+
+    // Back to 400 lb of cargo: the start goes ahead with a warning and loses the bonuses.
+    r.emu.set({ "PAYLOAD STATION WEIGHT:2": 400, "TOTAL WEIGHT": 7417.9 });
+    await waitFor(() => r.mission()?.payloadCheck?.status === "underloaded", "underloaded again");
+    ok(r, "flight.start");
+    const flying = r.mission();
+    assert.equal(flying?.status, "in_progress");
+    assert.equal(flying?.payloadCheck?.stage, "departure");
+    assert.equal(flying?.payloadCheck?.status, "underloaded");
+    assert.equal(flying?.payloadCheck?.source, "sim");
+    const ev = r.frames.find((f) => f.type === "event" && f.name === "mission.payload_check");
+    assert.ok(ev && ev.type === "event");
+    assert.equal(ev.source, "sim");
+    assert.equal((ev.data as { payoutBonuses: boolean }).payoutBonuses, false);
+
+    // Frozen: loading the cargo after departure does not change the departure check.
+    r.emu.set({ "PAYLOAD STATION WEIGHT:2": cargoLb });
+    await new Promise((res) => setTimeout(res, 300));
+    assert.equal(r.mission()?.payloadCheck?.status, "underloaded");
+  });
+
+  it("an aircraft with no payload stations → unknown, the start is not penalised", async () => {
+    const r = await payloadRig({ ...CARAVAN, "PAYLOAD STATION COUNT": 0 });
+    await loadKatlMission(r);
+    await waitFor(() => r.mission()?.payloadCheck?.status === "unknown", "unknown preview");
+    ok(r, "flight.start");
+    const m = r.mission();
+    assert.equal(m?.payloadCheck?.stage, "departure");
+    assert.equal(m?.payloadCheck?.status, "unknown");
+    assert.equal(m?.payloadCheck?.simPayloadKg, undefined);
+    const ev = r.frames.find((f) => f.type === "event" && f.name === "mission.payload_check");
+    assert.equal(
+      ev?.type === "event" && (ev.data as { payoutBonuses: boolean }).payoutBonuses,
+      true,
+    );
   });
 });
 

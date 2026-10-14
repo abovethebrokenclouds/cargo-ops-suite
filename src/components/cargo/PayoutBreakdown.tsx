@@ -9,6 +9,18 @@ function value(f: Breakdown["factors"][number]): string {
   return `× ${multiplier(f.value)}`;
 }
 
+/**
+ * Why the bonuses were removed. The payout's reputation line carries the full reason
+ * (both sim rate and payload when both applied); older breakdowns fall back to the flags.
+ */
+function noBonusReason(b: Breakdown): string {
+  const note = b.factors.find((f) => f.key === "reputation")?.note;
+  if (note?.startsWith("No bonuses")) return note;
+  return b.payloadMismatch
+    ? "No bonuses: the sim payload was below the cargo at departure"
+    : "No bonuses: the sim rate went above 1×";
+}
+
 /** Every factor of a payout, in order, with its value and note. */
 export function PayoutBreakdown({
   breakdown,
@@ -44,7 +56,7 @@ export function PayoutBreakdown({
               {breakdown.estimate ? "Estimated payout" : "Payout"}
               {breakdown.noBonus ? (
                 <span className="block text-xs font-normal text-warning">
-                  No bonuses: the sim rate went above 1×
+                  {noBonusReason(breakdown)}
                 </span>
               ) : null}
             </th>

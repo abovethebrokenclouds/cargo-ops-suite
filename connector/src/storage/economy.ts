@@ -24,6 +24,7 @@ import {
   type JobStatus,
   type LedgerCategory,
   type Mission,
+  type PayloadCheck,
   type PnlMonth,
   type Touchdown,
 } from "../protocol";
@@ -66,6 +67,8 @@ export const companyRecordSchema = z.object({
     .default([]),
   /** Aircraft type override; null = auto-match from TITLE. */
   aircraftTypeOverride: z.string().nullable().default(null),
+  /** Payload check pilot/crew allowance, kg; null = automatic (docs/ECONOMY.md). */
+  crewAllowanceKg: z.number().finite().nonnegative().nullable().default(null),
   // ---- P4 (defaults make a P3 record valid) ----
   /** Cash the company was founded with; Σ ledger = cash − startingCash. */
   startingCash: z.number().finite().default(STARTING_CASH),
@@ -340,6 +343,8 @@ export interface LogbookEntry {
     payout: number | null;
     jobs: Array<{ id: string; kind: string; weightKg: number }>;
     failure: { code: string; message: string } | null;
+    /** Cargo vs sim payload, frozen at departure (absent on older missions). */
+    payloadCheck: PayloadCheck | null;
   } | null;
 }
 
@@ -948,6 +953,7 @@ export class EconomyRepo {
               payout: mission.payout?.total ?? null,
               jobs: mission.jobs.map((j) => ({ id: j.id, kind: j.kind, weightKg: j.weightKg })),
               failure: mission.failure ?? null,
+              payloadCheck: mission.payloadCheck ?? null,
             }
           : null,
       };

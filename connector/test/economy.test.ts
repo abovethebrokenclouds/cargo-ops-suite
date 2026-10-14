@@ -504,6 +504,171 @@ describe("job and mission commands", () => {
   });
 });
 
+describe("payload check against the sim (docs/ECONOMY.md)", () => {
+  const frames = loadFixture(FIXTURE);
+  // Fixture stations: Pilot 170 lb + 1,830 lb of cargo → 907.2 − 77.1 = 830.1 kg loaded.
+
+  it("acceptance job (840 kg): preview at load, frozen ok at departure, full payout", () => {
+    const tmp = tempDir();
+    try {
+      const r = rig(frames, tmp.dir);
+      const job = acceptKatlJob(r);
+      const loaded = r.ok<Mission>("mission.load", { jobIds: [job.id] });
+      // Nothing played yet: the store has no payload stations → unknown, no guess.
+      assert.equal(loaded.payloadCheck?.status, "unknown");
+      assert.equal(loaded.payloadCheck?.stage, "preview");
+      r.source.playRange(0, BOARDING_END);
+      const preview = r.mission()?.payloadCheck;
+      assert.equal(preview?.stage, "preview");
+      assert.equal(preview?.status, "ok");
+      assert.equal(preview?.source, "replay");
+      assert.equal(preview?.loadedKg, 830.1);
+      assert.equal(preview?.crewBasis, "stations");
+      r.source.playRange(BOARDING_END);
+      const m = r.mission();
+      assert.equal(m?.status, "delivered");
+      assert.deepEqual(
+        {
+          stage: m?.payloadCheck?.stage,
+          status: m?.payloadCheck?.status,
+          source: m?.payloadCheck?.source,
+          cargoKg: m?.payloadCheck?.cargoKg,
+          simPayloadKg: m?.payloadCheck?.simPayloadKg,
+          crewKg: m?.payloadCheck?.crewKg,
+          loadedKg: m?.payloadCheck?.loadedKg,
+          maxGrossLb: m?.payloadCheck?.maxGrossLb,
+        },
+        {
+          stage: "departure",
+          status: "ok",
+          source: "replay",
+          cargoKg: 840,
+          simPayloadKg: 907.2,
+          crewKg: 77.1,
+          loadedKg: 830.1,
+          maxGrossLb: 8750,
+        },
+      );
+      assert.equal(m?.payout?.total, EXPECTED_PAYOUT);
+      assert.equal(m?.payout?.jobs[0]?.payloadMismatch, undefined);
+      const ev = r.events("mission.payload_check");
+      assert.equal(ev.length, 1);
+      const data = ev[0]?.type === "event" ? (ev[0].data as { payoutBonuses: boolean }) : null;
+      assert.equal(data?.payoutBonuses, true);
+      // The logbook row carries the departure check.
+      assert.equal(r.economy.logbook()[0]?.mission?.payloadCheck?.status, "ok");
+      r.close();
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it("underloaded at departure: warned, flown, paid without bonuses (reputation unchanged)", () => {
+    const tmp = tempDir();
+    try {
+      // 50 lb per cargo station: 370 lb = 167.8 kg − 77.1 kg pilot = 90.7 kg for 840 kg.
+      const r = rig(
+        withStations(frames, [
+          { name: "Pilot", weightLb: 170 },
+          { name: "Cargo Zone A", weightLb: 50 },
+          { name: "Cargo Zone B", weightLb: 50 },
+          { name: "Cargo Zone C", weightLb: 50 },
+          { name: "Cargo Pod", weightLb: 50 },
+        ]),
+        tmp.dir,
+      );
+      const job = acceptKatlJob(r);
+      r.ok("mission.load", { jobIds: [job.id] });
+      r.source.playRange(0, BOARDING_END);
+      assert.equal(r.mission()?.payloadCheck?.status, "underloaded");
+      // A warning, not a refusal: the explicit start goes ahead.
+      r.ok("flight.start");
+      const started = r.mission();
+      assert.equal(started?.status, "in_progress");
+      assert.equal(started?.payloadCheck?.stage, "departure");
+      assert.equal(started?.payloadCheck?.status, "underloaded");
+      assert.equal(started?.payloadCheck?.loadedKg, 90.7);
+      r.source.playRange(BOARDING_END);
+      const m = r.mission();
+      assert.equal(m?.status, "delivered");
+      const b = m?.payout?.jobs[0];
+      assert.equal(b?.payloadMismatch, true);
+      assert.equal(b?.noBonus, true);
+      const expected = computePayout({
+        kind: job.kind,
+        weightKg: job.weightKg,
+        distanceNm: job.distanceNm,
+        units: job.units,
+        reputation: 50,
+        estimate: false,
+        landingGrade: "B",
+        lateMin: 0,
+        payloadMismatch: true,
+      }).total;
+      // 6,849.98 × 1.00 (no reputation bonus) → $6,850 instead of $7,124.
+      assert.equal(expected, 6850);
+      assert.equal(m?.payout?.total, expected);
+      assert.equal(m?.reputationDelta, 2);
+      const ev = r.events("mission.payload_check");
+      const data = ev[0]?.type === "event" ? (ev[0].data as { payoutBonuses: boolean }) : null;
+      assert.equal(data?.payoutBonuses, false);
+      assert.equal(r.economy.logbook()[0]?.mission?.payloadCheck?.status, "underloaded");
+      r.close();
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it("no payload stations reported → unknown, never a penalty", () => {
+    const tmp = tempDir();
+    try {
+      const r = rig(withStations(frames, null), tmp.dir);
+      const job = acceptKatlJob(r);
+      r.ok("mission.load", { jobIds: [job.id] });
+      r.source.playAll();
+      const m = r.mission();
+      assert.equal(m?.status, "delivered");
+      assert.equal(m?.payloadCheck?.stage, "departure");
+      assert.equal(m?.payloadCheck?.status, "unknown");
+      assert.equal(m?.payloadCheck?.loadedKg, undefined);
+      assert.equal(m?.payout?.total, EXPECTED_PAYOUT);
+      r.close();
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it("settings.update crewAllowanceKg: published, persisted and applied to the preview", () => {
+    const tmp = tempDir();
+    try {
+      const r = rig(frames, tmp.dir);
+      const job = acceptKatlJob(r);
+      r.ok("mission.load", { jobIds: [job.id] });
+      r.source.playRange(0, BOARDING_END);
+      r.ok("settings.update", { crewAllowanceKg: 160 });
+      const company = () =>
+        r.session.store.getDomain("company") as { crewAllowanceKg?: number | null };
+      assert.equal(company().crewAllowanceKg, 160);
+      const p = r.mission()?.payloadCheck;
+      assert.equal(p?.crewBasis, "setting");
+      assert.equal(p?.loadedKg, 747.2); // 907.2 − 160 < 840 − 84
+      assert.equal(p?.status, "underloaded");
+      const bad = r.cmd("settings.update", { crewAllowanceKg: -1 });
+      assert.equal(bad.ok, false);
+      r.close();
+      const again = rig(frames, tmp.dir);
+      const company2 = () =>
+        again.session.store.getDomain("company") as { crewAllowanceKg?: number | null };
+      assert.equal(company2().crewAllowanceKg, 160);
+      again.ok("settings.update", { crewAllowanceKg: null });
+      assert.equal(company2().crewAllowanceKg, null);
+      again.close();
+    } finally {
+      tmp.cleanup();
+    }
+  });
+});
+
 /** Dry-lease a second C208B at KBNA and select it (missions need an aircraft at the origin). */
 function leaseAtKbna(r: Rig): string {
   const a = r.ok<{ id: string; location: string }>("fleet.lease", {
@@ -543,6 +708,20 @@ function withTeleport(frames: FixtureFrame[]): FixtureFrame[] {
   return mapDeltas(frames, (patch, i) => {
     const pos = patch["position"] as { lon: number } | undefined;
     if (i >= 150 && pos) pos.lon += 2;
+  });
+}
+
+/** Replace the payload stations of the snapshot (null: the sim reports none). */
+function withStations(
+  frames: FixtureFrame[],
+  stations: Array<{ name: string; weightLb: number }> | null,
+): FixtureFrame[] {
+  return frames.map((f) => {
+    if (f.msg.type !== "snapshot") return f;
+    const state = structuredClone(f.msg.state) as Record<string, unknown>;
+    if (stations) state["payload"] = { stations };
+    else delete state["payload"];
+    return { ...f, msg: { ...f.msg, state } } as FixtureFrame;
   });
 }
 

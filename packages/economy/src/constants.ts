@@ -108,3 +108,25 @@ export const SHORT_BAND_SHARE = 0.35;
 export const SHORT_BAND_MIN_NM = 60;
 
 export const STARTING_CASH = 250_000;
+
+/**
+ * Payload check (docs/ECONOMY.md "Payload check"): the sim payload may fall short of the
+ * cargo by max(PAYLOAD_TOLERANCE_MIN_KG, PAYLOAD_TOLERANCE_SHARE × cargo) before the
+ * flight is flagged underloaded.
+ */
+export const PAYLOAD_TOLERANCE_MIN_KG = 25;
+export const PAYLOAD_TOLERANCE_SHARE = 0.1;
+/**
+ * Crew allowance when no payload station is named like a crew seat and the player has
+ * not set one: 0 kg. The sim's pilot is almost always a payload station; a pilot that is
+ * not reported is never assumed, so any doubt favours the player.
+ */
+export const DEFAULT_CREW_ALLOWANCE_KG = 0;
+/**
+ * Whole (trimmed) station names of pilot seats: only the FIRST matching station counts
+ * as crew (a second seat such as "Copilot" may hold cargo or a passenger). Never matches
+ * baggage, cargo or compartment stations ("Pilot Baggage" is cargo).
+ */
+export const PILOT_SEAT_PATTERN = /^(pilot|co-?pilot|captain|first officer)( seat)?( \d+)?$/i;
+/** Whole station names of explicit crew seats ("Crew", "Crew Seat 2"): every one counts. */
+export const CREW_SEAT_PATTERN = /^crew( seat)?( \d+)?$/i;

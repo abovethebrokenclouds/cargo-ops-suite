@@ -4,6 +4,7 @@ import { ArrowRight, PackageCheck, PackageX, Timer, Truck } from "lucide-react";
 import type { Mission, Source } from "@cargo-ops/protocol";
 import { KIND_LABELS } from "@cargo-ops/economy";
 import { SourceTag } from "@/components/status/SourceTag";
+import { PayloadCheckLine } from "./PayloadCheck";
 import { missionTimeLeftMin } from "@/lib/economy/format";
 import { formatInt, formatMinutes, formatUsd } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -75,6 +76,7 @@ export function MissionStrip({
           {mission.failure ? (
             <p className="mt-1 text-xs text-destructive">{mission.failure.message}</p>
           ) : null}
+          <PayloadCheckLine check={mission.payloadCheck} />
         </div>
       </div>
       <div className="flex flex-wrap items-end gap-6">

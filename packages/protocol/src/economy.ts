@@ -40,7 +40,10 @@ export const payoutBreakdownSchema = z.object({
   total: finite().nonnegative(),
   /** True for a board estimate (landing 1.00, on time); false for an actual payout. */
   estimate: z.boolean(),
+  /** Bonuses removed (sim rate above 1×, or the departure payload check found too little payload). */
   noBonus: z.boolean(),
+  /** The departure payload check found the sim payload clearly below the cargo (no bonuses). */
+  payloadMismatch: z.boolean().optional(),
 });
 export type PayoutBreakdown = z.infer<typeof payoutBreakdownSchema>;
 
@@ -151,6 +154,43 @@ export const missionPayoutSchema = z.object({
 });
 export type MissionPayout = z.infer<typeof missionPayoutSchema>;
 
+export const PAYLOAD_CHECK_STATUSES = ["ok", "underloaded", "overloaded", "unknown"] as const;
+export const payloadCheckStatusSchema = z.enum(PAYLOAD_CHECK_STATUSES);
+export type PayloadCheckStatus = z.infer<typeof payloadCheckStatusSchema>;
+
+/**
+ * Cargo weight of a mission compared with the payload stations the simulator reports
+ * (docs/ECONOMY.md, "Payload check"). `unknown` whenever the sim did not report payload
+ * stations: it never penalises. Optional numbers are absent when the sim did not report
+ * them; nothing is estimated in their place.
+ */
+export const payloadCheckSchema = z.object({
+  status: payloadCheckStatusSchema,
+  /** `preview` while the mission waits for departure; `departure` is frozen at the start. */
+  stage: z.enum(["preview", "departure"]),
+  /** Where the compared telemetry came from (live simulator, replay or demo). */
+  source: z.enum(["sim", "replay", "demo"]),
+  /** Cargo the mission requires, kg. */
+  cargoKg: finite().nonnegative(),
+  /** Sum of every payload station the sim reports, kg. */
+  simPayloadKg: finite().nonnegative().optional(),
+  /** Pilot/crew allowance subtracted from the station sum, kg. */
+  crewKg: finite().nonnegative().optional(),
+  /** stations: first pilot seat + crew seats; setting: the company setting; default: none (0 kg). */
+  crewBasis: z.enum(["stations", "setting", "default"]).optional(),
+  /** simPayloadKg − crewKg (never below 0), kg. */
+  loadedKg: finite().nonnegative().optional(),
+  /** Allowed shortfall below the cargo weight, kg. */
+  toleranceKg: finite().nonnegative(),
+  /** TOTAL WEIGHT and MAX GROSS WEIGHT when the sim reports them, pounds. */
+  totalLb: finite().nonnegative().optional(),
+  maxGrossLb: finite().nonnegative().optional(),
+  message: z.string(),
+  /** Wall clock of the check, ISO 8601. */
+  checkedAt: z.string(),
+});
+export type PayloadCheck = z.infer<typeof payloadCheckSchema>;
+
 export const missionSchema = z.object({
   id: z.string().min(1),
   status: missionStatusSchema,
@@ -187,6 +227,8 @@ export const missionSchema = z.object({
   costs: z.array(missionCostSchema).optional(),
   /** Condition lost on this flight, percentage points (P4). */
   wear: finite().nonnegative().optional(),
+  /** Cargo vs sim payload: live preview while loaded, frozen at departure. */
+  payloadCheck: payloadCheckSchema.optional(),
 });
 export type Mission = z.infer<typeof missionSchema>;
 
@@ -210,6 +252,8 @@ export const companyDomainSchema = z.object({
   clock: companyClockSchema.optional(),
   /** P5 part 2: every milestone, reached or not, with the date it was reached. */
   milestones: z.array(milestoneSchema).optional(),
+  /** Payload check crew allowance set by the player, kg; null = automatic. */
+  crewAllowanceKg: finite().nonnegative().nullable().optional(),
 });
 export type CompanyState = z.infer<typeof companyDomainSchema>;
 
@@ -233,5 +277,7 @@ export const settingsUpdateArgsSchema = z
     aircraftType: z.string().min(1).nullable().optional(),
     /** Company base ICAO. */
     base: icao().optional(),
+    /** Payload check pilot/crew allowance, kg; null returns to automatic. */
+    crewAllowanceKg: finite().min(0).max(2000).nullable().optional(),
   })
   .strict();

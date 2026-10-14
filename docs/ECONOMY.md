@@ -65,6 +65,7 @@ total  = max(0, round(gross − late penalty − damage))
 | late       | 10 % of gross per late hour, pro rata, capped at 100 %; late = flight block minutes − job time limit                                                                    |
 | damage     | fragile only: peak touchdown G > 1.5 → 50 % of gross. Wear/repairs are P4                                                                                               |
 | noBonus    | sim rate went above 1× during the flight: conditions and reputation become 1.00 and the landing multiplier is capped at 1.00 (D/E/F penalties still apply)              |
+| payload    | departure payload check `underloaded` (see "Payload check"): exactly the noBonus effect, breakdown flag `payloadMismatch`; nothing else changes                         |
 
 Board estimates use landing 1.00, on time and the reputation at generation time;
 the delivered payout is recomputed with the real values and stored with every
@@ -102,6 +103,8 @@ is general cargo, 840 kg, 1 unit, 287.7 nm. Replaying `demo-kmem-katl.jsonl`
   and sharing origin and destination (stacked cargo); destination runway suits the
   active type; distance ≤ 80 % of range; total weight ≤ max payload − leg fuel.
   `mission.unload` returns the jobs to accepted before departure.
+- **payload check**: cargo vs the sim's payload stations, previewed while loaded and frozen at
+  the start; an underloaded departure pays without bonuses (see "Payload check").
 - **start**: with a loaded mission an explicit `flight.start` additionally needs the
   aircraft within **3 nm** of the origin airport (`not_at_origin`), fuel ≥ leg fuel
   - 45 min (`insufficient_fuel`, when the sim reports fuel) and total weight ≤ max
@@ -122,6 +125,76 @@ is general cargo, 840 kg, 1 unit, 287.7 nm. Replaying `demo-kmem-katl.jsonl`
 Reputation (0–100, start 50): on time with landing A+/A **+3**, B **+2**, C or no
 grade **+1**; landing D/E/F **−5**; **−3 per started late hour** (and no clean
 bonus when late); crash **−20**.
+
+## Payload check
+
+Compares the cargo a loaded mission requires with what the simulator says is on board.
+Code: `packages/economy/src/payload-check.ts` (pure, shared by the connector and the browser
+UI), constants in `constants.ts`; the connector's engine feeds it the latest `payload` and
+`weights` domains.
+
+```
+sim payload = Σ PAYLOAD STATION WEIGHT:1..n (pounds → kg)
+crew        = player setting, else the FIRST pilot seat + every crew seat, else 0 kg
+              pilot seat: whole trimmed name Pilot / Co-pilot / Copilot / Captain /
+                          First Officer (optional " Seat", optional number)
+              crew seat:  whole trimmed name Crew (optional " Seat", optional number)
+loaded      = max(0, sim payload − crew)
+tolerance   = max(25 kg, 10 % of the cargo)
+```
+
+| Status        | Rule (first match wins)                                                                     | Effect                                                         |
+| ------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `overloaded`  | the sim reports TOTAL WEIGHT and MAX GROSS WEIGHT (> 0) and total > max gross               | warning; an explicit start is refused (`over_mtow`, unchanged) |
+| `unknown`     | the sim reported no payload stations (none, rejected SimVars, or `PAYLOAD STATION COUNT` 0) | none: nothing is compared, **never a penalty**                 |
+| `underloaded` | loaded < cargo − tolerance                                                                  | warning before departure; at departure: payout without bonuses |
+| `ok`          | otherwise (more payload than cargo is fine: extra weight is the pilot's choice)             | none                                                           |
+
+- **When.** While the mission is `loaded` the check is a live **preview** (recomputed on every
+  sample, shown on the mission strip of /jobs, /flight and the dashboard). When the mission
+  starts (explicit `flight.start`, or automatically at takeoff) the check is frozen on the
+  mission as stage **departure**, logged, and announced with a `mission.payload_check`
+  event (`{missionId, flightId, check, payoutBonuses}`). Changing the load after departure
+  does not change it.
+- **Effect (the gentlest rule that fits the existing economy).** An underloaded departure
+  is not refused and costs no reputation. The delivered payout loses its **bonuses**, exactly
+  like the existing noBonus rule: conditions and reputation 1.00, landing capped at 1.00
+  (penalties still apply). Each job breakdown carries `noBonus: true` and
+  `payloadMismatch: true`. A preview never affects money.
+- **Source.** The check records where the telemetry came from (`sim`, `replay`, `demo`);
+  the UI labels replay/demo checks. Replays use the recorded payload stations.
+- **Crew allowance.** Many aircraft load the pilot in a payload station, so it is subtracted
+  before comparing. Every doubt favours the player:
+  - names must match the **whole** station name, so "Pilot Baggage", "Crew Baggage", cargo
+    bags and compartments are always cargo;
+  - only the **first** pilot seat counts as crew. A second seat ("Copilot", "First
+    Officer") is ambiguous: in a cargo flight it often holds cargo, so it counts as payload.
+    A real second pilot makes the check more generous, never harsher; set the crew
+    allowance if you want it subtracted;
+  - with **no** crew-named station nothing is subtracted (0 kg): a pilot the sim does not
+    report is never assumed. `settings.update {crewAllowanceKg: kg | null}` (0–2,000 kg; null =
+    automatic) sets it for the company; the /jobs page has a field for it.
+- **Logbook.** The departure check is stored with the mission; the logbook row shows it and
+  the CSV export has a `payload_check` column (`ok`, `underloaded`, `overloaded`, `unknown`,
+  empty without a mission).
+
+Worked examples (`packages/economy/test/payload-check.test.ts`), stations of the replay
+fixture (Pilot 170 lb + 450 + 520 + 480 + 380 lb = 2,000 lb):
+
+1. 2,000 lb × 0.45359237 = **907.2 kg**; crew = Pilot 170 lb = **77.1 kg**; loaded
+   **830.1 kg**. Cargo 840 kg, tolerance 84 kg: 830.1 ≥ 756 → **ok** (the replay
+   acceptance mission pays $7,124 as before).
+2. Same stations, cargo 950 kg, tolerance 95 kg: 830.1 < 855 → **underloaded**.
+3. A single "Cargo" station with 441 lb (200.0 kg) for 200 kg of cargo: no crew seat → crew
+   0 kg → loaded 200.0 kg → **ok** (an assumed pilot would have made it 122.9 kg, wrongly
+   underloaded).
+4. "Pilot" 170 lb, "Pilot Baggage" 100 lb, "Copilot" 300 lb (cargo in the seat), "Cargo"
+   500 lb: crew = the Pilot seat only (77.1 kg); baggage and the copilot seat are payload →
+   loaded 1,070 lb − 170 lb = 900 lb = **408.2 kg**.
+5. The acceptance job (840 kg, $7,124 with bonuses) flown with 50 lb in each cargo station
+   (370 lb = 167.8 kg, loaded 90.7 kg) → underloaded at departure → 6,849.98 × 1.00 →
+   **$6,850**; reputation still +2 for the on-time B landing
+   (`connector/test/economy.test.ts`).
 
 ## Route finder
 
