@@ -130,6 +130,16 @@ export const test = base.extend<{ connector: ReplayConnector }, { connectorPool:
   baseURL: async ({ connector }, provide) => {
     await provide(connector.url);
   },
+  // E2E_CPU_THROTTLE=6 slows the page's CPU like a loaded CI runner (Chromium's own
+  // throttling), as in demo.spec.ts, to reproduce replay timing problems locally.
+  page: async ({ page }, provide) => {
+    const throttle = Number(process.env["E2E_CPU_THROTTLE"] ?? 1);
+    if (throttle > 1) {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: throttle });
+    }
+    await provide(page);
+  },
 });
 
 export { expect };

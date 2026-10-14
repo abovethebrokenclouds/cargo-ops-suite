@@ -57,11 +57,22 @@ test.describe("replay mode against the local connector (--sim fake)", () => {
     // card stays until the next takeoff), so checking it after the grade is a race.
     await expect(phase).toHaveText(/Takeoff|Climb|Cruise|Descent|Approach/, { timeout: 30_000 });
     await expect(page.getByTestId("flight-summary")).toBeVisible();
-    const grade = page.getByTestId("landing-grade");
-    await expect(grade).toHaveText(/^(A\+|A|B|C|D|E|F)$/, { timeout: 60_000 });
-    const card = page.getByTestId("landing-card");
-    await expect(card.getByTestId("landing-source")).toContainText("Graded by the connector");
-    await expect(card.getByText(/Provisional/)).toHaveCount(0);
+    // The landing card only exists from the touchdown to the next pass's takeoff (~4.7 s of
+    // replay at 20×): the next flight.started resets it to "Awaiting touchdown" by design.
+    // Grade, source and the absence of "Provisional" are therefore asserted in ONE locator,
+    // so they are read from the same render: separate assertions after the grade could land
+    // after that takeoff on a slow runner (CI run 38499677204; E2E_CPU_THROTTLE=6 locally:
+    // card gone, phase already Climb).
+    const gradedCard = page
+      .getByTestId("landing-card")
+      .filter({
+        has: page.getByTestId("landing-grade").filter({ hasText: /^(A\+|A|B|C|D|E|F)$/ }),
+      })
+      .filter({
+        has: page.getByTestId("landing-source").filter({ hasText: "Graded by the connector" }),
+      })
+      .filter({ hasNotText: /Provisional/ });
+    await expect(gradedCard).toBeVisible({ timeout: 60_000 });
   });
 
   test("/diagnostics reports the replay welcome", async ({ page }) => {
