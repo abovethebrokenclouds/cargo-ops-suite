@@ -459,7 +459,7 @@ export function DataPanel({ ctx }: { ctx: SettingsContext }) {
               <button
                 type="button"
                 className={primaryButton}
-                disabled={!enabled || backups.busy}
+                disabled={!enabled || backups.busy || backups.localOnly !== null}
                 onClick={() => void backups.create()}
                 data-testid="backup-now"
               >
@@ -476,7 +476,13 @@ export function DataPanel({ ctx }: { ctx: SettingsContext }) {
           </section>
         </div>
 
-        {backups.state.status === "error" ? (
+        {backups.localOnly ? (
+          <EmptyState
+            icon={Archive}
+            title="Backups are kept on the PC"
+            description={backups.localOnly}
+          />
+        ) : backups.state.status === "error" ? (
           <EmptyState
             icon={Archive}
             title="Backups could not be listed"

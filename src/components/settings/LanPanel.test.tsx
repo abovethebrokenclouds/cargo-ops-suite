@@ -13,6 +13,7 @@ import {
 } from "@/lib/transport/useSimConnection";
 
 import { LanPanel } from "./LanPanel";
+import { DataPanel } from "./SettingsPanels";
 import { PairDeviceForm } from "./PairDevice";
 import type { SettingsContext } from "./SettingsPanels";
 
@@ -30,6 +31,8 @@ function view(over: Partial<LanView> = {}): LanView {
     restartRequired: false,
     code: null,
     devices: [],
+    codeBurned: false,
+    warning: null,
     ...over,
   };
 }
@@ -139,6 +142,10 @@ describe("LanPanel on the PC", () => {
     // Nothing is saved until the player confirms.
     expect(f.calls.some((c) => c.method === "PUT")).toBe(false);
     expect(await screen.findByText("Allow LAN access?")).toBeInTheDocument();
+    // The dialog names what 0.0.0.0 would expose.
+    expect(screen.getByTestId("lan-confirm-interfaces")).toHaveTextContent(
+      "http://192.168.1.5:4311/",
+    );
     fireEvent.click(screen.getByTestId("lan-confirm-on"));
     expect(await screen.findByTestId("lan-restart")).toHaveTextContent(/Restart the connector/);
     const put = f.calls.find((c) => c.method === "PUT");
@@ -165,6 +172,87 @@ describe("LanPanel on the PC", () => {
     render(<LanPanel ctx={ctx} fetchImpl={f.impl} />);
     fireEvent.click(await screen.findByTestId("lan-generate-code"));
     expect(await screen.findByTestId("lan-code")).toHaveTextContent("WXYZ-6789");
+  });
+});
+
+describe("LanPanel notices", () => {
+  it("says when wrong guesses cancelled the code", async () => {
+    const f = fakeFetch({
+      "GET /api/session": localSession,
+      "GET /api/lan": () => [200, view({ code: null, codeBurned: true })],
+    });
+    render(<LanPanel ctx={ctx} fetchImpl={f.impl} />);
+    expect(await screen.findByTestId("lan-code-burned")).toHaveTextContent(
+      "Code cancelled after too many wrong attempts — create a new one",
+    );
+    expect(screen.getByTestId("lan-generate-code")).toBeEnabled();
+  });
+
+  it("shows why the saved setting was not applied, without a restart hint", async () => {
+    const warning =
+      "Saved LAN address 192.168.1.9 (Settings → LAN access) cannot be used: 192.168.1.9 is not an address of this PC";
+    const f = fakeFetch({
+      "GET /api/session": localSession,
+      "GET /api/lan": () => [
+        200,
+        view({
+          active: false,
+          bind: null,
+          urls: [],
+          setting: { enabled: true, address: "192.168.1.9" },
+          restartRequired: false,
+          warning,
+        }),
+      ],
+    });
+    render(<LanPanel ctx={ctx} fetchImpl={f.impl} />);
+    expect(await screen.findByTestId("lan-warning")).toHaveTextContent(warning);
+    expect(screen.queryByTestId("lan-restart")).toBeNull();
+  });
+
+  it("lists every interface 0.0.0.0 would expose in the confirmation", async () => {
+    const f = fakeFetch({
+      "GET /api/session": localSession,
+      "GET /api/lan": () => [
+        200,
+        view({
+          active: false,
+          bind: null,
+          urls: [],
+          setting: null,
+          interfaces: ["192.168.1.5", "10.0.0.7"],
+        }),
+      ],
+    });
+    render(<LanPanel ctx={ctx} fetchImpl={f.impl} />);
+    fireEvent.click(await screen.findByTestId("lan-enabled"));
+    const list = await screen.findByTestId("lan-confirm-interfaces");
+    expect(list).toHaveTextContent("http://192.168.1.5:4311/");
+    expect(list).toHaveTextContent("http://10.0.0.7:4311/");
+  });
+});
+
+describe("Data panel on a paired LAN device", () => {
+  it("says backups are kept on the PC instead of an error", async () => {
+    localStorage.setItem(LAN_TOKEN_KEY, "l".repeat(64));
+    const message =
+      "Career import, backups, deleting data and LAN settings are only available on the PC running Cargo Ops.";
+    const f = fakeFetch({
+      "GET /api/session": () => [
+        200,
+        { token: "l".repeat(64), wsUrl: "/ws", scope: "lan", device: { id: "d1", name: "Tablet" } },
+      ],
+      "GET /api/backups": () => [403, { error: "local_only", message }],
+    });
+    vi.stubGlobal("fetch", f.impl);
+    try {
+      render(<DataPanel ctx={ctx} />);
+      expect(await screen.findByText("Backups are kept on the PC")).toBeInTheDocument();
+      expect(screen.getByText(message)).toBeInTheDocument();
+      expect(screen.queryByText("Backups could not be listed")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

@@ -32,6 +32,10 @@ export interface LanView {
     pairUrls: string[];
   } | null;
   devices: LanDeviceView[];
+  /** Wrong guesses cancelled the last code (until a new one is made). */
+  codeBurned: boolean;
+  /** Why the saved setting was not applied this run (e.g. the address left this PC). */
+  warning: string | null;
 }
 
 export type LanState =

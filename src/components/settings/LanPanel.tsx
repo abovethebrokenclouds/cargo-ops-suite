@@ -38,6 +38,7 @@ export function LanPanel({
 }) {
   const enabled = ctx.served && ctx.connected;
   const lan = useLanAccess(enabled, fetchImpl);
+  const localView = lan.state.status === "local" ? lan.state.view : null;
   const [confirmOn, setConfirmOn] = useState(false);
 
   return (
@@ -96,6 +97,21 @@ export function LanPanel({
               cannot import a career, write backups or delete data. Windows will ask for firewall
               access: allow Private networks only.
             </AlertDialogDescription>
+            <div className="text-sm text-muted-foreground">
+              <p>Tablets would reach it at:</p>
+              <ul
+                className="mt-1 list-disc pl-5 font-mono text-xs text-foreground"
+                data-testid="lan-confirm-interfaces"
+              >
+                {localView && localView.interfaces.length > 0 ? (
+                  localView.interfaces.map((a) => (
+                    <li key={a}>{`http://${a}:${localView.port}/`}</li>
+                  ))
+                ) : (
+                  <li>no network address found on this PC right now</li>
+                )}
+              </ul>
+            </div>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -164,6 +180,15 @@ function LocalLan({
           </span>
         </SettingRow>
       </dl>
+      {view.warning ? (
+        <p
+          role="alert"
+          className="rounded-md bg-destructive/20 px-3 py-2 text-xs text-foreground"
+          data-testid="lan-warning"
+        >
+          {view.warning}
+        </p>
+      ) : null}
       {view.restartRequired ? (
         <p
           className="rounded-md bg-secondary/60 px-3 py-2 text-xs text-foreground"
@@ -224,6 +249,14 @@ function LocalLan({
             {!view.active ? (
               <p className="mt-2 text-xs text-muted-foreground">
                 Turn LAN access on and restart the connector to pair a device.
+              </p>
+            ) : view.codeBurned ? (
+              <p
+                className="mt-2 text-xs text-destructive"
+                role="status"
+                data-testid="lan-code-burned"
+              >
+                Code cancelled after too many wrong attempts — create a new one
               </p>
             ) : null}
           </div>

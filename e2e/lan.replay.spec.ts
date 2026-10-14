@@ -10,8 +10,8 @@ import { startConnector, type ReplayConnector } from "./replay-fixtures";
 // non-loopback client address, so the connector treats it as a LAN device). The tablet gets
 // no token until it pairs with the code generated on the PC page; it can then fly but not run
 // destructive data actions; a revoke on the PC sends it back to the pairing form.
-// Skipped when the host has no non-loopback IPv4 address (the connector tests cover the same
-// logic with an injected address).
+// Skipped locally when the host has no non-loopback IPv4 address (the connector tests cover
+// the same logic with an injected address); in CI a missing address fails the spec instead.
 
 const lanIp = Object.values(networkInterfaces())
   .flat()
@@ -26,11 +26,12 @@ test.use({
 });
 
 test.describe("LAN pairing", () => {
-  test.skip(!lanIp, "no non-loopback IPv4 address on this host");
+  test.skip(!lanIp && !process.env["CI"], "no non-loopback IPv4 address on this host");
 
   let connector: ReplayConnector;
 
   test.beforeAll(async () => {
+    if (!lanIp) throw new Error("this CI host has no non-loopback IPv4 address; LAN e2e needs one");
     connector = await startConnector("lan", [
       "--sim",
       "fake",
@@ -98,6 +99,9 @@ test.describe("LAN pairing", () => {
         "replay",
       );
       await expect(tablet.getByTestId("lan-paired-device")).toContainText("Playwright tablet");
+      // No path on the PC reaches the tablet: backups are local-only, status hides paths.
+      await expect(tablet.getByText("Backups are kept on the PC")).toBeVisible();
+      expect(await tablet.content()).not.toContain(connector.dataDir);
       const lanToken = await tablet.evaluate(() => localStorage.getItem("cargo-ops.lan-token"));
       expect(lanToken).toMatch(/^[0-9a-f]{64}$/);
       expect(lanToken).not.toBe(mainToken);
@@ -107,6 +111,11 @@ test.describe("LAN pairing", () => {
       const probe = await tablet.evaluate(async (token) => {
         const auth = { Authorization: `Bearer ${token}` };
         const jobs = await fetch("/api/jobs", { headers: auth });
+        const status = (await (await fetch("/api/status", { headers: auth })).json()) as Record<
+          string,
+          unknown
+        >;
+        const backupList = await fetch("/api/backups", { headers: auth });
         const backup = await fetch("/api/backups", { method: "POST", headers: auth });
         const imp = await fetch("/api/import", {
           method: "POST",
@@ -141,6 +150,9 @@ test.describe("LAN pairing", () => {
         });
         return {
           jobs: jobs.status,
+          statusPaths: ["dataDir", "database", "recording"].filter((k) => k in status),
+          statusMode: status["mode"],
+          backupList: backupList.status,
           backup: [backup.status, ((await backup.json()) as { error: string }).error],
           imp: [imp.status, ((await imp.json()) as { error: string }).error],
           command,
@@ -148,6 +160,9 @@ test.describe("LAN pairing", () => {
       }, lanToken);
       expect(probe).toEqual({
         jobs: 200,
+        statusPaths: [],
+        statusMode: "replay",
+        backupList: 403,
         backup: [403, "local_only"],
         imp: [403, "local_only"],
         command: true,

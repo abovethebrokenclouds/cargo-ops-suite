@@ -79,13 +79,30 @@ export function useMaskedToken(enabled: boolean): Loadable<string> {
 
 export function useBackups(enabled: boolean) {
   const [state, setState] = useState<Loadable<BackupsView>>({ status: "idle" });
+  /** Set on a paired LAN device: backups (and their paths) stay on the PC. */
+  const [localOnly, setLocalOnly] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
 
   const load = useCallback(() => {
     setState((s) => (s.status === "ready" ? s : { status: "loading" }));
-    return connectorJson<BackupsView>("/api/backups")
-      .then((data) => setState({ status: "ready", data }))
+    return connectorFetch("/api/backups", { headers: { Accept: "application/json" } })
+      .then(async (res) => {
+        if (res.status === 403) {
+          const body = (await res.json().catch(() => null)) as {
+            error?: string;
+            message?: string;
+          } | null;
+          if (body?.error === "local_only") {
+            setLocalOnly(body.message ?? "Backups are only available on the PC.");
+            setState({ status: "idle" });
+            return;
+          }
+        }
+        if (!res.ok) throw new Error(`/api/backups failed (${res.status})`);
+        setLocalOnly(null);
+        setState({ status: "ready", data: (await res.json()) as BackupsView });
+      })
       .catch((err: unknown) =>
         setState({ status: "error", message: message(err, "Could not load backups") }),
       );
@@ -118,7 +135,7 @@ export function useBackups(enabled: boolean) {
     }
   }, [load]);
 
-  return { state, busy, note, create, reload: load };
+  return { state, busy, note, create, reload: load, localOnly };
 }
 
 export interface SimbriefView {
