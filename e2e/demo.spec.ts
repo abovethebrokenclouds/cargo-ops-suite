@@ -53,6 +53,98 @@ test.describe("demo mode (no connector)", () => {
     });
   }
 
+  test("/ flight operations room: front wall, lamps and loop tagged DEMO, nothing lit without a tag", async ({
+    page,
+  }) => {
+    const external: string[] = [];
+    page.on("request", (req) => {
+      const host = new URL(req.url()).hostname;
+      if (host !== "127.0.0.1" && host !== "localhost") external.push(req.url());
+    });
+    await page.goto("/");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(/Flight Operations/);
+    const wall = page.getByTestId("front-wall");
+    await expect(wall.locator("[data-source-tag]").first()).toHaveText("DEMO");
+    await expect(page.getByTestId("readout-phase-value")).not.toHaveText("—");
+    await expect(page.getByTestId("readout-met-value")).toHaveText(/^T\+\d{2}:\d{2}:\d{2}$/);
+    await expect(page.getByTestId("readout-utc-value")).toHaveText(/^\d{2}:\d{2}:\d{2}Z$/);
+    await expect(page.getByTestId("ops-map")).toHaveAttribute("data-ready", "true", {
+      timeout: 30_000,
+    });
+    // The wall frames the whole route: both ends (KMEM, KATL) and the aircraft on screen.
+    const frame = page.getByTestId("front-wall-map-frame");
+    await expect(frame).toHaveAttribute("data-route-framed", "true", { timeout: 30_000 });
+    await expect(frame.getByTestId("aircraft-marker")).toBeVisible({ timeout: 15_000 });
+    // fitBounds may still be easing: poll until every marker sits inside the wall map.
+    await expect
+      .poll(
+        async () => {
+          const box = await frame.boundingBox();
+          if (!box) return false;
+          for (const id of ["map-origin", "map-destination", "aircraft-marker"]) {
+            const m = await frame.getByTestId(id).boundingBox();
+            if (!m) return false;
+            const cx = m.x + m.width / 2;
+            const cy = m.y + m.height / 2;
+            if (cx < box.x || cx > box.x + box.width || cy < box.y || cy > box.y + box.height) {
+              return false;
+            }
+          }
+          return true;
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    await expect(frame.getByTestId("map-destination")).toContainText("KATL");
+
+    // Status board: the demo link is HOLD (never GO), and every lit lamp says where its
+    // data came from (DEMO, or SAMPLE weather); NO DATA lamps carry no tag.
+    const board = page.getByTestId("go-nogo-board");
+    const link = board.locator('[data-lamp="link"]');
+    await expect(link).toHaveAttribute("data-state", "hold");
+    await expect(link.getByTestId("lamp-value")).toHaveText("DEMO");
+    await expect(board.getByTestId("lamp")).toHaveCount(10);
+    await expect(board.locator('[data-lamp="wx"]')).not.toHaveAttribute("data-state", "nodata");
+    for (const lamp of await board.getByTestId("lamp").all()) {
+      const state = await lamp.getAttribute("data-state");
+      const tags = lamp.locator("[data-source-tag], [data-metar-origin]");
+      if (state === "nodata") {
+        await expect(lamp.getByTestId("lamp-value")).toHaveText(/NO DATA|UNKNOWN/);
+        await expect(tags).toHaveCount(0);
+      } else {
+        await expect(tags).toHaveCount(1);
+        await expect(tags).toHaveText(/^(DEMO|SAMPLE)$/);
+      }
+    }
+    // The payload lamp has no mission in the demo: grey.
+    await expect(board.locator('[data-lamp="payload"]')).toHaveAttribute("data-state", "nodata");
+
+    // The loop shows the demo's real fixture events, each tagged DEMO.
+    const line = page.getByTestId("loop-line").first();
+    await expect(line).toBeVisible({ timeout: 30_000 });
+    await expect(line).toHaveAttribute("data-source", "demo");
+    await expect(line.getByText("DEMO")).toBeVisible();
+    await expect(
+      page.getByTestId("console-finance").getByTestId("dashboard-reputation"),
+    ).toBeVisible();
+    await expect(page.getByText(/^LIVE/)).toHaveCount(0);
+    expect(external).toEqual([]);
+  });
+
+  test("/ flight operations room collapses to one column on a phone", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await expect(page.getByTestId("go-nogo-board")).toBeVisible();
+    await expect(page.getByTestId("ops-map")).toHaveAttribute("data-ready", "true", {
+      timeout: 30_000,
+    });
+    const width = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(width).toBeLessThanOrEqual(390);
+    const nav = await page.getByTestId("console-nav").boundingBox();
+    const perf = await page.getByTestId("console-perf").boundingBox();
+    expect(nav && perf && perf.y > nav.y + nav.height - 1).toBe(true);
+  });
+
   test("/flight shows replayed demo values tagged DEMO, never LIVE", async ({ page }) => {
     await page.goto("/flight");
     await expect(page.getByTestId("aircraft-title")).not.toHaveText("No aircraft loaded");
@@ -373,7 +465,7 @@ test.describe("demo mode (no connector)", () => {
       ["f", "/flight", /./],
       ["d", "/diagnostics", /Under the hood/],
       ["s", "/settings", /Configure/],
-      ["o", "/", /Move the world/],
+      ["o", "/", /Flight Operations/],
     ];
     for (const [key, path, heading] of chords) {
       await page.keyboard.press("g");
