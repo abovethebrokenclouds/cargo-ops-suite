@@ -90,7 +90,7 @@ const running: Harness[] = [];
 
 async function harness(
   options: EmulatorOptions = {},
-  sourceOptions: { aiSampleIntervalMs?: number } = {},
+  sourceOptions: { aiSampleIntervalMs?: number; stuckPauseMs?: number } = {},
 ): Promise<Harness> {
   const emu = await SimConnectEmulator.start({
     secondMs: 100,
@@ -591,6 +591,131 @@ describe("SimConnect emulator: system events (PC-11/14/21/22 logic)", () => {
     assert.equal(h.emu.systemEvent("Crashed"), 1);
     await waitFor(() => events(h.updates, "crash", mark).length > 0, "crash event");
     assert.ok(h.logs.some((l) => l.level === "warn" && l.message === "System event Crashed"));
+  });
+});
+
+describe("SimConnect emulator: SimStart / SimStop and the effective pause (PC-11/21 logic, §14.4)", () => {
+  const systemStateRequests = (h: Harness) =>
+    h.emu.packets.filter((p) => p.fn === FN.REQUEST_SYSTEM_STATE && p.fields["state"] === "Sim");
+
+  it("SimStop pauses, SimStart resumes and re-requests the Sim system state; the link stays up", async () => {
+    const h = await harness();
+    await waitFor(() => latest(h.updates, "sim"), "sim domain");
+    await waitFor(() => systemStateRequests(h).length === 1, "Sim state requested on connect");
+    let mark = h.updates.length;
+    h.emu.simStop();
+    await waitFor(() => events(h.updates, "sim.paused", mark).length > 0, "paused by SimStop");
+    assert.deepEqual(events(h.updates, "sim.paused", mark)[0], { paused: true, event: "SimStop" });
+    await waitFor(() => latest(h.updates, "sim", mark)?.paused === true, "sim domain paused");
+    assert.equal(h.source.link().connected, true, "a stop is not a disconnect");
+    assert.equal(h.updates.slice(mark).filter((u) => u.type === "disconnected").length, 0);
+    // No frames are made up while the simulator sends none.
+    await new Promise((r) => setTimeout(r, 200));
+    const quiet = h.updates.length;
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(latest(h.updates, "position", quiet), undefined, "no position frames in the menu");
+
+    mark = h.updates.length;
+    h.emu.simStart();
+    await waitFor(() => events(h.updates, "sim.paused", mark).length > 0, "resumed by SimStart");
+    assert.deepEqual(events(h.updates, "sim.paused", mark)[0], {
+      paused: false,
+      event: "SimStart",
+    });
+    await waitFor(() => systemStateRequests(h).length === 2, "Sim state re-requested on SimStart");
+    await waitFor(() => latest(h.updates, "position", mark), "frames again");
+    assert.equal(latest(h.updates, "sim", mark)?.paused, false);
+    assert.equal(h.source.simRunning, true);
+  });
+
+  it('a "Sim" = 0 system state on connect starts paused (user in the menus)', async () => {
+    const h = await harness({ simRunning: false });
+    await waitFor(() => latest(h.updates, "sim")?.paused === true, "paused from the Sim state");
+    assert.equal(h.source.simRunning, false);
+    const mark = h.updates.length;
+    h.emu.simStart();
+    await waitFor(() => latest(h.updates, "sim", mark)?.paused === false, "running after SimStart");
+  });
+
+  it("a Pause_EX1 that never clears is overridden after SimStart and sustained movement", async () => {
+    const h = await harness({}, { stuckPauseMs: 400 });
+    await waitFor(() => latest(h.updates, "sim"), "sim domain");
+    h.emu.pause(4);
+    await waitFor(() => latest(h.updates, "sim")?.paused === true, "paused");
+    h.emu.simStop();
+    await new Promise((r) => setTimeout(r, 100));
+    // The sim drops the pause but never says so; the aircraft is still parked.
+    let mark = h.updates.length;
+    h.emu.simStart();
+    await new Promise((r) => setTimeout(r, 800));
+    assert.equal(latest(h.updates, "sim", mark)?.paused ?? true, true, "parked: stays paused");
+    assert.equal(events(h.updates, "sim.paused", mark).length, 0);
+
+    // Now it taxis and flies: positions change and ground speed is real.
+    mark = h.updates.length;
+    let lon = Number(CARAVAN["PLANE LONGITUDE"]);
+    const timer = setInterval(() => {
+      lon += 0.0005;
+      h.emu.set({ "PLANE LONGITUDE": lon, "GROUND VELOCITY": 60 });
+    }, 40);
+    try {
+      await waitFor(
+        () => events(h.updates, "sim.paused", mark).length > 0,
+        "stuck pause overridden",
+      );
+    } finally {
+      clearInterval(timer);
+    }
+    assert.deepEqual(events(h.updates, "sim.paused", mark)[0], {
+      paused: false,
+      event: "stuck_pause",
+      flags: 4,
+    });
+    await waitFor(() => latest(h.updates, "sim", mark)?.paused === false, "sim domain running");
+    assert.ok(h.logs.some((l) => l.level === "warn" && /stuck/i.test(l.message)));
+    // The sim reports a pause again: honoured.
+    mark = h.updates.length;
+    h.emu.pause(4);
+    await waitFor(() => latest(h.updates, "sim", mark)?.paused === true, "paused again");
+  });
+
+  it("a session's sim clock does not count the time spent in the main menu", async () => {
+    const emu = await SimConnectEmulator.start({ secondMs: 100, simFrameMs: 40, values: CARAVAN });
+    const source = new SimConnectSource({
+      log: () => {},
+      remote: { host: "127.0.0.1", port: emu.port },
+      retryMinMs: 100,
+      retryMaxMs: 400,
+    });
+    const h: Harness = { emu, source, updates: [], logs: [] };
+    running.push(h);
+    const session = new ConnectorSession(source, () => {});
+    const frames: Frame[] = [];
+    session.store.subscribe((f) => frames.push(f));
+    session.start();
+    const clock = () => session.flight.clock.nowMs;
+    await waitFor(() => clock() > 300, "clock running");
+    emu.simStop();
+    await waitFor(
+      () => (session.store.getDomain("sim") as { paused?: boolean } | null)?.paused === true,
+      "paused in the store",
+    );
+    const atStop = clock();
+    await new Promise((r) => setTimeout(r, 1500)); // "main menu"
+    assert.ok(clock() - atStop < 100, `clock moved ${clock() - atStop} ms while stopped`);
+    emu.simStart();
+    await waitFor(
+      () => (session.store.getDomain("sim") as { paused?: boolean } | null)?.paused === false,
+      "running in the store",
+    );
+    const resumedAt = Date.now();
+    await waitFor(() => clock() - atStop > 200, "clock resumed");
+    await new Promise((r) => setTimeout(r, Math.max(0, 300 - (Date.now() - resumedAt))));
+    const moved = clock() - atStop;
+    assert.ok(moved < 1000, `clock moved ${moved} ms across a 1.5 s stop (menu time not counted)`);
+    assert.equal(source.link().connected, true);
+    for (const f of frames) assert.equal(f.source, "sim");
+    await session.stop();
   });
 });
 

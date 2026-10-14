@@ -45,7 +45,9 @@ replay company uses seed 20261013; a new live company a random seed.
 
 The deadline clock starts at block-out and runs on simulator time (pauses
 excluded, the tracker's clock): the connector cannot observe in-game time between
-accepting and departing.
+accepting and departing. A pause is the effective pause of `docs/SIMVARS.md` ("Effective
+pause"): a Pause / Pause_EX1 report or the sim not running (SimStop, back to the main menu),
+with a conservative rule for a pause flag that never clears.
 
 ## Payout
 
@@ -660,7 +662,8 @@ per tick:  game Δ = max(wall Δ capped at 60 s, simulator Δ since the last tic
 
 The connector ticks every second and on every flight sample. Real time runs the clock
 while the connector runs (also while the sim is paused); a flight at 4× sim rate runs it
-4× (simulator Δ comes from the flight core's sim clock, which stops while paused); a
+4× (simulator Δ comes from the flight core's sim clock, which stops while paused or
+stopped in the main menu); a
 sleeping PC or a stopped connector adds at most 60 s. The month is **30 in-game days**;
 `company.clock` = { gameMs, month, day }. Loans, lease fees and repairs process in time
 order when the clock passes them (`CompanyBook.advance`). Tests inject the wall clock
