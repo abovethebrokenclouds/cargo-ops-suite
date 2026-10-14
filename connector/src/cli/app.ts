@@ -75,6 +75,8 @@ export interface ConnectorOptions {
   pingIntervalMs?: number;
   /** Inject a source (tests). */
   source?: SimSource;
+  /** SimConnect over TCP at this host/port instead of the normal discovery (hidden CLI option). */
+  simconnectRemote?: { host: string; port: number };
   /** Seed for a newly created company (tests; default: fixed for replays, random live). */
   economySeed?: number;
   /** Airport list override (tests). */
@@ -135,7 +137,10 @@ export async function startConnector(options: ConnectorOptions): Promise<Running
           loop: options.loop ?? false,
           log,
         })
-      : new SimConnectSource({ log }));
+      : new SimConnectSource({
+          log,
+          ...(options.simconnectRemote ? { remote: options.simconnectRemote } : {}),
+        }));
   if (source.mode === "live") {
     log("info", `SimVars still unverified on a real sim: ${unverifiedSimVars().join(", ")}`);
   }

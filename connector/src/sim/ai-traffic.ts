@@ -159,6 +159,8 @@ export function requestRadiusM(
  */
 export class SimConnectAiSampler {
   private batch: AiObjectSample[] = [];
+  /** Entries received for the current request, the user's own aircraft included. */
+  private received = 0;
   private inFlight = false;
   private requestedAt = 0;
 
@@ -167,6 +169,11 @@ export class SimConnectAiSampler {
     private readonly ids: { defineId: number; requestId: number },
     private readonly log: LogFn,
     private readonly onBatch: AiBatchListener,
+    /**
+     * Object id of the user aircraft, when known. An AIRCRAFT request covers every aircraft
+     * in the radius, which can include the user's own; that entry is never an AI arrival.
+     */
+    private readonly userObjectId: () => number | null = () => null,
   ) {
     const def = ids.defineId;
     // Order matters: onData reads the buffer in the same order.
@@ -190,6 +197,7 @@ export class SimConnectAiSampler {
     const radius = requestRadiusM(user, targets);
     if (radius === null) return;
     this.batch = [];
+    this.received = 0;
     this.inFlight = true;
     this.requestedAt = now;
     try {
@@ -213,32 +221,40 @@ export class SimConnectAiSampler {
       this.flush(now);
       return true;
     }
-    try {
-      const lat = recv.data.readFloat64();
-      const lon = recv.data.readFloat64();
-      const onGround = recv.data.readFloat64() >= 0.5;
-      const gsKt = recv.data.readFloat64();
-      const atcId = recv.data.readString64().trim();
-      this.batch.push({
-        objectId: recv.objectID,
-        lat,
-        lon,
-        onGround,
-        gsKt,
-        ...(atcId ? { atcId } : {}),
-      });
-    } catch (err) {
-      this.log("debug", `Dropped an AI traffic entry: ${err instanceof Error ? err.message : err}`);
+    this.received++;
+    // The user's own aircraft (when the request returns it) is never AI traffic.
+    if (recv.objectID !== this.userObjectId()) {
+      try {
+        const lat = recv.data.readFloat64();
+        const lon = recv.data.readFloat64();
+        const onGround = recv.data.readFloat64() >= 0.5;
+        const gsKt = recv.data.readFloat64();
+        const atcId = recv.data.readString64().trim();
+        this.batch.push({
+          objectId: recv.objectID,
+          lat,
+          lon,
+          onGround,
+          gsKt,
+          ...(atcId ? { atcId } : {}),
+        });
+      } catch (err) {
+        this.log(
+          "debug",
+          `Dropped an AI traffic entry: ${err instanceof Error ? err.message : err}`,
+        );
+      }
     }
     // entryNumber and outOf are 1-based (1/2, 2/2); counting entries also covers a 0-based
     // numbering should a simulator build use one.
-    if (recv.entryNumber >= recv.outOf || this.batch.length >= recv.outOf) this.flush(now);
+    if (recv.entryNumber >= recv.outOf || this.received >= recv.outOf) this.flush(now);
     return true;
   }
 
   private flush(now: number): void {
     const samples = this.batch;
     this.batch = [];
+    this.received = 0;
     this.inFlight = false;
     this.onBatch(samples, now);
   }

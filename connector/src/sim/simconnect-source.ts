@@ -1,22 +1,23 @@
 // SimConnectSource: the live link to MSFS 2020/2024 through node-simconnect
 // (LGPL-3.0-or-later, used unmodified from node_modules).
 //
-// UNVERIFIED: this file has only been type-checked against node-simconnect 4.2.1's
-// type definitions. It has never talked to a running simulator. See
-// docs/VERIFICATION.md for the PC checklist.
+// UNVERIFIED on a real simulator: this file has been type-checked against node-simconnect
+// 4.2.1 and exercised against the test-only protocol emulator
+// (connector/test/support/simconnect-emulator.ts), which speaks the SimConnect wire format
+// but is not MSFS. See docs/VERIFICATION.md for the PC checklist.
 
 import {
   DataRequestFlag,
   Protocol,
   SimConnectConstants,
   SimConnectDataType,
+  SimConnectConnection,
   SimConnectPeriod,
-  open,
+  type ConnectionOptions,
   type RawBuffer,
   type RecvException,
   type RecvOpen,
   type RecvSimObjectData,
-  type SimConnectConnection,
 } from "node-simconnect";
 import type { SimStatePatch } from "../protocol";
 import { AI_SAMPLE_INTERVAL_MS, SimConnectAiSampler, type AiTarget } from "./ai-traffic";
@@ -112,6 +113,18 @@ function dataTypeFor(d: DatumSpec): SimConnectDataType {
 
 export interface SimConnectSourceOptions {
   log: LogFn;
+  /**
+   * Connect over TCP to this SimConnect server instead of the normal discovery (SimConnect.cfg,
+   * then the local named pipe, then the registry port). Used by the hidden
+   * `--simconnect-host/--simconnect-port` options and the protocol emulator tests.
+   */
+  remote?: { host: string; port: number };
+  /** First reconnect delay, ms (default 2,000; doubles up to `retryMaxMs`). Tests shorten it. */
+  retryMinMs?: number;
+  /** Longest reconnect delay, ms (default 30,000). */
+  retryMaxMs?: number;
+  /** AI traffic sampling interval, ms (default 30,000). Tests shorten it. */
+  aiSampleIntervalMs?: number;
 }
 
 export class SimConnectSource implements SimSource {
@@ -120,11 +133,15 @@ export class SimConnectSource implements SimSource {
 
   private readonly emitter = new SimEmitter();
   private readonly log: LogFn;
+  private readonly remote: { host: string; port: number } | undefined;
+  private readonly retryMinMs: number;
+  private readonly retryMaxMs: number;
+  private readonly aiSampleIntervalMs: number;
   private handle: SimConnectConnection | null = null;
   private info: SimLinkInfo = { connected: false };
   private running = false;
   private retryTimer: NodeJS.Timeout | null = null;
-  private retryDelay = RETRY_MIN_MS;
+  private retryDelay: number;
   private offlineReported = false;
   private nextId = 1;
   private defs = new Map<SimVarGroup, ActiveDefinition>();
@@ -137,6 +154,10 @@ export class SimConnectSource implements SimSource {
   private lastFastEmit = 0;
   private lastAgl: number | undefined;
   private rebuildTimer: NodeJS.Timeout | null = null;
+  /** Definitions waiting for a rebuild after the simulator rejected one of their datums. */
+  private readonly rebuildGroups = new Set<SimVarGroup>();
+  /** Object id the simulator reports for the user aircraft (from OBJECT_ID_USER frames). */
+  private userObjectId: number | null = null;
   /** P5 part 2: AI traffic near the player's FBO airports (bonus income). */
   private aiSampler: SimConnectAiSampler | null = null;
   private aiTimer: NodeJS.Timeout | null = null;
@@ -148,6 +169,11 @@ export class SimConnectSource implements SimSource {
 
   constructor(options: SimConnectSourceOptions) {
     this.log = options.log;
+    this.remote = options.remote;
+    this.retryMinMs = options.retryMinMs ?? RETRY_MIN_MS;
+    this.retryMaxMs = options.retryMaxMs ?? RETRY_MAX_MS;
+    this.aiSampleIntervalMs = options.aiSampleIntervalMs ?? AI_SAMPLE_INTERVAL_MS;
+    this.retryDelay = this.retryMinMs;
   }
 
   link(): SimLinkInfo {
@@ -165,6 +191,9 @@ export class SimConnectSource implements SimSource {
   start(): void {
     if (this.running) return;
     this.running = true;
+    if (this.remote) {
+      this.log("info", `SimConnect over TCP at ${this.remote.host}:${this.remote.port}`);
+    }
     void this.connect();
   }
 
@@ -182,7 +211,11 @@ export class SimConnectSource implements SimSource {
     let lastError = "unknown error";
     for (const protocol of PROTOCOLS) {
       try {
-        const { recvOpen, handle } = await openWithTimeout(protocol.value, OPEN_TIMEOUT_MS);
+        const { recvOpen, handle } = await openWithTimeout(
+          protocol.value,
+          OPEN_TIMEOUT_MS,
+          this.remote,
+        );
         if (!this.running) {
           safeClose(handle);
           return;
@@ -206,7 +239,7 @@ export class SimConnectSource implements SimSource {
   private scheduleRetry(): void {
     if (!this.running || this.retryTimer) return;
     const delay = this.retryDelay;
-    this.retryDelay = Math.min(RETRY_MAX_MS, this.retryDelay * 2);
+    this.retryDelay = Math.min(this.retryMaxMs, this.retryDelay * 2);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       void this.connect();
@@ -215,7 +248,7 @@ export class SimConnectSource implements SimSource {
 
   private onOpen(handle: SimConnectConnection, recvOpen: RecvOpen, protocol: ProtocolName): void {
     this.handle = handle;
-    this.retryDelay = RETRY_MIN_MS;
+    this.retryDelay = this.retryMinMs;
     this.offlineReported = false;
     const version = [
       recvOpen.applicationVersionMajor,
@@ -269,6 +302,7 @@ export class SimConnectSource implements SimSource {
         { defineId: this.allocId(), requestId: this.allocId() },
         this.log,
         (samples, at) => this.emitter.emit({ type: "aiTraffic", samples, at }),
+        () => this.userObjectId,
       );
     } catch (err) {
       this.log(
@@ -283,7 +317,7 @@ export class SimConnectSource implements SimSource {
     this.aiTimer = setInterval(() => {
       if (this.handle !== handle) return;
       this.aiSampler?.sample(this.userPosition, this.aiTargets(), Date.now());
-    }, AI_SAMPLE_INTERVAL_MS);
+    }, this.aiSampleIntervalMs);
     this.aiTimer.unref();
   }
 
@@ -309,6 +343,8 @@ export class SimConnectSource implements SimSource {
     this.simRunning = undefined;
     if (this.rebuildTimer) clearTimeout(this.rebuildTimer);
     this.rebuildTimer = null;
+    this.rebuildGroups.clear();
+    this.userObjectId = null;
     if (this.aiTimer) clearInterval(this.aiTimer);
     this.aiTimer = null;
     this.aiSampler = null;
@@ -414,19 +450,27 @@ export class SimConnectSource implements SimSource {
   }
 
   private scheduleRebuild(group: SimVarGroup): void {
-    // Exceptions for one definition arrive in a burst; rebuild once afterwards.
+    // Exceptions arrive in a burst; rebuild every affected definition once afterwards.
+    // (Several groups can be hit in one burst, e.g. a fast and a slow SimVar on MSFS 2020.)
+    this.rebuildGroups.add(group);
     if (this.rebuildTimer) clearTimeout(this.rebuildTimer);
     this.rebuildTimer = setTimeout(() => {
       this.rebuildTimer = null;
-      if (group === "fast") this.defineFast();
-      else if (group === "counts") this.requestCounts();
-      else this.defineSlow();
+      const groups = [...this.rebuildGroups];
+      this.rebuildGroups.clear();
+      for (const g of groups) {
+        if (g === "fast") this.defineFast();
+        else if (g === "counts") this.requestCounts();
+        else this.defineSlow();
+      }
     }, 250);
   }
 
   private onData(recv: RecvSimObjectData): void {
     const def = [...this.defs.values()].find((d) => d.requestId === recv.requestID);
     if (!def) return; // Frame from a definition we already replaced.
+    // Frames requested for OBJECT_ID_USER carry the user aircraft's real object id.
+    this.userObjectId = recv.objectID;
     let raw: RawValues;
     try {
       raw = readFrame(recv.data, def.datums);
@@ -561,27 +605,54 @@ function safeClose(handle: SimConnectConnection): void {
   }
 }
 
-/** open() with our own deadline; a handle that arrives after the deadline is closed. */
+/**
+ * Open a SimConnect connection with our own deadline. Unlike node-simconnect's `open()`, an
+ * attempt fails as soon as the server closes the connection or answers with an exception
+ * (e.g. a simulator that does not speak the requested protocol), instead of waiting for the
+ * library's 5 s open timeout. A handle that arrives after the deadline is closed.
+ */
 function openWithTimeout(
   protocol: Protocol,
   ms: number,
+  remote?: { host: string; port: number },
 ): Promise<{ recvOpen: RecvOpen; handle: SimConnectConnection }> {
   return new Promise((resolve, reject) => {
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      reject(new Error(`open timed out after ${ms} ms`));
-    }, ms);
-    open(APP_NAME, protocol).then(
-      (result) => {
-        clearTimeout(timer);
-        if (timedOut) safeClose(result.handle);
-        else resolve(result);
-      },
-      (err: unknown) => {
-        clearTimeout(timer);
-        reject(err instanceof Error ? err : new Error(String(err)));
-      },
-    );
+    const handle = new SimConnectConnection(APP_NAME, protocol);
+    // Late socket errors on an abandoned handle must never become uncaught 'error' events.
+    handle.on("error", () => {});
+    let settled = false;
+    const finish = (err: Error | null, recvOpen?: RecvOpen) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      handle.removeListener("open", onOpen);
+      handle.removeListener("error", onError);
+      handle.removeListener("close", onClose);
+      handle.removeListener("exception", onException);
+      if (err || !recvOpen) {
+        safeClose(handle);
+        reject(err ?? new Error("open failed"));
+      } else {
+        resolve({ recvOpen, handle });
+      }
+    };
+    const onOpen = (recvOpen: RecvOpen) => finish(null, recvOpen);
+    const onError = (err: Error) => finish(err instanceof Error ? err : new Error(String(err)));
+    const onClose = () => finish(new Error("connection closed during open"));
+    const onException = (ex: RecvException) =>
+      finish(new Error(`open refused: ${ex.exceptionName} (exception ${ex.exception})`));
+    const timer = setTimeout(() => finish(new Error(`open timed out after ${ms} ms`)), ms);
+    handle.on("open", onOpen);
+    handle.on("error", onError);
+    handle.on("close", onClose);
+    handle.on("exception", onException);
+    const options: ConnectionOptions | undefined = remote
+      ? { host: remote.host, port: remote.port }
+      : undefined;
+    try {
+      handle.connect(options);
+    } catch (err) {
+      finish(err instanceof Error ? err : new Error(String(err)));
+    }
   });
 }
